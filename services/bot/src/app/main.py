@@ -19,15 +19,16 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from app import lifecycle
 from app.config import get_settings
 
 
 def build_bot() -> commands.AutoShardedBot:
     """Construct the bot (no network I/O — safe to call in tests).
 
-    Uses only the ``guilds`` intent: enough to receive ``GUILD_JOIN`` for
-    multi-tenant onboarding (PLAN.md §3.2) while staying below the
-    privileged-intent verification gate (PLAN.md §9).
+    Uses only the ``guilds`` intent: enough to receive ``GUILD_JOIN`` /
+    ``GUILD_REMOVE`` for multi-tenant onboarding + lifecycle (PLAN.md §3.2) while
+    staying below the privileged-intent verification gate (PLAN.md §9).
     """
     intents = discord.Intents.none()
     intents.guilds = True
@@ -43,6 +44,15 @@ def build_bot() -> commands.AutoShardedBot:
         # Global command sync is slow to propagate; per-guild sync is used in
         # Phase 3 for fast iteration (PLAN.md §3.2 slash-command sync strategy).
         await bot.tree.sync()
+
+    @bot.event
+    async def on_guild_remove(guild: discord.Guild) -> None:
+        """Leaving a server purges its guild-scoped data (PLAN.md §3.2 / §7 PII).
+
+        Delegates to the service-authenticated backend purge endpoint; failures are
+        logged and swallowed there so the gateway event loop is never broken.
+        """
+        await lifecycle.purge_guild(guild.id)
 
     return bot
 
@@ -68,4 +78,4 @@ if __name__ == "__main__":  # pragma: no cover
     run()
 
 
-__all__ = ["bot", "build_bot", "run", "list_command_names", "app_commands"]
+__all__ = ["bot", "build_bot", "run", "list_command_names", "app_commands", "lifecycle"]

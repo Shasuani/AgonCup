@@ -6,6 +6,7 @@ must also exist in `infra/.env.example` (see PLAN.md §6 / SHARED CONVENTIONS).
 
 from __future__ import annotations
 
+from datetime import timedelta
 from functools import lru_cache
 from typing import Literal
 
@@ -56,10 +57,62 @@ class Settings(BaseSettings):
     environment: Environment = Field(default="development")
     log_level: str = Field(default="INFO")
 
-    # --- Auth ---------------------------------------------------------------
+    # --- Auth: JWT ----------------------------------------------------------
     # NOTE: placeholder secret only. Provided via the secrets manager in real
     # environments; never commit a real value. See PLAN.md §6 (secrets).
     jwt_secret: str = Field(default="dev-insecure-change-me")
+    jwt_algorithm: str = Field(
+        default="HS256",
+        description="JWS alg for access tokens. HS256 (symmetric) — see PLAN.md §3.1.",
+    )
+    jwt_access_ttl_seconds: int = Field(
+        default=15 * 60,
+        description="Access-JWT lifetime (~15m). Short-lived; refresh tokens rotate.",
+    )
+    jwt_refresh_ttl_seconds: int = Field(
+        default=30 * 24 * 60 * 60,
+        description="Refresh-token lifetime (~30d). Stored HASHED + rotated on use.",
+    )
+
+    @property
+    def jwt_access_ttl(self) -> timedelta:
+        """Access-token lifetime as a timedelta."""
+        return timedelta(seconds=self.jwt_access_ttl_seconds)
+
+    @property
+    def jwt_refresh_ttl(self) -> timedelta:
+        """Refresh-token lifetime as a timedelta."""
+        return timedelta(seconds=self.jwt_refresh_ttl_seconds)
+
+    # --- Auth: Discord OAuth2 (sole IdP — PLAN.md §11 decision 6) ------------
+    # Secrets: empty defaults; real values come from the secrets manager / .env.
+    discord_client_id: str = Field(default="", description="Discord OAuth2 client id.")
+    discord_client_secret: str = Field(
+        default="", description="Discord OAuth2 client secret (NEVER commit a real value)."
+    )
+    discord_redirect_uri: str = Field(
+        default="http://localhost:8000/api/v1/auth/callback",
+        description="OAuth2 redirect URI registered in the Discord developer portal.",
+    )
+
+    # --- PII-at-rest encryption (read by app.security.crypto) ---------------
+    # The crypto module reads PII_ENCRYPTION_KEY from the environment directly;
+    # this field exists so the value is documented/validated through Settings and
+    # surfaced in .env.example. Comma-separated for key rotation (first = primary).
+    pii_encryption_key: str = Field(
+        default="",
+        description="Fernet key(s) for encrypting OAuth tokens + verification state "
+        "at rest (PLAN.md §7). Comma-separated for rotation. Read by "
+        "app.security.crypto via the PII_ENCRYPTION_KEY env var.",
+    )
+
+    # --- Riot (Account-V1 personal key only; NO Tournament API) -------------
+    riot_api_key: str = Field(default="", description="Riot Account-V1 personal API key.")
+    riot_region: str = Field(
+        default="americas",
+        description="Default continental routing cluster for Account-V1 "
+        "(americas/asia/europe). See lol_schemas.RiotRegion.",
+    )
 
     @property
     def is_production(self) -> bool:

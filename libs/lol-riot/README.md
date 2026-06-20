@@ -5,14 +5,18 @@ rate limiter**.
 
 Scope (v3 autonomous model):
 
-- **Account-V1 only** — `gameName` + `tagLine` -> PUUID via the continental
-  cluster (`americas | asia | europe`, *not* `na1`/`euw1`).
-- A light token-bucket limiter honoring 20 req/s style personal-key budgets and
-  `Retry-After` (limiter is real and tested; HTTP wiring is a Phase-0 stub).
+- **Account-V1** — `gameName` + `tagLine` -> PUUID via the continental cluster
+  (`americas | asia | europe`, *not* `na1`/`euw1`). `RiotAccountClient.
+  get_account_by_riot_id` is fully implemented (real `httpx` call,
+  URL-encoded path segments, `X-Riot-Token` header).
+- **Minimal Summoner-V4 `by-puuid`** (`get_summoner_by_puuid`) for the
+  profile-icon verification nonce only. **Platform-routed** (`na1`/`euw1`/...
+  via `PlatformRoute`) — Summoner-V4 is per-platform, Account-V1 is continental.
+- A light token-bucket limiter honoring 20 req/s style personal-key budgets;
+  bounded 429 retry honoring `Retry-After`.
+- Typed errors: `NotFound` (404), `RateLimited` (429, budget exhausted),
+  `RiotApiError` (other / transport).
 - **No Tournament-V5**, no provider/callback, no Match-V5.
-
-This is a Phase-0 skeleton: `get_account_by_riot_id` is a stub that raises
-`NotImplementedError`. The limiter is fully implemented.
 
 ## Layout
 

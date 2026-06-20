@@ -17,6 +17,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, generate_l
 from app.accounts.router import router as accounts_router
 from app.auth.router import router as auth_router
 from app.config import get_settings
+from app.lifecycle.router import router as lifecycle_router
 from app.logging import configure_logging, get_logger
 from app.orchestration.router import router as orchestration_router
 from app.realtime.router import router as realtime_router
@@ -78,6 +79,7 @@ def create_app() -> FastAPI:
         orchestration_router,
         results_router,
         realtime_router,
+        lifecycle_router,
     ):
         app.include_router(r, prefix=api_prefix)
 

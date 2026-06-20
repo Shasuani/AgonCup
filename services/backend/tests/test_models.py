@@ -17,7 +17,11 @@ EXPECTED_TABLES = {
     "guilds",
     "users",
     "riot_accounts",
+    # auth (global)
+    "refresh_tokens",
+    "oauth_credentials",
     # guild-scoped
+    "user_guild_roles",
     "teams",
     "team_members",
     "tournaments",
@@ -55,7 +59,10 @@ def test_global_tables_are_not_guild_scoped() -> None:
 def _has_unique_id_guild(table_name: str) -> bool:
     table = Base.metadata.tables[table_name]
     for c in table.constraints:
-        if isinstance(c, UniqueConstraint) and {col.name for col in c.columns} == {"id", "guild_id"}:
+        if isinstance(c, UniqueConstraint) and {col.name for col in c.columns} == {
+            "id",
+            "guild_id",
+        }:
             return True
     return False
 

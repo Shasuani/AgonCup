@@ -18,7 +18,7 @@ Phase-0 ships a minimal, representative variant set:
 from __future__ import annotations
 
 import json
-from enum import Enum
+from enum import StrEnum
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -32,7 +32,7 @@ class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-class AudienceKind(str, Enum):
+class AudienceKind(StrEnum):
     """Who an envelope is targeted at."""
 
     GUILD = "guild"  # everyone in the origin guild
@@ -55,7 +55,7 @@ class AudienceDescriptor(_Strict):
     )
 
 
-class LobbyCommandKind(str, Enum):
+class LobbyCommandKind(StrEnum):
     """Bounded lobby/setup command kinds (PLAN.md §3.6 write allow-list)."""
 
     CREATE_LOBBY = "create_lobby"

@@ -6,6 +6,7 @@ name: CI
 #   lint        - ruff over all Python packages
 #   typecheck   - mypy over all Python packages
 #   test        - pytest (uv-managed envs) over all Python packages
+#   db-rls      - alembic upgrade head + RLS cross-guild isolation matrix
 #   cve-scan    - Trivy filesystem + (best-effort) image scan
 #   lol-lcu-fixtures - placeholder for the LCU fixture-validation harness
 #
@@ -173,6 +174,77 @@ jobs:
           if [ "$found" -eq 0 ]; then
             echo "No Python packages with pyproject.toml yet; skipping."
           fi
+
+  # ---------------------------------------------------------------------------
+  # DB + RLS — applies the Alembic migrations against a real Postgres, then runs
+  # the backend suite with the cross-guild RLS isolation matrix ENABLED
+  # (PLAN.md §2 data model, §7 Phase 1, §9 RLS).
+  #
+  # Flow:
+  #   1. postgres:16 service comes up as the owner role (lol/lol) on db `lol`.
+  #   2. `alembic upgrade head` runs as the OWNER (DATABASE_URL) — migration 0002
+  #      creates the NOBYPASSRLS `app_rw` role + FORCE ROW LEVEL SECURITY policies.
+  #   3. pytest runs with LOL_DB_TESTS=1 so tests/test_rls_isolation.py RUNS (not
+  #      skips): OWNER_DATABASE_URL seeds rows bypassing RLS, APP_DATABASE_URL
+  #      (app_rw) proves per-guild isolation + fail-closed + no pooled-conn leak.
+  # ---------------------------------------------------------------------------
+  db-rls:
+    name: db-rls (alembic + RLS matrix)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: lol
+          POSTGRES_PASSWORD: lol
+          POSTGRES_DB: lol
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U lol -d lol"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Owner/superuser DSN — used by Alembic and to seed rows (bypasses RLS).
+      OWNER_DATABASE_URL: postgresql+asyncpg://lol:lol@localhost:5432/lol
+      # Alembic resolves its URL from app.config.Settings.database_url (DATABASE_URL),
+      # so migrations run as the owner; migration 0002 then creates app_rw + RLS.
+      DATABASE_URL: postgresql+asyncpg://lol:lol@localhost:5432/lol
+      # Non-BYPASSRLS application role created by migration 0002 — the suite
+      # connects as this to exercise the isolation policies.
+      APP_DATABASE_URL: postgresql+asyncpg://app_rw:app_rw@localhost:5432/lol
+      # Make the RLS integration test RUN instead of skipping.
+      LOL_DB_TESTS: "1"
+      ENVIRONMENT: test
+      LOG_LEVEL: DEBUG
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Set up Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Alembic upgrade head (creates app_rw role + RLS via 0002)
+        working-directory: services/backend
+        run: |
+          set -euo pipefail
+          # Sync the backend project (+ libs path deps + dev tools), then apply all
+          # migrations as the owner. `alembic.ini` lives at the package root.
+          uv sync --all-extras --dev
+          uv run alembic upgrade head
+
+      - name: pytest backend (RLS isolation matrix enabled)
+        working-directory: services/backend
+        run: |
+          set -euo pipefail
+          # LOL_DB_TESTS=1 + OWNER/APP DSNs (from job env) make
+          # tests/test_rls_isolation.py execute against the live Postgres.
+          uv run pytest -q
 
   # ---------------------------------------------------------------------------
   # CVE scan — Trivy. Filesystem scan always; image scan is best-effort (building

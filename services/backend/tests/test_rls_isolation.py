@@ -37,16 +37,16 @@ pytestmark = [
 ]
 
 OWNER_URL = os.environ.get("OWNER_DATABASE_URL", "postgresql+asyncpg://lol:lol@localhost:5432/lol")
-APP_URL = os.environ.get("APP_DATABASE_URL", "postgresql+asyncpg://app_rw:app_rw@localhost:5432/lol")
+APP_URL = os.environ.get(
+    "APP_DATABASE_URL", "postgresql+asyncpg://app_rw:app_rw@localhost:5432/lol"
+)
 
 
 async def _make_guild_with_team(owner_conn, discord_id: int) -> tuple[uuid.UUID, uuid.UUID]:
     """As the owner (bypasses RLS), seed a guild + a user + a team in it."""
     guild_id = (
         await owner_conn.execute(
-            text(
-                "INSERT INTO guilds (discord_guild_id, name) VALUES (:d, :n) RETURNING id"
-            ),
+            text("INSERT INTO guilds (discord_guild_id, name) VALUES (:d, :n) RETURNING id"),
             {"d": discord_id, "n": f"guild-{discord_id}"},
         )
     ).scalar_one()
@@ -57,9 +57,7 @@ async def _make_guild_with_team(owner_conn, discord_id: int) -> tuple[uuid.UUID,
         )
     ).scalar_one()
     await owner_conn.execute(
-        text(
-            "INSERT INTO teams (name, guild_id, captain_user_id) VALUES (:n, :g, :u)"
-        ),
+        text("INSERT INTO teams (name, guild_id, captain_user_id) VALUES (:n, :g, :u)"),
         {"n": f"team-{discord_id}", "g": guild_id, "u": user_id},
     )
     return guild_id, user_id
@@ -67,7 +65,9 @@ async def _make_guild_with_team(owner_conn, discord_id: int) -> tuple[uuid.UUID,
 
 async def _count_teams(conn, guild_id: uuid.UUID | None) -> int:
     if guild_id is not None:
-        await conn.execute(text("SELECT set_config('app.current_guild', :g, true)"), {"g": str(guild_id)})
+        await conn.execute(
+            text("SELECT set_config('app.current_guild', :g, true)"), {"g": str(guild_id)}
+        )
     return (await conn.execute(text("SELECT count(*) FROM teams"))).scalar_one()
 
 

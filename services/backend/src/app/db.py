@@ -15,15 +15,17 @@ guild')``) and the non-BYPASSRLS role land with the first guild-scoped migration
 in Phase 1; this module establishes the *discipline* now so every request path is
 already shaped correctly.
 
-Phase 0 status: guild extraction is STUBBED (no auth wired yet). The dependency
-opens a transaction, sets the GUC, yields the session, and commits/rolls back.
+Phase 1 status: tenant resolution is now REQUEST-AWARE and authenticated. The GUC
+is set by :func:`app.auth.deps.get_tenant_session`, which derives the acting guild
+from the request (path/header/JWT claim) and validates the principal's membership
+before yielding the session. The Phase-0 ``_extract_guild_id`` sentinel stub is
+gone; routes depend on ``get_tenant_session`` instead. The engine/sessionmaker
+below remain the single shared connection source for both the request path and
+the worker.
 """
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -32,11 +34,6 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.config import get_settings
-
-# A sentinel guild used until auth/tenant resolution is implemented (Phase 1).
-# RLS policies treat this as "no tenant" so a misconfigured request fails closed
-# rather than leaking another guild's rows.
-_STUB_GUILD_ID = "00000000-0000-0000-0000-000000000000"
 
 
 def _make_engine() -> AsyncEngine:
@@ -62,31 +59,9 @@ SessionLocal: async_sessionmaker[AsyncSession] = async_sessionmaker(
     autoflush=False,
 )
 
-
-def _extract_guild_id() -> str:
-    """STUB tenant extraction.
-
-    Phase 1 replaces this with the authenticated ``(user, guild)`` resolution
-    (JWT claim + Discord role re-verification, PLAN.md §3.1 auth/). For now it
-    returns a sentinel so the GUC discipline is exercised end-to-end.
-    """
-    return _STUB_GUILD_ID
-
-
-async def get_session() -> AsyncIterator[AsyncSession]:
-    """FastAPI dependency: a transaction-scoped session with the RLS GUC set.
-
-    Every guild-scoped query MUST go through this dependency so that
-    ``SET LOCAL app.current_guild`` is applied inside the same transaction that
-    runs the query. Do not share sessions across requests.
-    """
-    guild_id = _extract_guild_id()
-    async with SessionLocal() as session, session.begin():
-        # SET LOCAL with a bound parameter is not allowed by Postgres, so we
-        # use set_config(..., is_local => true), which is the parameterized
-        # equivalent of `SET LOCAL` and is injection-safe.
-        await session.execute(
-            text("SELECT set_config('app.current_guild', :gid, true)"),
-            {"gid": guild_id},
-        )
-        yield session
+# NOTE: the request-time tenant-scoped session dependency lives in
+# ``app.auth.deps.get_tenant_session`` (it needs the authenticated principal to
+# resolve + authorize the acting guild). It uses ``SessionLocal`` above and is the
+# ONLY sanctioned way to obtain a guild-scoped session on the request path —
+# every guild-scoped query MUST go through it so ``SET LOCAL app.current_guild``
+# is applied inside the same transaction that runs the query.

@@ -12,11 +12,7 @@ _MAX_LEN = 1900  # below Discord's 2000-char message limit, leaves headroom
 
 def _neutralize_mentions(text: str) -> str:
     # Break @everyone/@here and raw mention syntax without dropping information.
-    return (
-        text.replace("@everyone", "@​everyone")
-        .replace("@here", "@​here")
-        .replace("<@", "<​@")
-    )
+    return text.replace("@everyone", "@​everyone").replace("@here", "@​here").replace("<@", "<​@")
 
 
 def format_error(error: BaseException | str, *, prefix: str = "Error") -> str:

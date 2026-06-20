@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from uuid import UUID
 
 from lol_schemas import ResultReportDTO
@@ -31,7 +31,7 @@ QUORUM_THRESHOLD = 6
 TOTAL_PARTICIPANTS = 10
 
 
-class AdjudicationOutcome(str, Enum):
+class AdjudicationOutcome(StrEnum):
     """The three terminal verdicts of the quorum/anomaly step.
 
     * ``ACCEPT`` — quorum met (>=6/10 agree on game id + winner, both teams

@@ -33,20 +33,24 @@ from lol_schemas.enums import (
     TeamMemberRole,
     TournamentFormat,
     TournamentStatus,
+    UserGuildRoleName,
 )
 from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
-    Enum as SAEnum,
     ForeignKey,
     ForeignKeyConstraint,
     Integer,
     Text,
     UniqueConstraint,
+    false,
     func,
     text,
+)
+from sqlalchemy import (
+    Enum as SAEnum,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
@@ -73,9 +77,7 @@ def pg_enum(py_enum: type[enum.Enum], name: str) -> SAEnum:
 # ---------------------------------------------------------------------------
 class Guild(Base):
     __tablename__ = "guilds"
-    __table_args__ = (
-        CheckConstraint("status in ('active','suspended','removed')", name="status"),
-    )
+    __table_args__ = (CheckConstraint("status in ('active','suspended','removed')", name="status"),)
 
     id: Mapped[uuid.UUID] = uuid_pk()
     discord_guild_id: Mapped[int] = mapped_column(BigInteger, nullable=False, unique=True)
@@ -83,9 +85,11 @@ class Guild(Base):
     settings: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
-    is_central: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=func.false())
+    is_central: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
     status: Mapped[GuildStatus] = mapped_column(
-        pg_enum(GuildStatus, "guild_status"), nullable=False, server_default=GuildStatus.ACTIVE.value
+        pg_enum(GuildStatus, "guild_status"),
+        nullable=False,
+        server_default=GuildStatus.ACTIVE.value,
     )
     invited_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -119,13 +123,112 @@ class RiotAccount(Base):
     riot_id_game_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     riot_id_tag_line: Mapped[str | None] = mapped_column(Text, nullable=True)
     region: Mapped[str | None] = mapped_column(Text, nullable=True)
-    verified: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=func.false())
+    verified: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+# ---------------------------------------------------------------------------
+# Auth: refresh tokens + OAuth credentials (GLOBAL — not guild-scoped).
+# Tokens are stored ENCRYPTED/HASHED, never in plaintext (PLAN.md §7).
+# ---------------------------------------------------------------------------
+class RefreshToken(Base):
+    """A rotating, revocable refresh token (PLAN.md §3.1 auth).
+
+    Global (a refresh session is per *user*, not per guild). The token itself is
+    NEVER stored — only a SHA-256 ``token_hash`` of the opaque secret, so a DB
+    leak can't replay sessions. Rotation forms a *family*: each refresh issues a
+    new row whose ``rotated_from_id`` points at its predecessor and which shares
+    the original ``family_id``. Presenting an already-rotated (revoked) token is
+    **reuse** → the whole family is revoked (theft detection).
+    """
+
+    __tablename__ = "refresh_tokens"
+    __table_args__ = (UniqueConstraint("token_hash", name="uq_refresh_tokens_token_hash"),)
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # SHA-256 hex digest of the opaque token secret — never the secret itself.
+    token_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    # All tokens descended from one login share a family; reuse revokes the family.
+    family_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False, index=True)
+    issued_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
+    # The predecessor token this one was rotated from (NULL for the login root).
+    rotated_from_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("refresh_tokens.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+
+class OAuthCredential(Base):
+    """A user's stored OAuth credential for an external provider (e.g. discord).
+
+    Global. Access/refresh tokens are persisted ENCRYPTED at rest via
+    ``app.security.crypto.encrypt`` (PLAN.md §7) — the ``*_enc`` columns hold
+    opaque Fernet tokens, never plaintext.
+    """
+
+    __tablename__ = "oauth_credentials"
+    __table_args__ = (
+        UniqueConstraint("user_id", "provider", name="uq_oauth_credentials_user_provider"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    # Fernet-encrypted token blobs (see app.security.crypto). Refresh may be null.
+    access_token_enc: Mapped[str] = mapped_column(Text, nullable=False)
+    refresh_token_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scopes: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, server_default=text("'{}'::text[]")
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 # ---------------------------------------------------------------------------
 # Guild-scoped entities
 # ---------------------------------------------------------------------------
+class UserGuildRole(GuildScoped, Base):
+    """Per-(user, guild) authorization role (PLAN.md §3.1 auth, §11 decision 6).
+
+    Guild-scoped: the role lookup is naturally per-current-guild, so it lands
+    under the standard ``guild_isolation`` RLS policy. ``platform_operator`` rows
+    still carry a ``guild_id`` (the guild they were granted in) but the RBAC layer
+    treats that role as cross-tenant.
+    """
+
+    __tablename__ = "user_guild_roles"
+    __table_args__ = (
+        UniqueConstraint("user_id", "guild_id", "role", name="uq_user_guild_roles_user_guild_role"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    role: Mapped[UserGuildRoleName] = mapped_column(
+        pg_enum(UserGuildRoleName, "user_guild_role_name"), nullable=False
+    )
+    created_at: Mapped[datetime] = created_at_col()
+
+
 class Team(GuildScoped, TimestampMixin, Base):
     __tablename__ = "teams"
     __table_args__ = (
@@ -195,7 +298,7 @@ class Tournament(GuildScoped, Base):
     max_teams: Mapped[int] = mapped_column(Integer, nullable=False, server_default="16")
     start_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     is_shared_to_central: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default=func.false()
+        Boolean, nullable=False, server_default=false()
     )
     ruleset_json: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
@@ -310,7 +413,7 @@ class ClientSession(GuildScoped, Base):
     match_id: Mapped[uuid.UUID | None] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("matches.id", ondelete="SET NULL"), nullable=True
     )
-    lcu_reachable: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=func.false())
+    lcu_reachable: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
     gameflow_phase: Mapped[str | None] = mapped_column(Text, nullable=True)
     schema_version: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_heartbeat_at: Mapped[datetime | None] = mapped_column(
@@ -318,7 +421,7 @@ class ClientSession(GuildScoped, Base):
     )
     consent_version: Mapped[str | None] = mapped_column(Text, nullable=True)
     consent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    host_opt_in: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=func.false())
+    host_opt_in: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
 
 
 class ResultReport(GuildScoped, Base):
@@ -344,8 +447,12 @@ class ResultReport(GuildScoped, Base):
     )
     lcu_game_id: Mapped[str] = mapped_column(Text, nullable=False)
     reporter_puuid: Mapped[str] = mapped_column(Text, nullable=False)
-    source: Mapped[ResultSource] = mapped_column(pg_enum(ResultSource, "result_source"), nullable=False)
-    claimed_winner_team: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+    source: Mapped[ResultSource] = mapped_column(
+        pg_enum(ResultSource, "result_source"), nullable=False
+    )
+    claimed_winner_team: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), nullable=True
+    )
     reported_kda: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     kill_stream: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     schema_version: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -429,7 +536,10 @@ class CentralFeedItem(Base):
 
     id: Mapped[uuid.UUID] = uuid_pk()
     source_guild_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("guilds.id", ondelete="CASCADE"), nullable=False, index=True
+        PGUUID(as_uuid=True),
+        ForeignKey("guilds.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
     tournament_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
     projected_fields: Mapped[dict[str, Any]] = mapped_column(
@@ -445,9 +555,7 @@ class CentralFeedItem(Base):
 class PlayerCentralVisibility(Base):
     __tablename__ = "player_central_visibility"
     __table_args__ = (
-        CheckConstraint(
-            "visibility in ('team_only','show_riot_id')", name="visibility_allowed"
-        ),
+        CheckConstraint("visibility in ('team_only','show_riot_id')", name="visibility_allowed"),
     )
 
     user_id: Mapped[uuid.UUID] = mapped_column(
@@ -496,7 +604,10 @@ class AuditLog(Base):
     actor_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
     actor_kind: Mapped[str] = mapped_column(Text, nullable=False)
     guild_id: Mapped[uuid.UUID | None] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("guilds.id", ondelete="SET NULL"), nullable=True, index=True
+        PGUUID(as_uuid=True),
+        ForeignKey("guilds.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     action: Mapped[str] = mapped_column(Text, nullable=False)
     entity: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -510,6 +621,7 @@ class AuditLog(Base):
 # Tables that get the standard per-guild RLS policy (enumerated for the migration
 # and the isolation test matrix — a new guild-scoped table must be added here).
 GUILD_ISOLATED_TABLES: tuple[str, ...] = (
+    "user_guild_roles",
     "teams",
     "team_members",
     "tournaments",

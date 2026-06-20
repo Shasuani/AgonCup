@@ -161,9 +161,7 @@ def generate_single_elimination(seeds: Sequence[Hashable]) -> Bracket:
         team_b = seed_to_team[seed_b]
 
         if team_a is not None and team_b is not None:
-            first_round.append(
-                BracketMatch(round_no=1, slot=slot, team_a=team_a, team_b=team_b)
-            )
+            first_round.append(BracketMatch(round_no=1, slot=slot, team_a=team_a, team_b=team_b))
         else:
             # Exactly one side is a phantom (the seed table never pairs two
             # phantoms together for n >= bracket_size/2 + 1, which always holds

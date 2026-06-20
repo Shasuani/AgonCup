@@ -22,6 +22,8 @@ dependencies = [
     # Path deps on shared libraries (resolved via [tool.uv.sources] below).
     "lol-schemas",
     "lol-core",
+    # Account-V1 client (Summoner-V4 by-puuid) for the verification poll job.
+    "lol-riot",
 ]
 
 [project.optional-dependencies]
@@ -38,6 +40,7 @@ dev = [
 [tool.uv.sources]
 lol-schemas = { path = "../../libs/lol-schemas", editable = true }
 lol-core = { path = "../../libs/lol-core", editable = true }
+lol-riot = { path = "../../libs/lol-riot", editable = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/app"]

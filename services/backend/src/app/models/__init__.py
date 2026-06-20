@@ -16,7 +16,9 @@ from app.models.tables import (
     Match,
     MatchLobby,
     MatchResult,
+    OAuthCredential,
     PlayerCentralVisibility,
+    RefreshToken,
     Registration,
     ResultNonce,
     ResultReport,
@@ -25,6 +27,7 @@ from app.models.tables import (
     TeamMember,
     Tournament,
     User,
+    UserGuildRole,
     VerificationAttempt,
 )
 
@@ -39,7 +42,9 @@ __all__ = [
     "Match",
     "MatchLobby",
     "MatchResult",
+    "OAuthCredential",
     "PlayerCentralVisibility",
+    "RefreshToken",
     "Registration",
     "ResultNonce",
     "ResultReport",
@@ -48,5 +53,6 @@ __all__ = [
     "TeamMember",
     "Tournament",
     "User",
+    "UserGuildRole",
     "VerificationAttempt",
 ]

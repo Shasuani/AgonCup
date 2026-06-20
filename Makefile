@@ -40,7 +40,16 @@ PY_SERVICE_DIRS := \
 
 PY_PKG_DIRS := $(PY_LIB_DIRS) $(PY_SERVICE_DIRS)
 
-.PHONY: help up down build-bases test lint format typecheck gen-clients fixtures
+.PHONY: help up down build-bases test test-db lint format typecheck gen-clients fixtures
+
+# --- DB / RLS integration test config ----------------------------------------
+# Local equivalent of the CI `db-rls` job. Assumes a REACHABLE Postgres (e.g.
+# `make up`, or a local server) listening on $(DB_HOST):$(DB_PORT) with the owner
+# role/db `lol/lol`/`lol`. Override on the CLI, e.g. `make test-db DB_HOST=db`.
+DB_HOST          ?= localhost
+DB_PORT          ?= 5432
+OWNER_DATABASE_URL ?= postgresql+asyncpg://lol:lol@$(DB_HOST):$(DB_PORT)/lol
+APP_DATABASE_URL   ?= postgresql+asyncpg://app_rw:app_rw@$(DB_HOST):$(DB_PORT)/lol
 
 help: ## Show this help.
 	@echo "LeagueOfLeagues — available targets:"
@@ -71,6 +80,17 @@ test: ## Run pytest across all Python libs and services.
 			echo "==> skip (missing) $$d"; \
 		fi; \
 	done
+
+test-db: ## Apply migrations + run the backend RLS isolation matrix (needs a reachable Postgres).
+	@echo "==> alembic upgrade head (owner DSN; migration 0002 creates app_rw + RLS)"
+	@DATABASE_URL="$(OWNER_DATABASE_URL)" \
+		$(UV) run --directory services/backend alembic upgrade head
+	@echo "==> pytest services/backend (LOL_DB_TESTS=1 -> RLS matrix RUNS)"
+	@LOL_DB_TESTS=1 \
+		OWNER_DATABASE_URL="$(OWNER_DATABASE_URL)" \
+		APP_DATABASE_URL="$(APP_DATABASE_URL)" \
+		DATABASE_URL="$(OWNER_DATABASE_URL)" \
+		$(UV) run --directory services/backend pytest -q
 
 lint: ## Lint all Python code with ruff (check only).
 	$(UV) run ruff check .

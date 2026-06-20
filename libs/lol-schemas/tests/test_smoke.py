@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 
 import lol_schemas as ls
 
 
 def _now() -> datetime:
-    return datetime.now(tz=timezone.utc)
+    return datetime.now(tz=UTC)
 
 
 def test_package_exports_present() -> None:
@@ -46,18 +47,27 @@ def test_lobby_phase_enum_members() -> None:
     assert expected.issubset(members)
 
 
+def test_user_guild_role_enum_values() -> None:
+    """The canonical per-(user, guild) RBAC role enum (PLAN.md §3.1 auth)."""
+    assert hasattr(ls, "UserGuildRoleName")
+    values = {m.value for m in ls.UserGuildRoleName}
+    assert values == {"platform_operator", "guild_admin", "captain", "player"}
+    # str-enum: value comparison works for wire/DB round-trips.
+    assert ls.UserGuildRoleName.GUILD_ADMIN == "guild_admin"
+
+
 def test_riot_account_puuid_canonical_required() -> None:
     acct = ls.RiotAccountDTO(id=uuid4(), user_id=uuid4(), puuid="PUUID-ABC")
     assert acct.puuid == "PUUID-ABC"
     assert acct.verified is False
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         ls.RiotAccountDTO(id=uuid4(), user_id=uuid4(), puuid="")
 
 
 def test_tournament_max_teams_capped_at_16() -> None:
     t = ls.TournamentDTO(id=uuid4(), guild_id=uuid4(), name="Cup")
     assert t.max_teams == 16
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         ls.TournamentDTO(id=uuid4(), guild_id=uuid4(), name="Too big", max_teams=17)
 
 
@@ -104,7 +114,7 @@ def test_result_report_and_match_result_roundtrip() -> None:
 
 
 def test_extra_fields_forbidden() -> None:
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         ls.UserDTO(
             id=uuid4(),
             discord_user_id="123",

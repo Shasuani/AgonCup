@@ -33,6 +33,7 @@ from .enums import (
     TeamMemberRole,
     TournamentFormat,
     TournamentStatus,
+    UserGuildRoleName,
 )
 
 __version__ = "0.1.0"
@@ -56,6 +57,7 @@ __all__ = [
     # Enums
     "GuildStatus",
     "TeamMemberRole",
+    "UserGuildRoleName",
     "TournamentStatus",
     "TournamentFormat",
     "RegistrationStatus",

@@ -77,11 +77,9 @@ async def test_async_context_manager_spends_one() -> None:
     assert b.available == pytest.approx(1.0)
 
 
-async def test_account_client_stub_raises_after_limiter() -> None:
+def test_account_client_route_is_stored() -> None:
     client = RiotAccountClient("fake-key", ContinentalRoute.EUROPE)
     assert client.route is ContinentalRoute.EUROPE
-    with pytest.raises(NotImplementedError):
-        await client.get_account_by_riot_id("Faker", "KR1")
 
 
 def test_continental_route_base_url() -> None:

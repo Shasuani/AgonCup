@@ -1,25 +1,29 @@
 # syntax=docker/dockerfile:1.7
-# Multi-stage build for the LeagueOfLeagues admin SPA.
-# Build stage uses the shared node base image; runtime serves static files via nginx.
-# Build the base first:  docker build -t lol/node-base:dev infra/images/node-base
+# Multi-stage build for the LeagueOfLeagues admin SPA (build context = repo root).
+# Build the node base first:  docker build -t lol/node-base:dev infra/images/node-base
 
 # ---------- builder ----------------------------------------------------------
 FROM lol/node-base:dev AS builder
 
-WORKDIR /build
+# Preserve the monorepo layout so the @lol/clients-ts file: dep + the vite alias
+# (../../libs/lol-clients-ts/src) resolve. Bring in BOTH the lib and the app.
+WORKDIR /repo
+COPY libs/lol-clients-ts /repo/libs/lol-clients-ts
+COPY services/frontend /repo/services/frontend
 
-# Install deps against the lockfile-less package.json (Phase 0). Later: copy a
-# committed lockfile first for cached, reproducible installs.
-COPY services/frontend/package.json /build/package.json
-RUN npm install
-
-COPY services/frontend/ /build/
+WORKDIR /repo/services/frontend
+# No committed lockfile yet -> npm install (a tracked follow-up). vite compiles
+# the lol-clients-ts TypeScript source directly via the configured alias, so the
+# lib does NOT need a separate dist build for the bundle.
+RUN npm install --no-audit --no-fund
 RUN npm run build
 
 # ---------- runtime ----------------------------------------------------------
 FROM nginx:1.27-alpine AS runtime
 
-COPY --from=builder /build/dist /usr/share/nginx/html
+# SPA fallback + security headers (CSP, etc.) — see nginx.conf.
+COPY services/frontend/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=builder /repo/services/frontend/dist /usr/share/nginx/html
 
 EXPOSE 80
 

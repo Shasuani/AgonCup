@@ -1,41 +1,46 @@
 /**
- * @lol/clients-ts — TypeScript client for the backend HTTP API.
+ * @lol/clients-ts — framework-agnostic, fetch-based TypeScript client for the
+ * LeagueOfLeagues backend HTTP API (services/backend, mounted at `/api/v1`).
  *
  * ============================================================================
- *  GENERATED CODE — DO NOT HAND-EDIT  (PLAN.md §5 libs)
+ *  HAND-WRITTEN FOR NOW — SHOULD LATER BE GENERATED FROM THE BACKEND OPENAPI.
  * ============================================================================
- *  The real contents of this package are GENERATED from the backend's OpenAPI
- *  schema by `make gen-clients`. Hand edits are clobbered on the next codegen.
- *  The desktop client / frontend consume the typed API surface from here so
- *  request/response types stay in lockstep with the FastAPI backend.
+ *  This package is currently hand-authored against the FastAPI routers under
+ *  `services/backend/src/app/<resource>/router.py`. The request/response
+ *  interfaces in `types.ts` mirror the backend Pydantic DTOs by hand.
  *
- *  Pipeline (later phase):
- *    backend (FastAPI) --> openapi.json --> `make gen-clients` --> this package.
+ *  Target pipeline (later phase, PLAN.md §5 libs):
+ *    backend (FastAPI) --> openapi.json --> `make gen-clients` --> this package
  *
- *  Phase-0 STATUS: this is a HAND-WRITTEN PLACEHOLDER so the package compiles
- *  under `tsc --noEmit`. It defines one trivial type and is replaced wholesale
- *  by the generator.
+ *  When `make gen-clients` lands it should REPLACE the hand-written model
+ *  layer (`types.ts`) with generated models and keep the ergonomic
+ *  `createClient` factory (or regenerate an equivalent). Until then, when a
+ *  backend router changes shape, update `types.ts` + `client.ts` here in
+ *  lockstep and keep `tsc --noEmit` green.
+ *
+ *  Consumers (frontend/desktop) MUST go through this client — no ad-hoc fetch
+ *  in screens. Auth + the acting guild are injected via `getToken` /
+ *  `getActingGuild`, sourced from the shell's providers.
  * ============================================================================
- *
- * TODO(gen-clients): replace this entire file with output from `make gen-clients`
- *   (backend OpenAPI -> typed models + operations). Until the generator and the
- *   backend OpenAPI schema exist, the placeholder below stands in.
  */
 
-/**
- * Placeholder marker for the generated client. Lets downstream packages import
- * `@lol/clients-ts` and `tsc` succeed before codegen exists. Replaced wholesale
- * by `make gen-clients`.
- */
-export interface GeneratedClientPlaceholder {
-  /** Discriminator so accidental use of the placeholder is obvious at runtime. */
-  readonly __generated: false;
-  /** Matches the OpenAPI `info.version` once codegen is wired up. */
-  readonly apiVersion: string;
-}
+export { createClient } from './client.js';
+export type {
+  AccountsApi,
+  ApiClient,
+  AuthApi,
+  FederationApi,
+  LifecycleApi,
+  OrchestrationApi,
+  ResultsApi,
+  TeamsApi,
+  TournamentsApi,
+} from './client.js';
 
-/** Marker constant; superseded by the generated client surface. */
-export const GENERATED_CLIENT_PLACEHOLDER: GeneratedClientPlaceholder = {
-  __generated: false,
-  apiVersion: '0.0.0',
-};
+export { ApiError, isApiError } from './errors.js';
+export type { ApiErrorBody } from './errors.js';
+
+export { API_BASE_PATH } from './http.js';
+export type { ClientConfig, RequestOptions, RequestRunner } from './http.js';
+
+export type * from './types.js';

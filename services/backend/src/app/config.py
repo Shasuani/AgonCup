@@ -32,12 +32,25 @@ class Settings(BaseSettings):
     # --- Core infra ---------------------------------------------------------
     database_url: str = Field(
         default="postgresql+asyncpg://lol:lol@postgres:5432/lol",
-        description="Async SQLAlchemy DSN (asyncpg driver).",
+        description="Async SQLAlchemy DSN (asyncpg driver). Used for MIGRATIONS "
+        "(owner/superuser). RLS does not bind to a superuser — see app_database_url.",
+    )
+    app_database_url: str = Field(
+        default="",
+        description="DSN the REQUEST path connects as: the non-BYPASSRLS app_rw "
+        "role, so FORCE-RLS guild policies actually apply. Falls back to "
+        "database_url when empty (dev convenience) — but then RLS is NOT enforced "
+        "because the superuser bypasses it (PLAN.md §9).",
     )
     redis_url: str = Field(
         default="redis://redis:6379/0",
         description="Redis DSN (cache, pub/sub, arq broker).",
     )
+
+    @property
+    def request_database_url(self) -> str:
+        """DSN for the per-request engine: app_rw if set, else database_url."""
+        return self.app_database_url or self.database_url
 
     # --- Runtime / observability -------------------------------------------
     environment: Environment = Field(default="development")

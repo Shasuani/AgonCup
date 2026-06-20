@@ -22,9 +22,11 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Target metadata: Phase 0 has no declarative models yet, so autogenerate has
-# nothing to diff. Models land in Phase 1; set this to Base.metadata then.
-target_metadata = None
+# Target metadata for autogenerate. Importing app.models pulls only SQLAlchemy
+# (no DB I/O), so env.py stays import-safe. Wired to the ORM models in Phase 1.
+from app.models import Base  # noqa: E402
+
+target_metadata = Base.metadata
 
 
 def get_url() -> str:

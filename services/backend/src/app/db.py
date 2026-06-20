@@ -41,8 +41,11 @@ _STUB_GUILD_ID = "00000000-0000-0000-0000-000000000000"
 
 def _make_engine() -> AsyncEngine:
     settings = get_settings()
+    # The request path connects as the non-BYPASSRLS app_rw role
+    # (request_database_url) so FORCE-RLS guild policies bind. Migrations use the
+    # owner DSN (database_url) separately via Alembic. See PLAN.md §9.
     return create_async_engine(
-        settings.database_url,
+        settings.request_database_url,
         echo=False,
         pool_pre_ping=True,
         future=True,

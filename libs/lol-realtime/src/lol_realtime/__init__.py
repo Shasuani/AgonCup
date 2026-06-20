@@ -7,24 +7,44 @@ truth; the JSON schema is exported for gen-clients and CI drift-checks.
 from __future__ import annotations
 
 from lol_realtime.envelopes import (
+    AbortCommand,
     AudienceDescriptor,
     AudienceKind,
+    CreateLobbyCommand,
     Envelope,
     EnvelopePayload,
+    HostHeartbeat,
+    InvitePlayersCommand,
+    LobbyAck,
     LobbyCommand,
     LobbyCommandKind,
+    LobbyPhase,
+    LobbySpec,
+    PromoteHostCommand,
     ReportAck,
+    ResultReportEnvelope,
+    ResultSource,
     export_json_schema,
 )
 
 __all__ = [
+    "AbortCommand",
     "AudienceDescriptor",
     "AudienceKind",
+    "CreateLobbyCommand",
     "Envelope",
     "EnvelopePayload",
+    "HostHeartbeat",
+    "InvitePlayersCommand",
+    "LobbyAck",
     "LobbyCommand",
     "LobbyCommandKind",
+    "LobbyPhase",
+    "LobbySpec",
+    "PromoteHostCommand",
     "ReportAck",
+    "ResultReportEnvelope",
+    "ResultSource",
     "export_json_schema",
 ]
 

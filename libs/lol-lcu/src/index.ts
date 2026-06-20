@@ -371,6 +371,36 @@ export interface LcuAdapter {
 }
 
 // ---------------------------------------------------------------------------
+// Injected runtime + helper re-exports
+// ---------------------------------------------------------------------------
+
+export type {
+  HttpMethod,
+  HttpRequest,
+  HttpResponse,
+  HttpTransport,
+  FileSystemReader,
+  LockfileSnapshot,
+  Clock,
+  Sleeper,
+  RandomSource,
+  LcuRuntime,
+} from './transport.js';
+export type { ParsedLockfile, LcuAuth } from './lockfile.js';
+export { parseLockfile, deriveAuth, LockfileParseError } from './lockfile.js';
+export type {
+  WriteRefusalReason,
+  WriteGatePacing,
+  WriteGateState,
+  PresenceProbe,
+} from './writeGate.js';
+export { WriteGate, WriteRefusedError, backoffDelayMs } from './writeGate.js';
+
+import type { LcuRuntime } from './transport.js';
+import { deriveAuth, parseLockfile } from './lockfile.js';
+import { WriteGate, type PresenceProbe } from './writeGate.js';
+
+// ---------------------------------------------------------------------------
 // Phase-0 skeleton implementation (every method throws "not implemented")
 // ---------------------------------------------------------------------------
 
@@ -436,4 +466,534 @@ export class LcuAdapterSkeleton implements LcuAdapter {
   captureLiveClientEvents(): Promise<LiveClientEventCapture> {
     throw new Error(NOT_IMPLEMENTED);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Runnable implementation (injected transport + write-gate)
+// ---------------------------------------------------------------------------
+
+/** Default Live Client Data origin — the documented in-game port (§3.6.4). */
+const LIVE_CLIENT_ORIGIN = 'https://127.0.0.1:2999' as const;
+
+/** `Documented` Live Client Data path for the kill stream (§3.6.4). */
+const LIVE_CLIENT_EVENTDATA_PATH = '/liveclientdata/eventdata' as const;
+
+/** `RE` LCU paths, pinned here as the single fix-point (§3.6). */
+const LCU_PATHS = {
+  /** `RE` — gameflow phase, the authoritative state signal (§3.6.1). */
+  gameflowPhase: '/lol-gameflow/v1/gameflow-phase',
+  /** `RE` — current custom-lobby handle (idempotency probe before create). */
+  lobby: '/lol-lobby/v2/lobby',
+  /** `RE` — batched invitations endpoint (§3.6.3). */
+  invitations: '/lol-lobby/v2/lobby/invitations',
+  /** `RE` — end-of-game scoreboard block (§3.6.5). */
+  eogStatsBlock: '/lol-end-of-game/v1/eog-stats-block',
+} as const;
+
+/** Thrown when an LCU/EOG/live-client response is shaped unexpectedly (drift). */
+export class LcuResponseError extends Error {
+  override readonly name = 'LcuResponseError';
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
+/** A presence probe that always reports present (real wiring injects a real one). */
+const ALWAYS_PRESENT: PresenceProbe = { isPresent: () => true };
+
+/** Narrowing helper for `unknown` JSON objects under `noUncheckedIndexedAccess`. */
+function asRecord(value: unknown): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null) {
+    return {};
+  }
+  return value as Record<string, unknown>;
+}
+
+function asArray(value: unknown): readonly unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function asNumber(value: unknown, fallback = 0): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function asOptString<T extends string>(value: unknown): T | undefined {
+  return typeof value === 'string' ? (value as T) : undefined;
+}
+
+/**
+ * The single audited, RUNNABLE LCU/Live-Client adapter (PLAN.md §3.5 / §3.6).
+ *
+ * All IO is performed through the injected {@link LcuRuntime} so this class is
+ * transport-agnostic and unit-testable with fixtures; the real wiring supplies
+ * a Node HTTPS transport that accepts the LCU's self-signed loopback cert (see
+ * `transport.ts` header). Every WRITE (`createCustomLobby`/`invite`/auto-accept
+ * acceptance) is gated through {@link WriteGate} — kill-switch + per-session
+ * opt-in + presence + rolling rate-cap + human pacing — before any byte leaves.
+ *
+ * Provenance: `getGameflowPhase`/`createCustomLobby`/`invite`/`autoAcceptInvite`/
+ * `captureEndOfGame` hit `RE` LCU endpoints; `captureLiveClientEvents` hits the
+ * `Documented` Live Client Data API. RE paths are pinned in {@link LCU_PATHS}
+ * and re-validated against fixtures in CI; drift surfaces as
+ * {@link LcuResponseError}.
+ */
+export class LcuAdapterImpl implements LcuAdapter {
+  readonly #config: LcuAdapterConfig;
+  readonly #rt: LcuRuntime;
+  readonly #gate: WriteGate;
+  readonly #presence: PresenceProbe;
+  /** Cached auth from the most recent lockfile read; refreshed on rotation. */
+  #auth: import('./lockfile.js').LcuAuth | undefined;
+  /** mtime of the lockfile backing {@link #auth}; a change ⇒ creds rotated. */
+  #lockfileMtimeMs = -1;
+
+  constructor(args: {
+    config: LcuAdapterConfig;
+    runtime: LcuRuntime;
+    /** Optional real presence probe; defaults to always-present. */
+    presence?: PresenceProbe;
+  }) {
+    this.#config = args.config;
+    this.#rt = args.runtime;
+    this.#presence = args.presence ?? ALWAYS_PRESENT;
+    this.#gate = new WriteGate({
+      clock: args.runtime.clock,
+      sleeper: args.runtime.sleeper,
+      random: args.runtime.random,
+      pacing: {
+        minWriteDelayMs: args.config.pacing.minWriteDelayMs,
+        writeJitterMs: args.config.pacing.writeJitterMs,
+        maxWritesPerMinute: args.config.pacing.maxWritesPerMinute,
+      },
+      presence: this.#presence,
+    });
+  }
+
+  /** The opt-in / kill-switch / pacing / schema config this adapter runs under. */
+  get config(): LcuAdapterConfig {
+    return this.#config;
+  }
+
+  /** Resolve the lockfile path: explicit override or platform default. */
+  #lockfilePath(): string {
+    if (this.#config.lockfilePathOverride !== undefined) {
+      return this.#config.lockfilePathOverride;
+    }
+    // Platform defaults (the real wiring resolves the live install dir). These
+    // are the well-known install locations; override when League is elsewhere.
+    const platform = (globalThis as { process?: { platform?: string } }).process?.platform;
+    if (platform === 'win32') {
+      return 'C:/Riot Games/League of Legends/lockfile';
+    }
+    if (platform === 'darwin') {
+      return '/Applications/League of Legends.app/Contents/LoL/lockfile';
+    }
+    return '/lockfile';
+  }
+
+  /** Gate + perform a write IO; rejects with `WriteRefusedError` when blocked. */
+  async #gatedWrite<T>(fn: () => Promise<T>): Promise<T> {
+    await this.#gate.acquire({
+      killSwitchEngaged: this.#config.killSwitchEngaged,
+      writeAutomationOptIn: this.#config.writeAutomationOptIn,
+      requirePresenceForWrites: this.#config.requirePresenceForWrites,
+    });
+    return fn();
+  }
+
+  /** Ensure fresh LCU auth, re-reading the lockfile when it has rotated. */
+  async #ensureAuth(): Promise<import('./lockfile.js').LcuAuth> {
+    // readLockfileAuth refreshes #auth (and detects rotation) as a side-effect.
+    await this.readLockfileAuth();
+    return this.#auth!;
+  }
+
+  /** Issue an authenticated LCU request against the loopback base URL. */
+  async #lcuRequest(
+    method: 'GET' | 'POST' | 'DELETE',
+    path: string,
+    jsonBody?: unknown,
+  ): Promise<{ status: number; json: unknown }> {
+    const auth = await this.#ensureAuth();
+    const headers: Record<string, string> = {
+      Authorization: auth.authorizationHeader,
+      Accept: 'application/json',
+    };
+    const body = jsonBody === undefined ? undefined : JSON.stringify(jsonBody);
+    if (body !== undefined) {
+      headers['Content-Type'] = 'application/json';
+    }
+    const res = await this.#rt.http.request({
+      method,
+      url: `${auth.baseUrl}${path}`,
+      headers,
+      ...(body === undefined ? {} : { body }),
+    });
+    let json: unknown = undefined;
+    if (res.body.length > 0) {
+      try {
+        json = JSON.parse(res.body);
+      } catch {
+        json = undefined;
+      }
+    }
+    return { status: res.status, json };
+  }
+
+  // -- readLockfileAuth -----------------------------------------------------
+
+  /**
+   * `RE` (lockfile is undocumented) — read + parse the local lockfile and
+   * derive `Basic` auth + base URL. Detects rotation via mtime and re-parses;
+   * returns a {@link LockfileAuth} view. OWN-CLIENT ONLY (§3.5).
+   */
+  async readLockfileAuth(): Promise<LockfileAuth> {
+    const path = this.#lockfilePath();
+    const snapshot = await this.#rt.fs.readLockfile(path);
+    if (this.#auth === undefined || snapshot.mtimeMs !== this.#lockfileMtimeMs) {
+      const parsed = parseLockfile(snapshot.contents);
+      this.#auth = deriveAuth(parsed);
+      this.#lockfileMtimeMs = snapshot.mtimeMs;
+    }
+    const auth = this.#auth;
+    return {
+      port: auth.port,
+      password: auth.password,
+      protocol: 'https',
+      lockfilePath: path,
+    };
+  }
+
+  // -- createCustomLobby ----------------------------------------------------
+
+  /**
+   * `RE` — `POST /lol-lobby/v2/lobby` (isCustom). WRITE: gated + paced.
+   * Idempotent per `(matchId, hostEpoch)`: first `GET`s the current lobby and,
+   * if one already exists for this epoch, returns that handle instead of
+   * POSTing a second one (§3.6.1 fencing / §3.6.2).
+   */
+  async createCustomLobby(spec: CustomLobbySpec): Promise<CustomLobbyHandle> {
+    return this.#gatedWrite(async () => {
+      // Idempotency probe (§3.6.1): if we already own a lobby, reuse it.
+      const existing = await this.#lcuRequest('GET', LCU_PATHS.lobby);
+      if (existing.status >= 200 && existing.status < 300) {
+        const rec = asRecord(existing.json);
+        const existingId = asOptString<LcuLobbyId>(rec['partyId']);
+        if (existingId !== undefined) {
+          return {
+            lobbyId: existingId,
+            lobbyName: spec.lobbyName,
+            hostEpoch: spec.hostEpoch,
+          };
+        }
+      }
+
+      // `RE` — create payload per §3.6.2 (verbatim, backend-owned spec).
+      const payload = {
+        isCustom: true,
+        customGameLobby: {
+          configuration: {
+            gameMode: spec.configuration.gameMode,
+            mapId: spec.configuration.mapId,
+            mutators: { id: spec.configuration.mutators.id },
+            spectatorPolicy: spec.configuration.spectatorPolicy,
+            teamSize: spec.configuration.teamSize,
+          },
+          lobbyName: spec.lobbyName,
+          lobbyPassword: spec.lobbyPassword,
+        },
+      };
+      const res = await this.#lcuRequest('POST', LCU_PATHS.lobby, payload);
+      if (res.status < 200 || res.status >= 300) {
+        throw new LcuResponseError(
+          `createCustomLobby failed: HTTP ${res.status}`,
+          res.status,
+        );
+      }
+      const rec = asRecord(res.json);
+      const lobbyId = asOptString<LcuLobbyId>(rec['partyId']);
+      if (lobbyId === undefined) {
+        throw new LcuResponseError(
+          'createCustomLobby: response missing partyId (RE drift?)',
+          res.status,
+        );
+      }
+      return { lobbyId, lobbyName: spec.lobbyName, hostEpoch: spec.hostEpoch };
+    });
+  }
+
+  // -- invite ---------------------------------------------------------------
+
+  /**
+   * `RE` — one batched `POST /lol-lobby/v2/lobby/invitations` with the full
+   * `toSummonerId` array. WRITE: gated + paced. Bounded-backoff re-invites of
+   * non-joined members are driven by the caller (host state machine, §3.6.3)
+   * using {@link backoffDelayMs}; this method performs the single batched send.
+   */
+  async invite(summonerIds: readonly SummonerId[]): Promise<void> {
+    if (summonerIds.length === 0) {
+      return;
+    }
+    await this.#gatedWrite(async () => {
+      // `RE` — payload shape: array of `{ toSummonerId }` invitation records.
+      const payload = summonerIds.map((id) => ({ toSummonerId: Number(id) }));
+      const res = await this.#lcuRequest('POST', LCU_PATHS.invitations, payload);
+      if (res.status < 200 || res.status >= 300) {
+        throw new LcuResponseError(`invite failed: HTTP ${res.status}`, res.status);
+      }
+    });
+  }
+
+  // -- autoAcceptInvite -----------------------------------------------------
+
+  /**
+   * `RE` — guest-side auto-accept. In production this subscribes to the LCU
+   * invitation WebSocket event; that socket is not part of the injected
+   * transport seam yet, so this returns a closure-based controller you drive
+   * from the WS layer: call {@link InviteAcceptController.handle} with each
+   * observed invitation. Acceptance ONLY fires when the inviter PUUID equals
+   * `filter.expectedInviterPuuid` for the current epoch, party/queue invites
+   * are excluded, AND the write-gate (opt-in + presence) passes (§3.6.3).
+   *
+   * Returns an unsubscribe function per the {@link LcuAdapter} contract; the
+   * controller it tears down is exposed via {@link makeInviteAcceptController}
+   * for tests / the WS wiring.
+   */
+  async autoAcceptInvite(filter: AutoAcceptInviteFilter): Promise<() => void> {
+    const controller = this.makeInviteAcceptController(filter);
+    return () => controller.unsubscribe();
+  }
+
+  /**
+   * Build the pure auto-accept controller used by {@link autoAcceptInvite}.
+   * Exposed so the (future) WS layer and unit tests can feed it raw invitation
+   * records without a live socket. RE: invitation record field names are
+   * pinned here and re-validated against fixtures.
+   */
+  makeInviteAcceptController(filter: AutoAcceptInviteFilter): InviteAcceptController {
+    let active = true;
+    const accept = async (invitationId: string): Promise<void> => {
+      // `RE` — `POST /lol-lobby/v2/received-invitations/{id}/accept`.
+      await this.#lcuRequest(
+        'POST',
+        `/lol-lobby/v2/received-invitations/${invitationId}/accept`,
+      );
+    };
+    return {
+      unsubscribe: () => {
+        active = false;
+      },
+      handle: async (invitation: ReceivedInvitation): Promise<InviteDecision> => {
+        if (!active) {
+          return { accepted: false, reason: 'unsubscribed' };
+        }
+        if (invitation.invitationType !== 'lobby') {
+          return { accepted: false, reason: 'not-a-lobby-invite' };
+        }
+        if (invitation.fromPuuid !== filter.expectedInviterPuuid) {
+          return { accepted: false, reason: 'inviter-mismatch' };
+        }
+        if (
+          filter.customInviteTypeDiscriminator !== undefined &&
+          invitation.gameConfigInviteType !== filter.customInviteTypeDiscriminator
+        ) {
+          return { accepted: false, reason: 'invite-type-mismatch' };
+        }
+        // Acceptance is a WRITE — gate it (opt-in + presence + pacing).
+        try {
+          await this.#gatedWrite(() => accept(invitation.invitationId));
+        } catch (err) {
+          return { accepted: false, reason: 'write-gated', error: err };
+        }
+        return { accepted: true };
+      },
+    };
+  }
+
+  // -- getGameflowPhase -----------------------------------------------------
+
+  /**
+   * `RE` — `GET /lol-gameflow/v1/gameflow-phase`. READ. The authoritative
+   * phase signal that drives the host/failover state machine (§3.6.1). The
+   * endpoint returns a bare JSON string, e.g. `"InProgress"`.
+   */
+  async getGameflowPhase(): Promise<GameflowPhase> {
+    const res = await this.#lcuRequest('GET', LCU_PATHS.gameflowPhase);
+    if (res.status < 200 || res.status >= 300) {
+      throw new LcuResponseError(
+        `getGameflowPhase failed: HTTP ${res.status}`,
+        res.status,
+      );
+    }
+    if (typeof res.json !== 'string') {
+      throw new LcuResponseError(
+        'getGameflowPhase: expected a bare string phase (RE drift?)',
+        res.status,
+      );
+    }
+    return res.json as GameflowPhase;
+  }
+
+  // -- captureEndOfGame -----------------------------------------------------
+
+  /**
+   * `RE` — `GET /lol-end-of-game/v1/eog-stats-block`. READ-ONLY, time-boxed
+   * (the block clears on the next champ-select/game — §3.6.5). Parses the
+   * scoreboard into an {@link EogReport} stamped with the pinned schema version
+   * and optionally bundles a best-effort live-client kill stream.
+   *
+   * @param reporterPuuid this client's advisory reporter PUUID.
+   * @param liveClientEvents optional pre-captured kill stream to bundle.
+   */
+  async captureEndOfGame(
+    reporterPuuid?: Puuid,
+    liveClientEvents?: LiveClientEventCapture,
+  ): Promise<EogReport> {
+    const res = await this.#lcuRequest('GET', LCU_PATHS.eogStatsBlock);
+    if (res.status < 200 || res.status >= 300) {
+      throw new LcuResponseError(
+        `captureEndOfGame failed: HTTP ${res.status}`,
+        res.status,
+      );
+    }
+    const root = asRecord(res.json);
+    const lcuGameId = String(asNumber(root['gameId'])) as LcuGameId;
+
+    const teams: EogTeamStats[] = asArray(root['teams']).map((t) => {
+      const team = asRecord(t);
+      const players: EogPlayerStats[] = asArray(team['players']).map((p) => {
+        const pr = asRecord(p);
+        const puuid = asOptString<Puuid>(pr['puuid']);
+        const summonerId =
+          pr['summonerId'] !== undefined
+            ? (String(asNumber(pr['summonerId'])) as SummonerId)
+            : undefined;
+        return {
+          ...(puuid !== undefined ? { puuid } : {}),
+          ...(summonerId !== undefined ? { summonerId } : {}),
+          championsKilled: asNumber(pr['CHAMPIONS_KILLED']),
+          numDeaths: asNumber(pr['NUM_DEATHS']),
+          assists: asNumber(pr['ASSISTS']),
+        };
+      });
+      return {
+        isWinningTeam: team['isWinningTeam'] === true,
+        players,
+      };
+    });
+
+    return {
+      source: 'eogStatsBlock',
+      lcuGameId,
+      reporterPuuid: reporterPuuid ?? ('' as Puuid),
+      teams,
+      ...(liveClientEvents !== undefined ? { liveClientEvents } : {}),
+      schemaVersion: this.#config.schemaVersion,
+      capturedAtMs: this.#rt.clock.nowMs(),
+    };
+  }
+
+  // -- captureLiveClientEvents ----------------------------------------------
+
+  /**
+   * `Documented` — `GET https://127.0.0.1:2999/liveclientdata/eventdata`.
+   * READ-ONLY, best-effort; the port exists only while
+   * `gameflow-phase = InProgress` and dies on game exit (§3.6.4). Parses the
+   * `Events` array into {@link LiveClientKillEvent}s. A connection failure / 404
+   * (game already exited) surfaces as {@link LcuResponseError} for the caller to
+   * treat as "no live capture this game".
+   */
+  async captureLiveClientEvents(): Promise<LiveClientEventCapture> {
+    // Live Client Data needs no auth, but is also self-signed at 127.0.0.1 —
+    // the injected transport handles that cert (see transport.ts header).
+    const res = await this.#rt.http.request({
+      method: 'GET',
+      url: `${LIVE_CLIENT_ORIGIN}${LIVE_CLIENT_EVENTDATA_PATH}`,
+      headers: { Accept: 'application/json' },
+    });
+    if (res.status < 200 || res.status >= 300) {
+      throw new LcuResponseError(
+        `captureLiveClientEvents failed: HTTP ${res.status}`,
+        res.status,
+      );
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(res.body);
+    } catch {
+      throw new LcuResponseError(
+        'captureLiveClientEvents: non-JSON response',
+        res.status,
+      );
+    }
+    // The documented shape is `{ "Events": [ ... ] }`.
+    const events: LiveClientKillEvent[] = asArray(asRecord(parsed)['Events']).map(
+      (e) => {
+        const ev = asRecord(e);
+        const assisters = asArray(ev['Assisters'])
+          .filter((a): a is string => typeof a === 'string');
+        const killerName = asOptString<string>(ev['KillerName']);
+        const victimName = asOptString<string>(ev['VictimName']);
+        return {
+          eventId: asNumber(ev['EventID']),
+          eventName: typeof ev['EventName'] === 'string' ? ev['EventName'] : '',
+          eventTime: asNumber(ev['EventTime']),
+          ...(killerName !== undefined ? { killerName } : {}),
+          ...(victimName !== undefined ? { victimName } : {}),
+          ...(assisters.length > 0 ? { assisters } : {}),
+        };
+      },
+    );
+    return {
+      source: 'liveClientData',
+      events,
+      schemaVersion: this.#config.schemaVersion,
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Auto-accept controller types (§3.6.3)
+// ---------------------------------------------------------------------------
+
+/**
+ * `RE` — a single received-invitation record as observed on the LCU invitation
+ * WebSocket. Field names are pinned here (the single fix-point) and re-validated
+ * against fixtures; `gameConfigInviteType` is the OPTIONAL custom-lobby
+ * discriminator whose live name is an open research question (§3.6.3) — never
+ * the sole filter.
+ */
+export interface ReceivedInvitation {
+  readonly invitationId: string;
+  /** Inviter PUUID — the load-bearing auto-accept filter key (§3.6.3). */
+  readonly fromPuuid: Puuid;
+  /** `'lobby'` for custom-lobby invites; party/queue types are excluded. */
+  readonly invitationType: string;
+  /** Optional custom-lobby invite-type discriminator (additional guard only). */
+  readonly gameConfigInviteType?: string;
+}
+
+/** Outcome of evaluating one invitation against the auto-accept filter. */
+export interface InviteDecision {
+  readonly accepted: boolean;
+  /** Why it was not accepted (present iff `accepted` is false). */
+  readonly reason?:
+    | 'unsubscribed'
+    | 'not-a-lobby-invite'
+    | 'inviter-mismatch'
+    | 'invite-type-mismatch'
+    | 'write-gated';
+  /** The underlying error when `reason === 'write-gated'`. */
+  readonly error?: unknown;
+}
+
+/**
+ * Pure controller driving guest-side auto-accept. The WS layer feeds each
+ * observed invitation to {@link handle}; {@link unsubscribe} stops accepting.
+ */
+export interface InviteAcceptController {
+  handle(invitation: ReceivedInvitation): Promise<InviteDecision>;
+  unsubscribe(): void;
 }

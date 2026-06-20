@@ -20,6 +20,26 @@ from .bracket import (
     BracketRound,
     generate_single_elimination,
 )
+from .orchestration import (
+    ALLOWED_TRANSITIONS,
+    HAPPY_PATH,
+    PRE_GAME_PHASES,
+    TERMINAL_PHASES,
+    Decision,
+    FailoverAction,
+    HeartbeatState,
+    IllegalTransitionError,
+    LobbyEvent,
+    RosterMember,
+    apply_heartbeat,
+    decide_failover,
+    decide_transition,
+    heartbeat_is_stale,
+    is_epoch_current,
+    next_successor,
+    reject_stale_ack,
+    seed_host_succession,
+)
 
 __version__ = "0.1.0"
 
@@ -38,4 +58,23 @@ __all__ = [
     "AdjudicationResult",
     "QUORUM_THRESHOLD",
     "TOTAL_PARTICIPANTS",
+    # autonomous-lobby orchestration state machine
+    "RosterMember",
+    "seed_host_succession",
+    "next_successor",
+    "HAPPY_PATH",
+    "ALLOWED_TRANSITIONS",
+    "TERMINAL_PHASES",
+    "PRE_GAME_PHASES",
+    "LobbyEvent",
+    "IllegalTransitionError",
+    "decide_transition",
+    "FailoverAction",
+    "Decision",
+    "decide_failover",
+    "is_epoch_current",
+    "reject_stale_ack",
+    "HeartbeatState",
+    "apply_heartbeat",
+    "heartbeat_is_stale",
 ]

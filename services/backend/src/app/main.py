@@ -22,6 +22,7 @@ from app.logging import configure_logging, get_logger
 from app.orchestration.router import router as orchestration_router
 from app.realtime.router import router as realtime_router
 from app.results.router import router as results_router
+from app.teams.router import router as teams_router
 from app.tournaments.router import router as tournaments_router
 
 # Dedicated registry so the exposition is deterministic and test-friendly.
@@ -75,6 +76,7 @@ def create_app() -> FastAPI:
     for r in (
         auth_router,
         accounts_router,
+        teams_router,
         tournaments_router,
         orchestration_router,
         results_router,

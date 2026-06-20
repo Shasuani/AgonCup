@@ -253,7 +253,11 @@ def test_jwt_expired_is_rejected() -> None:
 def test_jwt_tamper_is_rejected() -> None:
     token = mint_access_token(user_id="u", guild_id=None, roles=())
     head, payload, sig = token.split(".")
-    tampered = f"{head}.{payload}.{sig[:-2]}xx"
+    # Flip the last signature char to a guaranteed-DIFFERENT base64url char so the
+    # tamper is deterministic (replacing with a fixed string could coincidentally
+    # equal the original signature ~1/4096 of the time -> flaky).
+    flipped = "A" if sig[-1] != "A" else "B"
+    tampered = f"{head}.{payload}.{sig[:-1]}{flipped}"
     with pytest.raises(InvalidAccessToken):
         verify_access_token(tampered)
 

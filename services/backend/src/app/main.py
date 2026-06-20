@@ -1,0 +1,88 @@
+"""FastAPI application entrypoint.
+
+Wires structured JSON logging, the observability endpoints (`/healthz`,
+`/metrics`), and mounts the (currently stub) feature routers. See PLAN.md §1.4
+(observability from day 0) and §3.1 (backend modules).
+"""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastapi.responses import PlainTextResponse, Response
+from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, generate_latest
+
+from app.accounts.router import router as accounts_router
+from app.auth.router import router as auth_router
+from app.config import get_settings
+from app.logging import configure_logging, get_logger
+from app.orchestration.router import router as orchestration_router
+from app.realtime.router import router as realtime_router
+from app.results.router import router as results_router
+from app.tournaments.router import router as tournaments_router
+
+# Dedicated registry so the exposition is deterministic and test-friendly.
+# Application metrics (request counters, DB-pool gauges, etc.) register here in
+# later phases (PLAN.md §7 Phase 0: DB-pool gauges).
+metrics_registry = CollectorRegistry()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    settings = get_settings()
+    configure_logging(settings.log_level)
+    log = get_logger("app.startup")
+    log.info(
+        "backend.startup",
+        environment=settings.environment,
+        version=app.version,
+    )
+    yield
+    get_logger("app.shutdown").info("backend.shutdown")
+
+
+def create_app() -> FastAPI:
+    """Application factory."""
+    settings = get_settings()
+
+    app = FastAPI(
+        title="LeagueOfLeagues Backend",
+        version="0.1.0",
+        description="Tournaments, accounts, autonomous match orchestration & results.",
+        lifespan=lifespan,
+    )
+
+    # --- Observability endpoints (no auth, no tenant scope) -----------------
+    @app.get("/healthz", tags=["observability"], summary="Liveness probe")
+    async def healthz() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.get(
+        "/metrics",
+        tags=["observability"],
+        summary="Prometheus metrics exposition",
+        response_class=PlainTextResponse,
+    )
+    async def metrics() -> Response:
+        payload = generate_latest(metrics_registry)
+        return Response(content=payload, media_type=CONTENT_TYPE_LATEST)
+
+    # --- Feature routers (stubs in Phase 0) ---------------------------------
+    api_prefix = "/api/v1"
+    for r in (
+        auth_router,
+        accounts_router,
+        tournaments_router,
+        orchestration_router,
+        results_router,
+        realtime_router,
+    ):
+        app.include_router(r, prefix=api_prefix)
+
+    _ = settings  # reserved for future wiring (CORS, middleware, etc.)
+    return app
+
+
+app = create_app()

@@ -1,0 +1,150 @@
+# infra/docker-compose.yml
+#
+# Local development stack for LeagueOfLeagues (Phase 0 scaffolding).
+#
+#   services: postgres, redis, backend, worker
+#   (bot / frontend are Phase-0 placeholders, commented out below.)
+#
+# IMPORTANT — base images first:
+#   The backend and worker images start `FROM lol/python-base:dev`, which is NOT
+#   on any registry. You MUST build the shared base images before bringing up the
+#   stack:
+#
+#       make build-bases        # builds lol/python-base:dev and lol/node-base:dev
+#       docker compose -f infra/docker-compose.yml up --build
+#
+# Configuration is 12-factor / env-driven. Every variable referenced here also
+# exists in `.env.example` at the repo root (copy it to `.env`):
+#
+#       cp .env.example .env
+#
+# Note: paths are relative to THIS file (infra/), so the repo root is `..`.
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 16 — primary datastore (RLS multi-tenant isolation lands in P1).
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      # These feed the official image's initdb. Defaults keep `docker compose
+      # config` and a bare `up` working even before `.env` is filled in.
+      POSTGRES_USER: ${POSTGRES_USER:-lol}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lol}
+      POSTGRES_DB: ${POSTGRES_DB:-lol}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # pg_isready against the configured role/db; gate dependents on this.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-lol} -d ${POSTGRES_DB:-lol}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Redis 7 — cache, WS pub/sub fan-out, arq broker. AOF on for queue durability.
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  # ---------------------------------------------------------------------------
+  # Backend API — FastAPI on uvicorn. Built by the backend agent at
+  # services/backend (multi-stage, FROM lol/python-base:dev).
+  # ---------------------------------------------------------------------------
+  backend:
+    build:
+      # Build context is the repo root so the image can also COPY shared libs/.
+      context: ..
+      dockerfile: services/backend/Dockerfile
+    image: lol/backend:dev
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://lol:lol@postgres:5432/lol}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    healthcheck:
+      # Liveness endpoint defined by the backend (GET /healthz).
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # Worker — arq (asyncio, Redis-backed). Built by the worker agent at
+  # services/worker (multi-stage, FROM lol/python-base:dev).
+  # ---------------------------------------------------------------------------
+  worker:
+    build:
+      context: ..
+      dockerfile: services/worker/Dockerfile
+    image: lol/worker:dev
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://lol:lol@postgres:5432/lol}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+
+  # ---------------------------------------------------------------------------
+  # Phase-0 placeholders (uncomment once the owning agents land their services):
+  #
+  # bot:
+  #   build:
+  #     context: ..
+  #     dockerfile: services/bot/Dockerfile
+  #   image: lol/bot:dev
+  #   depends_on:
+  #     backend:
+  #       condition: service_healthy
+  #   env_file:
+  #     - path: ../.env
+  #       required: false
+  #
+  # frontend:
+  #   build:
+  #     context: ..
+  #     dockerfile: services/frontend/Dockerfile   # FROM lol/node-base:dev
+  #   image: lol/frontend:dev
+  #   ports:
+  #     - "${FRONTEND_PORT:-5173}:5173"
+  # ---------------------------------------------------------------------------
+
+volumes:
+  postgres_data:
+  redis_data:

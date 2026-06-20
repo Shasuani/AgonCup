@@ -1,0 +1,238 @@
+name: CI
+
+# Phase-0 CI for the LeagueOfLeagues monorepo.
+#
+# Jobs:
+#   lint        - ruff over all Python packages
+#   typecheck   - mypy over all Python packages
+#   test        - pytest (uv-managed envs) over all Python packages
+#   cve-scan    - Trivy filesystem + (best-effort) image scan
+#   lol-lcu-fixtures - placeholder for the LCU fixture-validation harness
+#
+# Everything is intentionally tolerant of the Phase-0 state: packages that don't
+# exist yet are skipped, not failed. As real packages land, the discovery step
+# picks them up automatically.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.5.11"
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Lint — ruff. Runs across every Python package found under libs/ and services/.
+  # ---------------------------------------------------------------------------
+  lint:
+    name: lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Set up Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: ruff check
+        run: |
+          set -euo pipefail
+          # Run ruff against the whole tree; if no pyproject configures it yet,
+          # ruff still lints with defaults. `|| exit 1` keeps real failures fatal.
+          uvx ruff check . || {
+            echo "::warning::ruff reported issues (or no Python sources yet)";
+            # In Phase 0 there may be zero Python files; treat 'no files' as pass.
+            if [ -z "$(git ls-files '*.py')" ]; then
+              echo "No Python sources present yet; skipping.";
+              exit 0;
+            fi
+            exit 1;
+          }
+
+      - name: ruff format --check
+        run: |
+          set -euo pipefail
+          if [ -n "$(git ls-files '*.py')" ]; then
+            uvx ruff format --check .
+          else
+            echo "No Python sources present yet; skipping format check."
+          fi
+
+  # ---------------------------------------------------------------------------
+  # Typecheck — mypy. Iterates each standalone Python package (own pyproject.toml).
+  # ---------------------------------------------------------------------------
+  typecheck:
+    name: typecheck (mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Set up Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: mypy per-package
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          found=0
+          for pkg in libs/*/ services/*/; do
+            if [ -f "${pkg}pyproject.toml" ]; then
+              found=1
+              echo "::group::mypy ${pkg}"
+              # Each package is standalone: sync its deps, then type-check src/.
+              ( cd "$pkg" && uv sync --all-extras --dev && uv run mypy src )
+              echo "::endgroup::"
+            fi
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "No Python packages with pyproject.toml yet; skipping."
+          fi
+
+  # ---------------------------------------------------------------------------
+  # Test — pytest under uv-managed envs, per standalone package.
+  # ---------------------------------------------------------------------------
+  test:
+    name: test (pytest)
+    runs-on: ubuntu-latest
+    # A real Postgres + Redis so packages that want integration tests can use them.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: lol
+          POSTGRES_PASSWORD: lol
+          POSTGRES_DB: lol
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U lol -d lol"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://lol:lol@localhost:5432/lol
+      REDIS_URL: redis://localhost:6379/0
+      ENVIRONMENT: test
+      LOG_LEVEL: DEBUG
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Set up Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: pytest per-package
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          found=0
+          for pkg in libs/*/ services/*/; do
+            if [ -f "${pkg}pyproject.toml" ]; then
+              found=1
+              echo "::group::pytest ${pkg}"
+              ( cd "$pkg" \
+                && uv sync --all-extras --dev \
+                && uv run pytest -q )
+              echo "::endgroup::"
+            fi
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "No Python packages with pyproject.toml yet; skipping."
+          fi
+
+  # ---------------------------------------------------------------------------
+  # CVE scan — Trivy. Filesystem scan always; image scan is best-effort (building
+  # the full multi-stage images in CI is heavy, so it is a documented placeholder
+  # that activates once the base images exist).
+  # ---------------------------------------------------------------------------
+  cve-scan:
+    name: cve-scan (trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trivy filesystem scan (dependencies + IaC + secrets)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          # Phase 0: report but do not fail the build on vulnerabilities yet.
+          # Flip exit-code to 1 (and severity to CRITICAL,HIGH) to gate later.
+          exit-code: "0"
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          format: table
+
+      # --- Image scan placeholder (documented, off by default) -----------------
+      # Once services/backend & services/worker Dockerfiles land, build the base
+      # image then the service image and Trivy-scan it. Kept here, disabled, so
+      # the gating story is explicit:
+      #
+      # - name: Build base + backend image
+      #   run: |
+      #     docker build -t lol/python-base:dev infra/images/python-base
+      #     docker build -t lol/backend:dev -f services/backend/Dockerfile .
+      # - name: Trivy image scan (backend)
+      #   uses: aquasecurity/trivy-action@0.28.0
+      #   with:
+      #     scan-type: image
+      #     image-ref: lol/backend:dev
+      #     exit-code: "1"
+      #     severity: CRITICAL,HIGH
+      #     ignore-unfixed: true
+
+  # ---------------------------------------------------------------------------
+  # lol-lcu fixtures — placeholder for the LCU schema/fixture-validation harness.
+  # Validates the lol-lcu (TS) parsers against pinned live-client fixtures + a
+  # Swagger mirror per League patch. Real implementation lands with libs/lol-lcu.
+  # ---------------------------------------------------------------------------
+  lol-lcu-fixtures:
+    name: lol-lcu fixtures (placeholder)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate LCU fixtures
+        run: |
+          set -euo pipefail
+          if [ -d libs/lol-lcu ]; then
+            echo "libs/lol-lcu present — fixture-validation harness TODO."
+            # TODO(lol-lcu): run the fixture/Swagger-mirror validation suite here,
+            #   e.g.  (cd libs/lol-lcu && npm ci && npm run validate:fixtures)
+          else
+            echo "libs/lol-lcu not present yet; Phase-0 placeholder — skipping."
+          fi

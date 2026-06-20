@@ -1,0 +1,71 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lol-worker"
+version = "0.1.0"
+description = "LeagueOfLeagues worker (arq) — verification polling, lobby watchdog/failover state machine, result corroboration/anomaly scoring."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Proprietary" }
+authors = [{ name = "LeagueOfLeagues" }]
+
+dependencies = [
+    "arq>=0.26",
+    "redis>=5.0",
+    "pydantic-settings>=2.3",
+    "sqlalchemy[asyncio]>=2.0.30",
+    "asyncpg>=0.29",
+    "structlog>=24.1",
+    "python-json-logger>=2.0",
+    # Path deps on shared libraries (resolved via [tool.uv.sources] below).
+    "lol-schemas",
+    "lol-core",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.5",
+    "mypy>=1.10",
+]
+
+# uv path/editable sources for the shared libs. These map the dist names declared
+# in [project.dependencies] to the sibling library packages in the monorepo.
+# See PLAN.md §4 (repo structure) and §5 (shared libs).
+[tool.uv.sources]
+lol-schemas = { path = "../../libs/lol-schemas", editable = true }
+lol-core = { path = "../../libs/lol-core", editable = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/app"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-ra"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "W", "C4", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+plugins = ["pydantic.mypy"]
+strict = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+mypy_path = "src"
+explicit_package_bases = true
+namespace_packages = true
+
+[[tool.mypy.overrides]]
+# Generated/third-party modules without complete stubs.
+module = ["asyncpg.*", "pythonjsonlogger.*", "arq.*"]
+ignore_missing_imports = true

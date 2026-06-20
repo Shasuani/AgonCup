@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lol-realtime"
+version = "0.0.0"
+description = "WebSocket envelope Pydantic models + exported JSON schema (command/ack envelopes)."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "League Of Leagues" }]
+dependencies = [
+    "pydantic>=2.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+    "mypy>=1.11",
+]
+
+[project.scripts]
+lol-realtime-schema = "lol_realtime.envelopes:_cli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lol_realtime"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["lol_realtime"]
+mypy_path = "src"
+plugins = ["pydantic.mypy"]

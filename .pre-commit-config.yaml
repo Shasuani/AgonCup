@@ -1,0 +1,29 @@
+# Pre-commit hooks for LeagueOfLeagues.
+# Install with:  uv tool install pre-commit  (or pipx install pre-commit)
+#                pre-commit install
+# Run on demand: pre-commit run --all-files
+minimum_pre_commit_version: "3.5.0"
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-added-large-files
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+      - id: detect-private-key
+      - id: check-case-conflict
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      # Lint (with autofix), then format.
+      - id: ruff
+        args: ["--fix"]
+      - id: ruff-format

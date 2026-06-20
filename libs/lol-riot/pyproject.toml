@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lol-riot"
+version = "0.0.0"
+description = "Thin Riot Account-V1 client + light token-bucket limiter (Account-V1 only, no Tournament-V5)."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "League Of Leagues" }]
+dependencies = [
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+# lol-schemas is consumed as a path dep once it exists (Phase-0 sibling lib).
+# Kept optional so lol-riot builds/tests standalone before lol-schemas lands.
+schemas = [
+    "lol-schemas",
+]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.6",
+    "mypy>=1.11",
+]
+
+[tool.uv.sources]
+lol-schemas = { path = "../lol-schemas", editable = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lol_riot"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["lol_riot"]
+mypy_path = "src"

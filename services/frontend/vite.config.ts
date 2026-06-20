@@ -21,7 +21,19 @@ export default defineConfig({
       "@lol/clients-ts": clientsSrc,
     },
   },
-  server: { host: true, port: 5173 },
+  server: {
+    host: true,
+    port: 5173,
+    // Dev: forward API calls to the backend so the SPA stays same-origin (no
+    // CORS) and config.apiBaseUrl can default to "". Override the target with
+    // VITE_API_BASE_URL if the backend runs elsewhere.
+    proxy: {
+      "/api": {
+        target: process.env.VITE_API_BASE_URL || "http://localhost:8000",
+        changeOrigin: true,
+      },
+    },
+  },
   test: {
     globals: true,
     environment: "jsdom",

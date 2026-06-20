@@ -27,6 +27,7 @@ from typing import Annotated
 import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
+from lol_schemas.enums import UserGuildRoleName
 from pydantic import BaseModel
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,7 +44,7 @@ from app.auth.tokens import (
 from app.config import Settings, get_settings
 from app.db import SessionLocal
 from app.logging import get_logger
-from app.models import OAuthCredential, User, UserGuildRole
+from app.models import Guild, OAuthCredential, User, UserGuildRole
 from app.security import encrypt
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -293,3 +294,75 @@ async def logout(body: Annotated[LogoutRequest, Body()]) -> dict[str, str]:
     async with SessionLocal() as session, session.begin():
         await revoke_refresh_token(session, token=body.refresh_token)
     return {"status": "logged_out"}
+
+
+# ---------------------------------------------------------------------------
+# DEV-ONLY login (no Discord) — local development without an OAuth app
+# ---------------------------------------------------------------------------
+_DEV_DISCORD_GUILD = 100000000000000001
+_DEV_DISCORD_USER = 100000000000000002
+
+
+@router.post(
+    "/dev-login",
+    response_model=TokenPair,
+    summary="DEV ONLY: mint a platform_operator session without Discord OAuth",
+)
+async def dev_login(
+    settings: Annotated[Settings, Depends(_get_settings_dep)],
+) -> TokenPair:
+    """Mint a real admin token for local development — **disabled in production**.
+
+    Upserts a dev guild + dev user with the ``platform_operator`` role and issues
+    a normal access/refresh pair, so the SPA AND the backend API both work without
+    a configured Discord OAuth app. Returns 404 when ``ENVIRONMENT=production`` so
+    it can never be a production backdoor.
+    """
+    if settings.is_production:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")
+
+    async with SessionLocal() as session, session.begin():
+        guild = (
+            await session.execute(select(Guild).where(Guild.discord_guild_id == _DEV_DISCORD_GUILD))
+        ).scalar_one_or_none()
+        if guild is None:
+            guild = Guild(discord_guild_id=_DEV_DISCORD_GUILD, name="Dev Guild")
+            session.add(guild)
+            await session.flush()
+
+        user = (
+            await session.execute(select(User).where(User.discord_user_id == _DEV_DISCORD_USER))
+        ).scalar_one_or_none()
+        if user is None:
+            user = User(discord_user_id=_DEV_DISCORD_USER, display_name="Dev Admin")
+            session.add(user)
+            await session.flush()
+
+        # Scope the role insert/read to the dev guild (RLS on user_guild_roles).
+        await session.execute(
+            text("SELECT set_config('app.current_guild', :g, true)"),
+            {"g": str(guild.id)},
+        )
+        has_role = (
+            await session.execute(
+                select(UserGuildRole.id).where(
+                    UserGuildRole.user_id == user.id,
+                    UserGuildRole.guild_id == guild.id,
+                    UserGuildRole.role == UserGuildRoleName.PLATFORM_OPERATOR,
+                )
+            )
+        ).first()
+        if has_role is None:
+            session.add(
+                UserGuildRole(
+                    user_id=user.id,
+                    guild_id=guild.id,
+                    role=UserGuildRoleName.PLATFORM_OPERATOR,
+                )
+            )
+            await session.flush()
+
+        pair = await _issue_pair(session, str(user.id), settings)
+
+    log.warning("dev_login_used", user_id=str(user.id))
+    return pair

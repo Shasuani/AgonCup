@@ -84,15 +84,19 @@ def upgrade() -> None:
         f"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {APP_ROLE}"
     )
 
-    # 3) Per-guild RLS on guild-scoped tables.
+    # 3) Per-guild RLS on guild-scoped tables. The GUC is cast via
+    #    NULLIF(..., '')::uuid so an UNSET/empty tenant yields NULL (fail closed:
+    #    guild_id = NULL is never true) instead of erroring "invalid input syntax
+    #    for uuid". DROP-IF-EXISTS keeps policy creation idempotent.
     for table_name in GUILD_ISOLATED_TABLES:
         op.execute(f"ALTER TABLE {table_name} ENABLE ROW LEVEL SECURITY")
         op.execute(f"ALTER TABLE {table_name} FORCE ROW LEVEL SECURITY")
+        op.execute(f"DROP POLICY IF EXISTS guild_isolation ON {table_name}")
         op.execute(
             f"""
             CREATE POLICY guild_isolation ON {table_name}
-                USING (guild_id = current_setting('app.current_guild', true)::uuid)
-                WITH CHECK (guild_id = current_setting('app.current_guild', true)::uuid)
+                USING (guild_id = NULLIF(current_setting('app.current_guild', true), '')::uuid)
+                WITH CHECK (guild_id = NULLIF(current_setting('app.current_guild', true), '')::uuid)
             """
         )
 

@@ -106,6 +106,20 @@ class Settings(BaseSettings):
         "app.security.crypto via the PII_ENCRYPTION_KEY env var.",
     )
 
+    # --- Bot ↔ backend service auth (PLAN.md §3.2 multi-tenant bot) ---------
+    # The Discord bot is the SOLE holder of this shared secret; it calls the
+    # backend's /integrations/discord endpoints with it in the X-Service-Token
+    # header. The backend TRUSTS the Discord context (user/guild snowflakes,
+    # is_admin) asserted on those calls precisely because only the bot can present
+    # the token. Empty default → fail closed (the bridge answers 503 until set).
+    bot_service_token: str = Field(
+        default="",
+        description="Shared secret the bot presents to the /integrations/discord "
+        "bridge (X-Service-Token). The bot is the only token holder; the backend "
+        "maps discord_user_id->User and enforces roles. Empty → bridge fails closed "
+        "(503). NEVER commit a real value. (PLAN.md §3.2)",
+    )
+
     # --- Riot (Account-V1 personal key only; NO Tournament API) -------------
     riot_api_key: str = Field(default="", description="Riot Account-V1 personal API key.")
     riot_region: str = Field(

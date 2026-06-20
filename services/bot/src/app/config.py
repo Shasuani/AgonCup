@@ -30,6 +30,15 @@ class Settings(BaseSettings):
     # Base URL of the backend API the bot calls (PLAN.md §3.2 "thin layer").
     backend_base_url: str = Field(default="http://backend:8000")
 
+    # Shared service-auth secret the bot presents to the backend bot bridge in the
+    # ``X-Service-Token`` header (PLAN.md §3.2). The bot is the SOLE holder; the
+    # backend trusts the asserted Discord context because only the bot can present
+    # this token. Empty default → backend bridge fails closed (503).
+    bot_service_token: str = Field(default="")
+
+    # Redis DSN for the backend→bot notification fan-out channel (PLAN.md §3.2).
+    redis_url: str = Field(default="redis://redis:6379/0")
+
     environment: Environment = Field(default="development")
     log_level: str = Field(default="INFO")
 

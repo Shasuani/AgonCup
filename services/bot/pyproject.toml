@@ -18,6 +18,8 @@ dependencies = [
     "python-json-logger>=2.0",
     # Service-auth calls to the backend (e.g. on_guild_remove → lifecycle purge).
     "httpx>=0.27",
+    # Backend→bot notification fan-out channel (Redis pub/sub, PLAN.md §3.2).
+    "redis>=5.0",
     # Path deps on shared libraries (resolved via [tool.uv.sources] below).
     "lol-schemas",
     "lol-discord",
@@ -61,5 +63,5 @@ explicit_package_bases = true
 namespace_packages = true
 
 [[tool.mypy.overrides]]
-module = ["discord.*", "pythonjsonlogger.*"]
+module = ["discord.*", "pythonjsonlogger.*", "redis.*"]
 ignore_missing_imports = true

@@ -65,15 +65,21 @@ def upgrade() -> None:
     for name in _NEW_TABLES:
         op.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON {name} TO {APP_ROLE}")
 
-    # 3) Per-guild RLS on the new guild-scoped table (mirror 0002's policy SQL).
+    # 3) Per-guild RLS on the new guild-scoped table. NOTE: 0002 creates tables
+    #    from Base.metadata (which now includes user_guild_roles) and already
+    #    applies guild_isolation to every GUILD_ISOLATED_TABLES entry — so this
+    #    block is redundant with 0002. DROP-IF-EXISTS makes it idempotent (no
+    #    "policy already exists" on a fresh upgrade) and NULLIF makes the GUC cast
+    #    fail-closed on an unset tenant (matches 0002).
     for table_name in _NEW_RLS_TABLES:
         op.execute(f"ALTER TABLE {table_name} ENABLE ROW LEVEL SECURITY")
         op.execute(f"ALTER TABLE {table_name} FORCE ROW LEVEL SECURITY")
+        op.execute(f"DROP POLICY IF EXISTS guild_isolation ON {table_name}")
         op.execute(
             f"""
             CREATE POLICY guild_isolation ON {table_name}
-                USING (guild_id = current_setting('app.current_guild', true)::uuid)
-                WITH CHECK (guild_id = current_setting('app.current_guild', true)::uuid)
+                USING (guild_id = NULLIF(current_setting('app.current_guild', true), '')::uuid)
+                WITH CHECK (guild_id = NULLIF(current_setting('app.current_guild', true), '')::uuid)
             """
         )
 
@@ -85,11 +91,12 @@ def upgrade() -> None:
     #     guild_isolation: a session that sets `app.current_user` to the
     #     authenticated user id can read that user's role rows regardless of the
     #     guild GUC. Writes stay guild-scoped (this policy is FOR SELECT only).
+    op.execute("DROP POLICY IF EXISTS self_role_read ON user_guild_roles")
     op.execute(
         """
         CREATE POLICY self_role_read ON user_guild_roles
             FOR SELECT
-            USING (user_id = current_setting('app.current_user', true)::uuid)
+            USING (user_id = NULLIF(current_setting('app.current_user', true), '')::uuid)
         """
     )
 

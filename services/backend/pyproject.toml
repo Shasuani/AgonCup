@@ -34,6 +34,9 @@ dependencies = [
     "lol-realtime",
     # Account-V1 client (Riot ID -> PUUID) for account linking (PLAN.md §3.5).
     "lol-riot",
+    # Redis pub/sub: the single internal-push channel the backend emits domain
+    # notifications on and the bot subscribes to (PLAN.md §3.2).
+    "redis>=5.0",
 ]
 
 [project.optional-dependencies]
@@ -94,5 +97,5 @@ namespace_packages = true
 
 [[tool.mypy.overrides]]
 # Generated/third-party modules without complete stubs.
-module = ["asyncpg.*", "pythonjsonlogger.*"]
+module = ["asyncpg.*", "pythonjsonlogger.*", "redis.*"]
 ignore_missing_imports = true

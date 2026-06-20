@@ -17,8 +17,11 @@ from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, generate_l
 from app.accounts.router import router as accounts_router
 from app.auth.router import router as auth_router
 from app.config import get_settings
+from app.federation.router import router as federation_router
+from app.integrations.discord.router import router as discord_bridge_router
 from app.lifecycle.router import router as lifecycle_router
 from app.logging import configure_logging, get_logger
+from app.notifications.router import router as notifications_router
 from app.orchestration.router import router as orchestration_router
 from app.realtime.router import router as realtime_router
 from app.results.router import router as results_router
@@ -71,7 +74,10 @@ def create_app() -> FastAPI:
         payload = generate_latest(metrics_registry)
         return Response(content=payload, media_type=CONTENT_TYPE_LATEST)
 
-    # --- Feature routers (stubs in Phase 0) ---------------------------------
+    # --- Feature routers ----------------------------------------------------
+    # ``discord_bridge_router`` is the service-authenticated bot bridge (PLAN.md
+    # §3.2). ``notifications_router`` / ``federation_router`` are mounted as STUBS
+    # now so the next phase fills their bodies WITHOUT editing this factory.
     api_prefix = "/api/v1"
     for r in (
         auth_router,
@@ -82,6 +88,9 @@ def create_app() -> FastAPI:
         results_router,
         realtime_router,
         lifecycle_router,
+        discord_bridge_router,
+        notifications_router,
+        federation_router,
     ):
         app.include_router(r, prefix=api_prefix)
 

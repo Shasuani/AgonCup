@@ -26,6 +26,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.deps import get_tenant_session, require_tenant_role
 from app.orchestration import service
 
+
+def _command_publisher() -> service.CommandPublisher:
+    """Build the production command publisher (Redis -> the WS hub's channel).
+
+    Deferred imports keep orchestration's module load light and avoid any
+    import-order coupling with the realtime package. This closes the loop: minted
+    commands are published on the per-guild/per-match channel the WS hub relays to
+    the subscribed desktop clients (PLAN.md §3.6.1 / §5).
+    """
+    from app.realtime.hub import RedisCommandPublisher  # noqa: PLC0415
+    from app.realtime.redis_client import get_redis  # noqa: PLC0415
+
+    return RedisCommandPublisher(get_redis())
+
+
 router = APIRouter(prefix="/orchestration", tags=["orchestration"])
 
 # Initializing a match lobby (host designation + first commands) is a privileged
@@ -113,6 +128,7 @@ async def initialize_lobby(
             match_id=match_id,
             lobby_name=body.lobby_name,
             lobby_password=body.lobby_password,
+            publisher=_command_publisher(),
         )
     except service.MatchNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="match not found") from exc
@@ -209,6 +225,7 @@ async def trigger_failover(
             host_connected=body.host_connected,
             missed_heartbeats=body.missed_heartbeats,
             gameflow_advanced=body.gameflow_advanced,
+            publisher=_command_publisher(),
         )
     except service.LobbyNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="lobby not found") from exc

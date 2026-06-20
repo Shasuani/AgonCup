@@ -36,17 +36,15 @@ async def ping() -> dict[str, str]:
 
 
 def _redis_client() -> Redis:
-    """Construct an async Redis client from settings (lazy import keeps imports IO-free).
+    """Return the SHARED process-wide async Redis client (lazy singleton).
 
-    Importing this module must NOT connect (SHARED CONVENTIONS / PLAN.md §3.2): the
-    ``redis`` import and client construction happen only when a WS actually
-    connects, so the test suite imports the router without opening a socket.
+    The same pool backs the orchestration command publisher, so the gateway and
+    the publisher agree on one connection (PLAN.md §5). Import stays IO-free: the
+    client is built lazily on first WS connect, never at import.
     """
-    from redis.asyncio import Redis  # noqa: PLC0415 - deferred so import stays IO-free
+    from app.realtime.redis_client import get_redis  # noqa: PLC0415
 
-    from app.config import get_settings
-
-    return Redis.from_url(get_settings().redis_url)
+    return get_redis()
 
 
 @router.websocket("/ws")

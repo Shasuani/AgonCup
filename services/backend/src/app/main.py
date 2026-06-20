@@ -45,6 +45,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         version=app.version,
     )
     yield
+    # Close the shared realtime Redis pool (command pub/sub + WS gateway).
+    from app.realtime.redis_client import aclose_redis
+
+    await aclose_redis()
     get_logger("app.shutdown").info("backend.shutdown")
 
 

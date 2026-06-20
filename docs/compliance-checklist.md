@@ -30,6 +30,22 @@
 - [ ] Pin a validated client patch; CI-validate `eog-stats-block`/`eventdata`
       parsers against live fixtures + a Swagger mirror each patch.
 
+## Desktop distribution — code signing
+> Per-OS Electron packaging runs in `.github/workflows/desktop-build.yml`
+> (macOS + Windows matrix). Unsigned **dev** builds run with no secrets; signed
+> release builds require the certs below. PLAN.md §3.3, §9.
+- [ ] **[BETA-GATE]** The **LCU-write ToS spike** (above) remains the gate before
+      any signed desktop client ships — signing is necessary but not sufficient.
+- [ ] **Apple Developer Program** membership → **Developer ID Application** cert
+      for macOS signing + notarization. CI secrets: `APPLE_DEVELOPER_ID`,
+      `MAC_CERT_P12_BASE64`, `MAC_CERT_PASSWORD`, `APPLE_ID`,
+      `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`.
+- [ ] **Windows code-signing cert** (Authenticode, EV recommended for SmartScreen
+      reputation). CI secrets: `WINDOWS_CERT` (base64 `.pfx`),
+      `WINDOWS_CERT_PASSWORD`.
+- [ ] Until the certs exist, CI produces **unsigned dev installers** (signing
+      steps are gated on the secrets being present, so the matrix still runs).
+
 ## Discord
 - [ ] Create the application; bot uses the **non-privileged `guilds` intent** only.
 - [ ] OAuth2 (auth-code + `state` for web; PKCE for desktop).

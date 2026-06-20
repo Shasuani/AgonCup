@@ -20,7 +20,7 @@
  * unit-testable with a fake adapter under `node --test`.
  */
 
-import type { GameflowPhase, LcuAdapter } from "@lol/lcu";
+import type { GameflowPhase, LcuAdapter, LiveClientEventCapture } from "@lol/lcu";
 import type {
   AutoAcceptCommand,
   BackendTransport,
@@ -39,6 +39,8 @@ export interface ControllerConfig {
 }
 
 const TERMINAL_PHASE: GameflowPhase = "EndOfGame";
+/** Live-Client Data (`:2999`) is only up while the game is actually running. */
+const IN_PROGRESS_PHASE: GameflowPhase = "InProgress";
 
 export class OrchestrationController {
   readonly #adapter: LcuAdapter;
@@ -51,6 +53,12 @@ export class OrchestrationController {
   #currentEpoch = -1;
   #isHost = false;
   #reported = false;
+  /**
+   * Latest best-effort Live-Client (`:2999`) kill-stream capture, refreshed on
+   * each `InProgress` tick and bundled into the single eog report (§3.6.4). The
+   * port dies on game exit, so we keep the freshest snapshot seen while in-game.
+   */
+  #liveClientEvents: LiveClientEventCapture | null = null;
   #unsubscribeCommands: (() => void) | null = null;
   #unsubscribeInvite: (() => void) | null = null;
   #cancelHeartbeat: (() => void) | null = null;
@@ -169,28 +177,53 @@ export class OrchestrationController {
         sentAtMs: this.#clock.nowMs(),
       }),
     );
+    if (phase === IN_PROGRESS_PHASE) {
+      await this.#captureLiveEvents();
+    }
     if (phase === TERMINAL_PHASE && !this.#reported) {
       await this.#captureAndReport();
     }
   }
 
-  async #captureAndReport(): Promise<void> {
-    this.#reported = true; // single-shot: the eog block clears fast (§3.6.5).
+  /**
+   * Best-effort `:2999` kill-stream snapshot while in-game (§3.6.4). READ-ONLY,
+   * soft-fail: a connection/parse failure (e.g. the port already died) keeps the
+   * previous snapshot and never throws into the tick loop.
+   */
+  async #captureLiveEvents(): Promise<void> {
     try {
-      const report = await this.#adapter.captureEndOfGame();
+      this.#liveClientEvents = await this.#adapter.captureLiveClientEvents();
+    } catch {
+      // Port not up yet / already gone — keep the last good capture, stay alive.
+    }
+  }
+
+  async #captureAndReport(): Promise<void> {
+    this.#reported = true; // single-shot guard against double-report.
+    try {
+      // Bundle the latest live kill-stream into the eog report (§3.6.4/§3.6.5).
+      const report = await this.#adapter.captureEndOfGame(
+        undefined,
+        this.#liveClientEvents ?? undefined,
+      );
       await this.#transport.sendReport({
         matchId: this.#matchId,
         hostEpoch: this.#currentEpoch,
         report,
       });
-    } catch (err) {
-      // Capture/report is best-effort; a missing report degrades to "honest
-      // missing" in the corroboration quorum, never a crash.
-      this.#reported = false; // allow a retry on the next tick within the window.
-      void errorMessage(err);
-    } finally {
+      // Reported successfully: stop the heartbeat loop (orchestration is done).
+      // We cancel ONLY here so that a capture/send FAILURE leaves the heartbeat
+      // running and the retry below can actually fire on the next tick within the
+      // brief eog window; the runtime tears the controller down at match end, so
+      // the loop is always bounded.
       this.#cancelHeartbeat?.();
       this.#cancelHeartbeat = null;
+    } catch (err) {
+      // Best-effort: a failed capture/send degrades to "honest missing" in the
+      // corroboration quorum, never a crash. Clear the guard so the next tick
+      // retries while the eog block is still readable.
+      this.#reported = false;
+      void errorMessage(err);
     }
   }
 

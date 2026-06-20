@@ -1,0 +1,168 @@
+name: Desktop Build
+
+# Per-OS Electron packaging for the LeagueOfLeagues desktop client
+# (services/desktop). Builds native installers on macOS + Windows runners and
+# uploads them as artifacts. See PLAN.md §3.3 (desktop client) and §9.
+#
+# Kept SEPARATE from ci.yml on purpose: the Python lint/test/RLS matrix in CI is
+# Linux-only and fast; this packaging matrix is heavier, OS-specific, and only
+# needs to exercise the desktop TypeScript + electron-builder pipeline.
+#
+# Code-signing is GATED on secrets being present (see the "secrets gate" steps):
+#   - macOS:   APPLE_DEVELOPER_ID + notarization creds
+#   - Windows: WINDOWS_CERT (Authenticode)
+# When those secrets are absent (forks, dev branches) the job still runs and
+# produces UNSIGNED dev installers. Real certs (Apple Developer Program +
+# Windows code-signing cert) are a prerequisite for signed/notarized release
+# builds — and the LCU-write ToS spike (docs/compliance-checklist.md) remains
+# the beta gate before any of this ships. See docs/compliance-checklist.md.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: desktop-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # dist — build + test + package the Electron app per OS.
+  #
+  # The `dist` script + electron-builder config are defined by the desktop agent
+  # in services/desktop/package.json; this workflow references it. It is fine if
+  # `npm run dist` does not exist yet — the guarded step reports and skips so the
+  # rest of the matrix (typecheck + test) still gates the desktop TypeScript.
+  # ---------------------------------------------------------------------------
+  dist:
+    name: dist (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: services/desktop
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # @lol/lcu is a file: dependency on libs/lol-lcu. Its package `types` points
+      # at dist/index.d.ts (gitignored), so it MUST be built before the desktop
+      # typecheck can resolve the adapter types. Build it first.
+      - name: Build @lol/lcu (provides dist types for the desktop typecheck)
+        working-directory: libs/lol-lcu
+        run: npm install --no-audit --no-fund && npm run build
+
+      # No committed package-lock yet -> npm install (not npm ci). Committing
+      # lockfiles for reproducible installs is a tracked follow-up.
+      - name: Install desktop deps
+        run: npm install --no-audit --no-fund
+
+      - name: typecheck (tsc --noEmit)
+        run: npm run typecheck
+
+      - name: test (node --test)
+        run: npm test
+
+      # --- macOS code-signing / notarization gate ---------------------------
+      # Sign + notarize ONLY when the Apple Developer secrets are present.
+      # electron-builder reads CSC_LINK/CSC_KEY_PASSWORD for signing and the
+      # APPLE_* env for notarization. Absent secrets -> CSC_IDENTITY_AUTO_DISCOVERY
+      # is forced off and an unsigned dev build is produced.
+      - name: Configure macOS signing
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
+          MAC_CERT_P12_BASE64: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [ -n "${MAC_CERT_P12_BASE64:-}" ] && [ -n "${APPLE_DEVELOPER_ID:-}" ]; then
+            echo "Apple signing secrets present — enabling signed + notarized build."
+            # Materialize the .p12 from the base64 secret for electron-builder.
+            echo "$MAC_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/mac-cert.p12"
+            {
+              echo "CSC_LINK=$RUNNER_TEMP/mac-cert.p12"
+              echo "CSC_KEY_PASSWORD=$MAC_CERT_PASSWORD"
+              echo "APPLE_ID=$APPLE_ID"
+              echo "APPLE_APP_SPECIFIC_PASSWORD=$APPLE_APP_SPECIFIC_PASSWORD"
+              echo "APPLE_TEAM_ID=$APPLE_TEAM_ID"
+            } >> "$GITHUB_ENV"
+          else
+            echo "::notice::Apple signing secrets absent — producing UNSIGNED dev build."
+            # Stop electron-builder from auto-discovering a keychain identity.
+            echo "CSC_IDENTITY_AUTO_DISCOVERY=false" >> "$GITHUB_ENV"
+          fi
+
+      # --- Windows code-signing gate ----------------------------------------
+      # Authenticode sign ONLY when WINDOWS_CERT is present. Absent secret ->
+      # unsigned dev build (electron-builder skips signing with no CSC_LINK).
+      - name: Configure Windows signing
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          WINDOWS_CERT: ${{ secrets.WINDOWS_CERT }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -n "${WINDOWS_CERT:-}" ]; then
+            echo "Windows Authenticode secret present — enabling signed build."
+            echo "$WINDOWS_CERT" | base64 --decode > "$RUNNER_TEMP/win-cert.pfx"
+            {
+              echo "CSC_LINK=$RUNNER_TEMP/win-cert.pfx"
+              echo "CSC_KEY_PASSWORD=$WINDOWS_CERT_PASSWORD"
+            } >> "$GITHUB_ENV"
+          else
+            echo "::notice::WINDOWS_CERT absent — producing UNSIGNED dev build."
+          fi
+
+      # --- Package -----------------------------------------------------------
+      # Guarded so the matrix still passes before the desktop agent lands the
+      # `dist` script + electron-builder config. `npm run dist` inherits the
+      # signing env configured above.
+      - name: npm run dist (electron-builder)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if node -e "process.exit(require('./package.json').scripts?.dist ? 0 : 1)"; then
+            npm run dist
+          else
+            echo "::warning::No \"dist\" script in services/desktop/package.json yet — skipping packaging (desktop agent to add electron-builder)."
+          fi
+
+      # --- Upload installers -------------------------------------------------
+      # electron-builder writes installers to services/desktop/release/ by
+      # convention. if-no-files-found: ignore keeps the run green before `dist`
+      # exists; flip to `error` once packaging is wired up.
+      - name: Upload installer artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-installers-${{ matrix.os }}
+          path: |
+            services/desktop/release/**/*.dmg
+            services/desktop/release/**/*.zip
+            services/desktop/release/**/*.exe
+            services/desktop/release/**/*.msi
+            services/desktop/release/**/*.blockmap
+          if-no-files-found: ignore
+          retention-days: 14

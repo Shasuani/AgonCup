@@ -1,0 +1,67 @@
+# electron-builder packaging config for the LeagueOfLeagues desktop client.
+# (PLAN.md §3.3 desktop client; CI workflow .github/workflows/desktop-build.yml.)
+#
+# Targets macOS (.dmg) + Windows (.exe / NSIS). Output lands in `release/` so it
+# does NOT collide with the TypeScript `dist/` (tsc rootDir output) and matches
+# the CI artifact glob (services/desktop/release/**).
+#
+# SIGNING is driven entirely by CI env / secrets — there is NOTHING secret in
+# this file:
+#   - macOS:   electron-builder reads CSC_LINK (base64 .p12) + CSC_KEY_PASSWORD
+#              for the Developer ID cert, and APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD
+#              / APPLE_TEAM_ID for notarization. When absent, CI sets
+#              CSC_IDENTITY_AUTO_DISCOVERY=false and an UNSIGNED dev .dmg is built.
+#   - Windows: electron-builder reads CSC_LINK (base64 .pfx) + CSC_KEY_PASSWORD;
+#              absent => an UNSIGNED dev installer.
+# The LCU-write ToS spike [BETA-GATE] (docs/compliance-checklist.md) remains the
+# gate before any SIGNED client ships.
+
+appId: gg.leagueofleagues.desktop
+productName: LeagueOfLeagues
+copyright: Copyright © LeagueOfLeagues
+
+directories:
+  output: release
+  buildResources: build
+
+# Ship the compiled JS + production deps only (no src / tests).
+files:
+  - "dist/**/*"
+  - "package.json"
+  - "!**/*.map"
+  - "!**/*.test.*"
+
+# Don't reach the network for an electron download description at config-eval.
+electronLanguages:
+  - en-US
+
+mac:
+  category: public.app-category.utilities
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+  # Hardened runtime is required for notarization; entitlements live under build/.
+  hardenedRuntime: true
+  gatekeeperAssess: false
+
+dmg:
+  writeUpdateInfo: false
+
+# Notarization runs only when the APPLE_* env vars are present (CI gates this).
+afterSign: null
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+
+# Linux is not a shipped target (the client must reach the native League client);
+# kept out intentionally.

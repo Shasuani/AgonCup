@@ -10,16 +10,20 @@
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
     "test": "node --import tsx --test \"src/**/*.test.ts\"",
-    "start": "electron ."
+    "start": "electron .",
+    "dist": "npm run build && electron-builder --config electron-builder.yml"
   },
   "dependencies": {
-    "@lol/lcu": "file:../../libs/lol-lcu"
+    "@lol/lcu": "file:../../libs/lol-lcu",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "electron": "^31.0.0",
+    "electron-builder": "^24.13.3",
     "tsx": "^4.16.0",
     "typescript": "^5.5.0",
-    "@types/node": "^22.0.0"
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.10"
   },
   "engines": {
     "node": ">=22"

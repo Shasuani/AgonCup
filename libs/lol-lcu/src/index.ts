@@ -69,6 +69,26 @@ export type SummonerId = string & { readonly __brand: 'SummonerId' };
 /** LCU-reported lobby handle (`lcu_lobby_id`). */
 export type LcuLobbyId = string & { readonly __brand: 'LcuLobbyId' };
 
+/**
+ * `RE` — the local logged-in account as reported by
+ * `GET /lol-summoner/v1/current-summoner`. READ-ONLY, own-client only.
+ *
+ * Used ONLY as an ADVISORY identity signal: the desktop client compares this
+ * `puuid` against the backend's verified-account PUUID for the same user to
+ * surface a soft "you appear to be signed into a different Riot account"
+ * warning. It is NEVER the authoritative identity anchor and never gates
+ * auth / blocks orchestration (PLAN.md §3.6 / §2 — "LCU `current-summoner`
+ * PUUID is an *advisory* secondary signal only").
+ */
+export interface CurrentSummoner {
+  /** Local account PUUID — advisory only (the canonical key is backend-side). */
+  readonly puuid: Puuid;
+  /** Per-region numeric summoner id (used for invites, never for identity). */
+  readonly summonerId: SummonerId;
+  /** Display name as the LCU reports it (best-effort, may be empty on drift). */
+  readonly displayName: string;
+}
+
 /** LCU-reported `gameId` — the corroboration join key (PLAN.md §3.6.5/§3.6.6). */
 export type LcuGameId = string & { readonly __brand: 'LcuGameId' };
 
@@ -350,6 +370,16 @@ export interface LcuAdapter {
   autoAcceptInvite(filter: AutoAcceptInviteFilter): Promise<() => void>;
 
   /**
+   * `RE` — `GET /lol-summoner/v1/current-summoner`. READ-ONLY, own-client only.
+   * Returns the locally signed-in account. ADVISORY identity signal only — the
+   * desktop client compares this PUUID to the backend's verified PUUID to warn
+   * on a likely wrong-account sign-in; it NEVER gates auth or anti-smurf
+   * (PLAN.md §3.6 / §2). Documented-vs-RE: this LCU route is community
+   * reverse-engineered (`RE`), not a Riot-published contract.
+   */
+  getCurrentSummoner(): Promise<CurrentSummoner>;
+
+  /**
    * `RE` — `GET /lol-gameflow/v1/gameflow-phase`. READ. Drives the host/failover
    * state machine; the authoritative phase signal (DELETE is advisory). (§3.6.1)
    */
@@ -358,9 +388,13 @@ export interface LcuAdapter {
   /**
    * `RE` — on `EndOfGame`, read `GET /lol-end-of-game/v1/eog-stats-block` and
    * build the report. READ-ONLY, background, time-boxed (block clears fast).
-   * (§3.6.5)
+   * Optionally bundles a pre-captured Live-Client kill stream (§3.6.4) and the
+   * advisory reporter PUUID into the emitted {@link EogReport}. (§3.6.5)
    */
-  captureEndOfGame(): Promise<EogReport>;
+  captureEndOfGame(
+    reporterPuuid?: Puuid,
+    liveClientEvents?: LiveClientEventCapture,
+  ): Promise<EogReport>;
 
   /**
    * `Documented` — read the Live Client Data `eventdata` kill stream from
@@ -455,11 +489,18 @@ export class LcuAdapterSkeleton implements LcuAdapter {
     return this.#assertWritesAllowed();
   }
 
+  getCurrentSummoner(): Promise<CurrentSummoner> {
+    throw new Error(NOT_IMPLEMENTED);
+  }
+
   getGameflowPhase(): Promise<GameflowPhase> {
     throw new Error(NOT_IMPLEMENTED);
   }
 
-  captureEndOfGame(): Promise<EogReport> {
+  captureEndOfGame(
+    _reporterPuuid?: Puuid,
+    _liveClientEvents?: LiveClientEventCapture,
+  ): Promise<EogReport> {
     throw new Error(NOT_IMPLEMENTED);
   }
 
@@ -482,6 +523,8 @@ const LIVE_CLIENT_EVENTDATA_PATH = '/liveclientdata/eventdata' as const;
 const LCU_PATHS = {
   /** `RE` — gameflow phase, the authoritative state signal (§3.6.1). */
   gameflowPhase: '/lol-gameflow/v1/gameflow-phase',
+  /** `RE` — locally signed-in account (advisory identity probe, §3.6/§2). */
+  currentSummoner: '/lol-summoner/v1/current-summoner',
   /** `RE` — current custom-lobby handle (idempotency probe before create). */
   lobby: '/lol-lobby/v2/lobby',
   /** `RE` — batched invitations endpoint (§3.6.3). */
@@ -810,6 +853,41 @@ export class LcuAdapterImpl implements LcuAdapter {
         return { accepted: true };
       },
     };
+  }
+
+  // -- getCurrentSummoner ---------------------------------------------------
+
+  /**
+   * `RE` — `GET /lol-summoner/v1/current-summoner`. READ-ONLY, own-client only.
+   * Parses `{ puuid, summonerId, displayName }` into a {@link CurrentSummoner}.
+   * ADVISORY identity signal only (PLAN.md §3.6 / §2): the caller compares the
+   * PUUID to the backend's verified PUUID and warns on mismatch — it NEVER
+   * gates auth, anti-smurf, or orchestration. Drift surfaces as
+   * {@link LcuResponseError}.
+   */
+  async getCurrentSummoner(): Promise<CurrentSummoner> {
+    const res = await this.#lcuRequest('GET', LCU_PATHS.currentSummoner);
+    if (res.status < 200 || res.status >= 300) {
+      throw new LcuResponseError(
+        `getCurrentSummoner failed: HTTP ${res.status}`,
+        res.status,
+      );
+    }
+    const rec = asRecord(res.json);
+    const puuid = asOptString<Puuid>(rec['puuid']);
+    if (puuid === undefined) {
+      throw new LcuResponseError(
+        'getCurrentSummoner: response missing puuid (RE drift?)',
+        res.status,
+      );
+    }
+    const summonerId =
+      rec['summonerId'] !== undefined
+        ? (String(asNumber(rec['summonerId'])) as SummonerId)
+        : ('' as SummonerId);
+    const displayName =
+      typeof rec['displayName'] === 'string' ? rec['displayName'] : '';
+    return { puuid, summonerId, displayName };
   }
 
   // -- getGameflowPhase -----------------------------------------------------

@@ -84,14 +84,27 @@ function makeAdapter(over: Partial<Record<string, unknown>> = {}) {
       return () => calls.push("unsubInvite");
     },
     async getGameflowPhase() {
+      // Allow a sequence of phases so tests can walk InProgress -> EndOfGame.
+      if (Array.isArray(over.phases) && over.phases.length > 0) {
+        return (over.phases as string[]).shift() ?? "Lobby";
+      }
       return (over.phase as string) ?? "Lobby";
     },
-    async captureEndOfGame() {
+    async captureEndOfGame(_reporterPuuid?: unknown, liveClientEvents?: unknown) {
       calls.push("captureEndOfGame");
-      return { source: "eogStatsBlock", lcuGameId: "g-1" } as never;
+      // Echo the bundled live capture back so the test can assert it threads in.
+      return {
+        source: "eogStatsBlock",
+        lcuGameId: "g-1",
+        ...(liveClientEvents !== undefined ? { liveClientEvents } : {}),
+      } as never;
     },
     async captureLiveClientEvents() {
-      return { source: "liveClientData", events: [] } as never;
+      calls.push("captureLiveClientEvents");
+      return {
+        source: "liveClientData",
+        events: [{ eventId: 1, eventName: "ChampionKill", eventTime: 12.3 }],
+      } as never;
     },
   };
   return { adapter: adapter as never, calls };
@@ -195,6 +208,21 @@ test("heartbeat tick reports exactly once at EndOfGame", async () => {
   assert.equal(t.heartbeats[0]?.phase, "EndOfGame");
   assert.equal(t.reports.length, 1);
   assert.equal(t.reports[0]?.report.lcuGameId, "g-1");
+});
+
+test("captures :2999 live events while InProgress and bundles them into the eog report", async () => {
+  const t = makeTransport();
+  // First tick: InProgress (captures live events); second tick: EndOfGame (reports).
+  const a = makeAdapter({ phases: ["InProgress", "EndOfGame"] });
+  const s = makeScheduler();
+  makeController(t, a, s).start();
+  await runTickAsync(s); // InProgress -> captureLiveClientEvents
+  await runTickAsync(s); // EndOfGame  -> captureEndOfGame(bundle)
+  assert.ok(a.calls.includes("captureLiveClientEvents"));
+  assert.equal(t.reports.length, 1);
+  const bundled = t.reports[0]?.report.liveClientEvents;
+  assert.equal(bundled?.source, "liveClientData");
+  assert.equal(bundled?.events[0]?.eventName, "ChampionKill");
 });
 
 // Flush the microtask queue so fire-and-forget command handlers settle.

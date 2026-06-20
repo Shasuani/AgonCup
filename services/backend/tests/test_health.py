@@ -33,8 +33,19 @@ async def test_metrics_exposition() -> None:
 
 @pytest.mark.asyncio
 async def test_stub_router_mounted() -> None:
+    # A still-stub module (Phase 2 implements orchestration later).
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get("/api/v1/tournaments/_ping")
+        resp = await client.get("/api/v1/orchestration/_ping")
     assert resp.status_code == 200
-    assert resp.json()["module"] == "tournaments"
+    assert resp.json()["module"] == "orchestration"
+
+
+@pytest.mark.asyncio
+async def test_tournaments_router_mounted_and_protected() -> None:
+    # The real tournaments router replaced its stub: listing requires auth, so an
+    # unauthenticated request is rejected (mounted + guarded, not a 404).
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/v1/tournaments")
+    assert resp.status_code in (401, 403)

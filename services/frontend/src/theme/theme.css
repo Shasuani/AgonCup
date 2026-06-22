@@ -1,0 +1,191 @@
+/* =========================================================================
+   Cobalt Slate — Light theme token overrides
+   Mirrors EVERY color/elevation token the dark `:root` defines in global.css,
+   re-bound under `:root[data-theme="light"]`. Spacing / radii / type-scale
+   tokens are theme-agnostic and intentionally NOT duplicated here.
+
+   Contrast: body text (--text #1b1e27) on --bg #f6f7fb ≈ 14.4:1 and on
+   --surface #ffffff ≈ 15.8:1 (AAA); --text-muted #545a6b on --surface ≈ 6.6:1
+   (AA for normal text); --on-primary #ffffff on --primary #5848e5 ≈ 5.6:1 (AA).
+   ========================================================================= */
+:root[data-theme="light"] {
+  /* Colors */
+  --bg: #f6f7fb;
+  --surface: #ffffff;
+  --surface-alt: #eef0f6;
+  --border: #d7dbe4;
+  --text: #1b1e27;
+  --text-muted: #545a6b;
+  --primary: #5848e5;
+  --primary-hover: #4736d4;
+  --on-primary: #ffffff;
+  --accent: #5a48d6;
+  --success: #0f9d6b;
+  --warning: #b5790a;
+  --danger: #d4453f;
+  --focus-ring: #5848e5;
+
+  /* Shadows — softer/cooler on a light surface than the heavy dark elevations. */
+  --shadow-xs: 0 1px 2px rgba(20, 24, 38, 0.08);
+  --shadow-sm: 0 2px 8px rgba(20, 24, 38, 0.1);
+  --shadow-md: 0 8px 24px rgba(20, 24, 38, 0.12);
+  --shadow-lg: 0 24px 64px rgba(20, 24, 38, 0.18);
+  --shadow-focus: 0 0 0 3px rgba(88, 72, 229, 0.28);
+
+  color-scheme: light;
+}
+
+/* Re-tint the surfaces that use raw rgba() literals in global.css so they read
+   correctly on a light backdrop instead of inheriting the dark-tuned alphas. */
+
+/* Sticky header backdrop (global.css sets a dark rgba). The sidebar shell in
+   AppLayout.css re-declares the header background at equal specificity (0,2,0)
+   and loads LATER in the bundle, so it would win and keep the dark glass in
+   light mode. Match the shell's selector depth here (0,3,0) so light wins. */
+:root[data-theme="light"] [data-app-header],
+:root[data-theme="light"] [data-app-shell] [data-app-header] {
+  background: rgba(255, 255, 255, 0.85);
+}
+
+/* Selection highlight. */
+:root[data-theme="light"] ::selection {
+  background: rgba(88, 72, 229, 0.22);
+}
+
+/* Modal scrim — keep a light-appropriate dim instead of near-black. */
+:root[data-theme="light"] [data-modal-overlay] {
+  background: rgba(20, 24, 38, 0.4);
+}
+
+/* Secondary button hover used hardcoded dark hex in global.css. */
+:root[data-theme="light"] button[data-variant="secondary"]:hover:not(:disabled) {
+  border-color: #c2c7d4;
+  background: #e4e7f0;
+}
+
+/* Status badges in global.css use color-family rgba()s tuned for dark surfaces.
+   Re-bind the four families so the pills keep AA-legible text on light fills. */
+
+/* Amber family (pending / pre-start). */
+:root[data-theme="light"] [data-status~="pending"],
+:root[data-theme="light"] [data-status~="scheduled"],
+:root[data-theme="light"] [data-status~="awaiting"],
+:root[data-theme="light"] [data-status~="open"],
+:root[data-theme="light"] [data-status~="check_in"],
+:root[data-theme="light"] [data-status~="awaiting_create"],
+:root[data-theme="light"] [data-status-badge][data-status~="pending"],
+:root[data-theme="light"] [data-status-badge][data-status~="scheduled"],
+:root[data-theme="light"] [data-status-badge][data-status~="awaiting"],
+:root[data-theme="light"] [data-status-badge][data-status~="open"],
+:root[data-theme="light"] [data-status-badge][data-status~="check_in"],
+:root[data-theme="light"] [data-status-badge][data-status~="awaiting_create"] {
+  color: #8a5800;
+  background: rgba(181, 121, 10, 0.14);
+  border-color: rgba(181, 121, 10, 0.4);
+}
+
+/* Blue/teal family (active / live). */
+:root[data-theme="light"] [data-status~="active"],
+:root[data-theme="light"] [data-status~="in_progress"],
+:root[data-theme="light"] [data-status~="live"],
+:root[data-theme="light"] [data-status~="running"],
+:root[data-theme="light"] [data-status~="in_game"],
+:root[data-theme="light"] [data-status-badge][data-status~="active"],
+:root[data-theme="light"] [data-status-badge][data-status~="in_progress"],
+:root[data-theme="light"] [data-status-badge][data-status~="live"],
+:root[data-theme="light"] [data-status-badge][data-status~="running"],
+:root[data-theme="light"] [data-status-badge][data-status~="in_game"] {
+  color: #463bb0;
+  background: rgba(88, 72, 229, 0.12);
+  border-color: rgba(88, 72, 229, 0.38);
+}
+
+/* Green family (done / resolved). */
+:root[data-theme="light"] [data-status~="completed"],
+:root[data-theme="light"] [data-status~="verified"],
+:root[data-theme="light"] [data-status~="resolved"],
+:root[data-theme="light"] [data-status~="done"],
+:root[data-theme="light"] [data-status~="confirmed"],
+:root[data-theme="light"] [data-status~="walkover"],
+:root[data-theme="light"] [data-status~="forfeit"],
+:root[data-theme="light"] [data-status~="ended"],
+:root[data-theme="light"] [data-status-badge][data-status~="completed"],
+:root[data-theme="light"] [data-status-badge][data-status~="verified"],
+:root[data-theme="light"] [data-status-badge][data-status~="resolved"],
+:root[data-theme="light"] [data-status-badge][data-status~="done"],
+:root[data-theme="light"] [data-status-badge][data-status~="confirmed"],
+:root[data-theme="light"] [data-status-badge][data-status~="walkover"],
+:root[data-theme="light"] [data-status-badge][data-status~="forfeit"],
+:root[data-theme="light"] [data-status-badge][data-status~="ended"] {
+  color: #0a7350;
+  background: rgba(15, 157, 107, 0.13);
+  border-color: rgba(15, 157, 107, 0.38);
+}
+
+/* Red family (failure / contested). */
+:root[data-theme="light"] [data-status~="cancelled"],
+:root[data-theme="light"] [data-status~="failed"],
+:root[data-theme="light"] [data-status~="disputed"],
+:root[data-theme="light"] [data-status~="rejected"],
+:root[data-theme="light"] [data-status~="error"],
+:root[data-theme="light"] [data-status~="aborted"],
+:root[data-theme="light"] [data-status~="host_lost"],
+:root[data-theme="light"] [data-status-badge][data-status~="cancelled"],
+:root[data-theme="light"] [data-status-badge][data-status~="failed"],
+:root[data-theme="light"] [data-status-badge][data-status~="disputed"],
+:root[data-theme="light"] [data-status-badge][data-status~="rejected"],
+:root[data-theme="light"] [data-status-badge][data-status~="error"],
+:root[data-theme="light"] [data-status-badge][data-status~="aborted"],
+:root[data-theme="light"] [data-status-badge][data-status~="host_lost"] {
+  color: #b3322d;
+  background: rgba(212, 69, 63, 0.12);
+  border-color: rgba(212, 69, 63, 0.36);
+}
+
+/* Error banner uses danger-tinted rgba()s tuned for the dark surface. */
+:root[data-theme="light"] [role="alert"][data-error-banner] {
+  background: rgba(212, 69, 63, 0.08);
+  border-color: rgba(212, 69, 63, 0.3);
+}
+
+:root[data-theme="light"] [role="alert"][data-error-banner] button {
+  border-color: rgba(212, 69, 63, 0.45);
+}
+
+:root[data-theme="light"] [role="alert"][data-error-banner] button:hover {
+  background: rgba(212, 69, 63, 0.1);
+}
+
+/* Login backdrop radial used a dark-tuned primary glow + dark base. */
+:root[data-theme="light"] [data-login]::before {
+  background:
+    radial-gradient(
+      1200px 600px at 50% -10%,
+      rgba(88, 72, 229, 0.12),
+      transparent 60%
+    ),
+    var(--bg);
+}
+
+/* Dashboard / bracket accents that used hardcoded rgba(109, 92, 246, …). */
+:root[data-theme="light"] [data-dash-card]:hover {
+  border-color: rgba(88, 72, 229, 0.5);
+}
+
+/* Dash-card icon chip tint (HomeScreen.css uses the dark primary hue literals). */
+:root[data-theme="light"] [data-dash-card] [data-dash-card-icon] {
+  background: rgba(88, 72, 229, 0.12);
+  border-color: rgba(88, 72, 229, 0.3);
+}
+
+:root[data-theme="light"] [data-dash-card]:hover [data-dash-card-icon] {
+  background: rgba(88, 72, 229, 0.18);
+}
+
+:root[data-theme="light"] [data-bracket-override]:hover {
+  background: rgba(88, 72, 229, 0.1);
+}
+
+:root[data-theme="light"] [data-bracket-slot][data-winner] {
+  background: rgba(15, 157, 107, 0.1);
+}

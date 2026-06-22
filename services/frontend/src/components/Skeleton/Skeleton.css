@@ -1,0 +1,123 @@
+/* =========================================================================
+   Skeleton placeholders — Cobalt Slate
+   Inert shimmering blocks shown while content loads. All colors/radii/spacing
+   come from the :root design tokens. The shimmer is a translating gradient
+   that collapses to a static muted block under prefers-reduced-motion.
+   ========================================================================= */
+
+.lol-skeleton {
+  display: block;
+  position: relative;
+  overflow: hidden;
+  /* Base tone sits between the surface and its border so the block reads as an
+     empty placeholder on either --surface or --surface-alt cards. */
+  background-color: var(--surface-alt);
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.06) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  border-radius: var(--radius-sm);
+  animation: lol-skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+/* A single text line: height tracks the body type scale; bottom margin gives
+   stacked lines an even rhythm without a wrapper. */
+.lol-skeleton[data-skeleton="line"] {
+  width: 100%;
+  height: 0.7rem;
+  border-radius: var(--radius-pill);
+}
+
+.lol-skeleton[data-skeleton="rect"] {
+  width: 100%;
+  border-radius: var(--radius-md);
+}
+
+.lol-skeleton[data-skeleton="circle"] {
+  border-radius: 50%;
+  flex: none;
+}
+
+/* Multi-line wrapper: stack bars with consistent vertical rhythm. */
+.lol-skeleton-lines {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+@keyframes lol-skeleton-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* -------------------------------------------------------------------------
+   SkeletonTable — mirrors the DataTable ([data-table]) chrome so the swap from
+   loading -> loaded is layout-stable.
+   ------------------------------------------------------------------------- */
+[data-skeleton-table] {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  margin-bottom: var(--space-5);
+}
+
+[data-skeleton-table] caption {
+  text-align: left;
+  padding: var(--space-3) var(--space-4);
+  font-weight: 600;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  caption-side: top;
+}
+
+[data-skeleton-table] thead th[scope="col"] {
+  text-align: left;
+  background: var(--surface-alt);
+  padding: var(--space-3) var(--space-4);
+  padding-block: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+[data-skeleton-table] td {
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+/* The header cells reuse the muted uppercase metrics of real headers, but the
+   header label is itself a short skeleton bar so nothing fabricates a column
+   name during load. */
+[data-skeleton-table] thead .lol-skeleton[data-skeleton="line"] {
+  height: 0.6rem;
+  width: 70%;
+}
+
+@media (max-width: 640px) {
+  [data-skeleton-table] {
+    display: block;
+    overflow-x: auto;
+  }
+}
+
+/* -------------------------------------------------------------------------
+   Reduced motion: no shimmer travel — show a gentle static opacity pulse on the
+   base tone instead so the block still reads as "loading" without movement.
+   ------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .lol-skeleton {
+    background-image: none;
+    animation: lol-opacity-pulse 1.2s ease-in-out infinite alternate;
+  }
+}

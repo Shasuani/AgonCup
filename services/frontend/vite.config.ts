@@ -31,6 +31,26 @@ export default defineConfig({
       "/api": {
         target: process.env.VITE_API_BASE_URL || "http://localhost:8000",
         changeOrigin: true,
+        // When the backend isn't listening, http-proxy emits ECONNREFUSED and
+        // Vite would otherwise return an opaque empty-body 500. Reply with a
+        // clear 502 + JSON so the SPA can say "backend down" instead of guessing.
+        configure: (proxy) => {
+          proxy.on("error", (err, _req, res) => {
+            console.warn(
+              `[vite proxy] backend unreachable (${err.message}) — start it: make dev-backend`,
+            );
+            if ("writeHead" in res && !res.headersSent) {
+              res.writeHead(502, { "Content-Type": "application/json" });
+            }
+            res.end(
+              JSON.stringify({
+                error: "backend_unreachable",
+                detail:
+                  "Vite could not reach the backend on :8000. Start it: make dev-backend (or VS Code 'Stack: Backend + Frontend').",
+              }),
+            );
+          });
+        },
       },
     },
   },

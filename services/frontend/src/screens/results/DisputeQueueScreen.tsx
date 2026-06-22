@@ -214,7 +214,9 @@ function MatchCell({ match }: { match: DisputedMatch }): JSX.Element {
       ) : null}
       {match.round_label ? <div data-match-round>{match.round_label}</div> : null}
       <div data-match-status>
-        <span data-status-badge>{match.status}</span>
+        <span data-status-badge data-status={match.status}>
+          {match.status}
+        </span>
       </div>
       <code data-match-id>{match.match_id}</code>
     </div>

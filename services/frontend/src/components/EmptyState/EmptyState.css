@@ -1,0 +1,73 @@
+/* =========================================================================
+   EmptyState / ErrorState — Cobalt Slate
+   Centered illustration + title + optional description + optional action.
+   All tokens via :root; sits on a constrained, dashed-bordered surface so it
+   reads as a deliberate "nothing here" panel rather than a broken layout.
+   ========================================================================= */
+
+.lol-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--space-3);
+  padding: var(--space-7) var(--space-5);
+  background: var(--surface);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-lg);
+  margin-bottom: var(--space-5);
+}
+
+.lol-empty-state-art {
+  width: 100%;
+  max-width: 220px;
+  height: auto;
+  margin-bottom: var(--space-1);
+  /* The art is decorative; keep it from grabbing attention away from the copy. */
+  opacity: 0.95;
+}
+
+.lol-empty-state-title {
+  margin: 0;
+  color: var(--text);
+}
+
+.lol-empty-state-desc {
+  margin: 0;
+  max-width: 48ch;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.lol-empty-state-action {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: center;
+  margin-top: var(--space-3);
+}
+
+/* Error variant: a faint danger wash + danger-tinted border to distinguish a
+   failure from a benign empty result, without relying on color alone (the
+   role="alert" + title text carry the semantics). */
+.lol-error-state {
+  border-style: solid;
+  border-color: rgba(248, 113, 113, 0.3);
+  background: linear-gradient(
+      0deg,
+      rgba(248, 113, 113, 0.04),
+      rgba(248, 113, 113, 0.04)
+    ),
+    var(--surface);
+}
+
+@media (max-width: 640px) {
+  .lol-empty-state {
+    padding: var(--space-6) var(--space-4);
+  }
+
+  .lol-empty-state-art {
+    max-width: 180px;
+  }
+}

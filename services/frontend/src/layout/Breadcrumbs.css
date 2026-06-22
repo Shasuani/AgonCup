@@ -1,0 +1,64 @@
+/* Breadcrumb trail — token-driven, fits in the topbar. */
+[data-breadcrumbs] {
+  min-width: 0;
+  overflow: hidden;
+}
+
+[data-breadcrumbs] ol {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: var(--space-1);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+[data-breadcrumbs] li {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+[data-breadcrumbs] a {
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+
+[data-breadcrumbs] a:hover {
+  color: var(--text);
+  background: var(--surface-alt);
+  text-decoration: none;
+}
+
+[data-breadcrumb-current] {
+  color: var(--text);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  padding: 2px var(--space-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+[data-breadcrumb-sep] {
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+
+[data-breadcrumb-sep] svg {
+  display: block;
+}
+
+/* On narrow viewports only the last (current) crumb is essential. */
+@media (max-width: 640px) {
+  [data-breadcrumbs] li:not(:last-child) {
+    display: none;
+  }
+}

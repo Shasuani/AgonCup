@@ -1,0 +1,1416 @@
+/* =========================================================================
+   Cobalt Slate — Tournament Operations Console
+   Framework-light global stylesheet. Targets the app's semantic elements,
+   data-* hooks, and react-router NavLink .active class. No CSS framework.
+   ========================================================================= */
+
+/* -------------------------------------------------------------------------
+   Design tokens
+   ------------------------------------------------------------------------- */
+:root {
+  /* Colors */
+  --bg: #0a0b0f;
+  --surface: #111319;
+  --surface-alt: #191c24;
+  --border: #272b36;
+  --text: #e8eaf0;
+  --text-muted: #9ca2b2;
+  --primary: #6d5cf6;
+  --primary-hover: #7e6ff8;
+  --on-primary: #ffffff;
+  --accent: #8b7dff;
+  --success: #34d399;
+  --warning: #fbbf24;
+  --danger: #f87171;
+  --focus-ring: #a99cff;
+
+  /* Spacing scale (8px base rhythm) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+
+  /* Radii */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-pill: 999px;
+
+  /* Shadows */
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 24px 64px rgba(0, 0, 0, 0.55);
+  --shadow-focus: 0 0 0 3px rgba(109, 92, 246, 0.3);
+
+  /* Typography */
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas,
+    monospace;
+
+  /* Layout */
+  --content-max: 1200px;
+
+  color-scheme: dark;
+}
+
+/* -------------------------------------------------------------------------
+   Reset / base
+   ------------------------------------------------------------------------- */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 16px;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  font-weight: 400;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: rgba(109, 92, 246, 0.3);
+}
+
+/* Default outline off; restore a visible ring only for keyboard focus. */
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+img,
+svg {
+  display: block;
+  max-width: 100%;
+}
+
+/* -------------------------------------------------------------------------
+   Typography
+   ------------------------------------------------------------------------- */
+h1,
+h2,
+h3,
+h4 {
+  margin: 0 0 var(--space-3);
+  color: var(--text);
+}
+
+h1 {
+  font-size: clamp(1.625rem, 1.4rem + 1vw, 1.875rem);
+  line-height: 1.2;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+h2 {
+  font-size: 1.375rem;
+  line-height: 1.3;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+h3 {
+  font-size: 1.0625rem;
+  line-height: 1.4;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+p {
+  margin: 0 0 var(--space-3);
+}
+
+small,
+.small {
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+
+/* Tabular figures for any explicit numeric/id surface. */
+[data-actor-id],
+[data-entity-id],
+[data-anomaly-code],
+[data-audit-detail],
+[data-puuid] {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* -------------------------------------------------------------------------
+   Skip link (visually hidden until focused)
+   ------------------------------------------------------------------------- */
+[data-skip-link] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+[data-skip-link]:focus,
+[data-skip-link]:focus-visible {
+  position: fixed;
+  top: var(--space-2);
+  left: var(--space-2);
+  z-index: 100;
+  width: auto;
+  height: auto;
+  margin: 0;
+  clip: auto;
+  clip-path: none;
+  overflow: visible;
+  background: var(--surface-alt);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  box-shadow: var(--shadow-md);
+  font-weight: 600;
+  font-size: 0.8125rem;
+}
+
+/* -------------------------------------------------------------------------
+   App shell + main
+   ------------------------------------------------------------------------- */
+[data-app-shell] {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+[data-app-main] {
+  width: 100%;
+  max-width: var(--content-max);
+  margin-inline: auto;
+  padding: var(--space-6) var(--space-5);
+  flex: 1 0 auto;
+}
+
+@media (max-width: 640px) {
+  [data-app-main] {
+    padding: var(--space-5) var(--space-4);
+  }
+}
+
+/* -------------------------------------------------------------------------
+   Header + primary nav
+   ------------------------------------------------------------------------- */
+[data-app-header] {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  min-height: 56px;
+  padding-inline: var(--space-5);
+  background: rgba(17, 19, 25, 0.85);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+}
+
+[data-brand] {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.9375rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+/* CSS-only brand mark. */
+[data-brand]::before {
+  content: "";
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(135deg, var(--primary), var(--accent));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12),
+    0 0 0 3px rgba(109, 92, 246, 0.18);
+}
+
+nav[aria-label="Primary"] ul {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+nav[aria-label="Primary"] a {
+  display: inline-block;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+nav[aria-label="Primary"] a:hover {
+  color: var(--text);
+  background: var(--surface-alt);
+  text-decoration: none;
+}
+
+nav[aria-label="Primary"] a.active {
+  color: var(--text);
+  background: var(--surface-alt);
+  box-shadow: inset 0 -2px 0 var(--primary);
+}
+
+[data-app-header-actions] {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+@media (max-width: 720px) {
+  [data-app-header] {
+    flex-wrap: wrap;
+    padding-block: var(--space-2);
+    row-gap: var(--space-2);
+  }
+
+  nav[aria-label="Primary"] {
+    order: 3;
+    flex-basis: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  nav[aria-label="Primary"] ul {
+    flex-wrap: nowrap;
+    padding-bottom: var(--space-1);
+  }
+}
+
+/* -------------------------------------------------------------------------
+   Buttons
+   ------------------------------------------------------------------------- */
+button[data-variant] {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  padding-inline: 14px;
+  font-family: inherit;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 1.2;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease,
+    color 120ms ease, transform 120ms ease;
+  white-space: nowrap;
+}
+
+button[data-variant="primary"] {
+  background: var(--primary);
+  color: var(--on-primary);
+  box-shadow: var(--shadow-xs);
+}
+
+button[data-variant="primary"]:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+
+button[data-variant="primary"]:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+button[data-variant="secondary"] {
+  background: var(--surface-alt);
+  color: var(--text);
+  border-color: var(--border);
+}
+
+button[data-variant="secondary"]:hover:not(:disabled) {
+  border-color: #333845;
+  background: #1f222c;
+}
+
+button[data-variant="secondary"]:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+button[data-variant="danger"] {
+  background: transparent;
+  color: var(--danger);
+  border-color: rgba(248, 113, 113, 0.45);
+}
+
+button[data-variant="danger"]:hover:not(:disabled) {
+  background: rgba(248, 113, 113, 0.12);
+}
+
+button[data-variant]:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  box-shadow: var(--shadow-focus);
+}
+
+button[data-variant]:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Busy state: keep box size, hide label, show centered ring. */
+button[data-variant][aria-busy="true"] {
+  color: transparent;
+}
+
+button[data-variant][aria-busy="true"]::after {
+  content: "";
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: lol-spin 0.7s linear infinite;
+}
+
+button[data-variant="primary"][aria-busy="true"]::after {
+  border-color: rgba(255, 255, 255, 0.4);
+  border-top-color: var(--on-primary);
+}
+
+button[data-variant="secondary"][aria-busy="true"]::after {
+  border-color: var(--border);
+  border-top-color: var(--primary);
+}
+
+button[data-variant="danger"][aria-busy="true"]::after {
+  border-color: rgba(248, 113, 113, 0.3);
+  border-top-color: var(--danger);
+}
+
+/* -------------------------------------------------------------------------
+   Inputs / selects / textareas
+   ------------------------------------------------------------------------- */
+input,
+select,
+textarea {
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.9375rem;
+  line-height: 1.4;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+textarea {
+  min-height: 88px;
+  resize: vertical;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-muted);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: var(--shadow-focus);
+}
+
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: none;
+}
+
+[aria-invalid="true"] {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.25);
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Custom chevron for selects. */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  padding-right: var(--space-6);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5' stroke='%239CA2B2' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right var(--space-3) center;
+  cursor: pointer;
+}
+
+/* -------------------------------------------------------------------------
+   Form fields
+   ------------------------------------------------------------------------- */
+[data-form-field] {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  gap: 6px;
+  margin-bottom: var(--space-4);
+}
+
+[data-form-field] > label {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.01em;
+}
+
+[data-form-field] > label span[aria-hidden="true"] {
+  color: var(--danger);
+}
+
+[data-hint] {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+p[role="alert"][data-field-error] {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--danger);
+  font-weight: 500;
+}
+
+p[role="alert"][data-field-error]::before {
+  content: "\26A0";
+  margin-right: var(--space-1);
+}
+
+/* -------------------------------------------------------------------------
+   Tables
+   ------------------------------------------------------------------------- */
+[data-table] {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  margin-bottom: var(--space-5);
+}
+
+[data-table] caption {
+  text-align: left;
+  padding: var(--space-3) var(--space-4);
+  font-weight: 600;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  caption-side: top;
+}
+
+[data-table] thead th[scope="col"] {
+  text-align: left;
+  background: var(--surface-alt);
+  color: var(--text-muted);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: var(--space-3) var(--space-4);
+  padding-block: 10px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+[data-table] td {
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border);
+  color: var(--text);
+  vertical-align: middle;
+}
+
+[data-table] tbody tr:hover {
+  background: var(--surface-alt);
+}
+
+[data-table] td[data-empty] {
+  text-align: center;
+  font-style: italic;
+  color: var(--text-muted);
+  padding: var(--space-6);
+}
+
+/* Tables can overflow horizontally on narrow viewports. The component does not
+   add a wrapper, so allow the table itself to scroll its block container. */
+@media (max-width: 640px) {
+  [data-table] {
+    display: block;
+    overflow-x: auto;
+  }
+}
+
+/* -------------------------------------------------------------------------
+   Status badges
+   ------------------------------------------------------------------------- */
+[data-status-badge],
+[data-status] {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: var(--radius-pill);
+  padding: 2px var(--space-3);
+  padding-inline: 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.4;
+  border: 1px solid var(--border);
+  /* Neutral default */
+  color: var(--text-muted);
+  background: var(--surface-alt);
+  white-space: nowrap;
+}
+
+[data-status-badge]::before,
+[data-status]::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+
+/* Amber family — pending / awaiting / pre-start states.
+   Real enum values mapped here: pending, scheduled (MatchStatus);
+   open, check_in (TournamentStatus); awaiting_create (lobby). */
+[data-status~="pending"],
+[data-status~="scheduled"],
+[data-status~="awaiting"],
+[data-status~="open"],
+[data-status~="check_in"],
+[data-status~="awaiting_create"],
+[data-status-badge][data-status~="pending"],
+[data-status-badge][data-status~="scheduled"],
+[data-status-badge][data-status~="awaiting"],
+[data-status-badge][data-status~="open"],
+[data-status-badge][data-status~="check_in"],
+[data-status-badge][data-status~="awaiting_create"] {
+  color: #fcd34d;
+  background: rgba(251, 191, 36, 0.14);
+  border-color: rgba(251, 191, 36, 0.35);
+}
+
+/* Blue/teal family (active / live).
+   Real enum values: in_progress (MatchStatus); running (TournamentStatus);
+   in_game (lobby). */
+[data-status~="active"],
+[data-status~="in_progress"],
+[data-status~="live"],
+[data-status~="running"],
+[data-status~="in_game"],
+[data-status-badge][data-status~="active"],
+[data-status-badge][data-status~="in_progress"],
+[data-status-badge][data-status~="live"],
+[data-status-badge][data-status~="running"],
+[data-status-badge][data-status~="in_game"] {
+  color: var(--accent);
+  background: rgba(109, 92, 246, 0.15);
+  border-color: rgba(109, 92, 246, 0.4);
+}
+
+/* Green family (done / resolved).
+   Real enum values: completed (Match/Tournament); confirmed (ResultStatus);
+   walkover, forfeit (decided outcomes); ended (lobby). */
+[data-status~="completed"],
+[data-status~="verified"],
+[data-status~="resolved"],
+[data-status~="done"],
+[data-status~="confirmed"],
+[data-status~="walkover"],
+[data-status~="forfeit"],
+[data-status~="ended"],
+[data-status-badge][data-status~="completed"],
+[data-status-badge][data-status~="verified"],
+[data-status-badge][data-status~="resolved"],
+[data-status-badge][data-status~="done"],
+[data-status-badge][data-status~="confirmed"],
+[data-status-badge][data-status~="walkover"],
+[data-status-badge][data-status~="forfeit"],
+[data-status-badge][data-status~="ended"] {
+  color: #6ee7b7;
+  background: rgba(52, 211, 153, 0.14);
+  border-color: rgba(52, 211, 153, 0.35);
+}
+
+/* Red family (failure / contested).
+   Real enum values: cancelled (Tournament); disputed (ResultStatus);
+   aborted, host_lost (lobby). */
+[data-status~="cancelled"],
+[data-status~="failed"],
+[data-status~="disputed"],
+[data-status~="rejected"],
+[data-status~="error"],
+[data-status~="aborted"],
+[data-status~="host_lost"],
+[data-status-badge][data-status~="cancelled"],
+[data-status-badge][data-status~="failed"],
+[data-status-badge][data-status~="disputed"],
+[data-status-badge][data-status~="rejected"],
+[data-status-badge][data-status~="error"],
+[data-status-badge][data-status~="aborted"],
+[data-status-badge][data-status~="host_lost"] {
+  color: #fca5a5;
+  background: rgba(248, 113, 113, 0.14);
+  border-color: rgba(248, 113, 113, 0.35);
+}
+
+/* Live/running pulse on the dot. */
+[data-status~="live"]::before,
+[data-status~="running"]::before,
+[data-status~="in_progress"]::before,
+[data-status~="in_game"]::before,
+[data-status-badge][data-status~="live"]::before,
+[data-status-badge][data-status~="running"]::before,
+[data-status-badge][data-status~="in_progress"]::before,
+[data-status-badge][data-status~="in_game"]::before {
+  animation: lol-pulse 1.4s ease-in-out infinite;
+}
+
+/* -------------------------------------------------------------------------
+   Modal
+   ------------------------------------------------------------------------- */
+[data-modal-overlay] {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  background: rgba(6, 7, 11, 0.6);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+  animation: lol-fade 120ms ease;
+}
+
+[role="dialog"][data-modal] {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+  max-width: 480px;
+  width: calc(100% - 32px);
+  max-height: 85vh;
+  animation: lol-pop 120ms ease;
+}
+
+[role="dialog"][data-modal] > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 20px var(--space-5);
+  border-bottom: 1px solid var(--border);
+}
+
+[role="dialog"][data-modal] > header h2 {
+  margin: 0;
+  font-size: 1.125rem;
+}
+
+[role="dialog"][data-modal] > header button[aria-label="Close"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  font-size: 1.25rem;
+  line-height: 1;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+[role="dialog"][data-modal] > header button[aria-label="Close"]:hover {
+  background: var(--surface-alt);
+  color: var(--text);
+}
+
+[data-modal-body] {
+  padding: var(--space-5);
+  overflow-y: auto;
+}
+
+[role="dialog"][data-modal] > footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-5);
+  border-top: 1px solid var(--border);
+}
+
+/* -------------------------------------------------------------------------
+   Spinner (CSS ring replaces emoji)
+   ------------------------------------------------------------------------- */
+[role="status"][data-spinner] {
+  position: relative;
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  vertical-align: middle;
+}
+
+[role="status"][data-spinner] > span[aria-hidden="true"] {
+  font-size: 0;
+}
+
+[role="status"][data-spinner]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: lol-spin 0.7s linear infinite;
+}
+
+/* -------------------------------------------------------------------------
+   Error banner
+   ------------------------------------------------------------------------- */
+[role="alert"][data-error-banner] {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  background: rgba(248, 113, 113, 0.1);
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  border-left: 3px solid var(--danger);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  color: var(--text);
+  margin-bottom: var(--space-4);
+}
+
+[role="alert"][data-error-banner] > span:first-child {
+  flex: 1;
+}
+
+[role="alert"][data-error-banner]::before {
+  content: "\26A0";
+  color: var(--danger);
+  font-size: 1rem;
+  flex: none;
+}
+
+[role="alert"][data-error-banner] button {
+  flex: none;
+  padding: var(--space-1) var(--space-3);
+  font-family: inherit;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  background: var(--surface-alt);
+  color: var(--danger);
+  border: 1px solid rgba(248, 113, 113, 0.45);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+[role="alert"][data-error-banner] button:hover {
+  background: rgba(248, 113, 113, 0.12);
+}
+
+/* -------------------------------------------------------------------------
+   Login / auth card
+   ------------------------------------------------------------------------- */
+/* The login view is a single <main data-login> whose children are the auth-card
+   contents (no wrapper element). We therefore make the <main> itself the card:
+   a constrained, centered surface. The full-viewport tinted backdrop is painted
+   with a fixed pseudo-element so the page behind the card carries the radial. */
+[data-login] {
+  position: relative;
+  z-index: 0;
+  width: calc(100% - 2 * var(--space-4));
+  max-width: 400px;
+  margin: 0 auto;
+  margin-block: clamp(48px, 12vh, 140px);
+  padding: 40px 36px;
+  text-align: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+}
+
+/* Full-viewport backdrop behind the card: brand hero illustration layered under
+   a radial cobalt glow on the base background. The hero is decorative (the card
+   carries the accessible content), pinned to the right edge so it frames rather
+   than competes with the centered auth card. */
+[data-login]::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(
+      1200px 600px at 50% -10%,
+      rgba(109, 92, 246, 0.18),
+      transparent 60%
+    ),
+    url("../assets/login-hero.svg") center center / cover no-repeat,
+    var(--bg);
+}
+
+@media (max-width: 720px) {
+  /* Drop the side hero on small screens; keep just the glow + base. */
+  [data-login]::before {
+    background:
+      radial-gradient(
+        1200px 600px at 50% -10%,
+        rgba(109, 92, 246, 0.18),
+        transparent 60%
+      ),
+      var(--bg);
+  }
+}
+
+[data-login] > h1 {
+  margin: 0 0 var(--space-3);
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+[data-login] > p {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+[data-login] > button[data-variant] {
+  width: 100%;
+  margin-top: var(--space-5);
+}
+
+[data-login] [data-dev-login] {
+  text-align: left;
+}
+
+[data-login] [data-dev-login] hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: var(--space-5) 0;
+}
+
+[data-login] [data-dev-login] p {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+[data-login] [data-dev-login] button[data-variant] {
+  width: 100%;
+}
+
+[data-login] [data-dev-login] p[role="alert"][data-dev-login-error] {
+  margin-top: var(--space-3);
+  color: var(--danger);
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+/* -------------------------------------------------------------------------
+   Acting guild selector
+   ------------------------------------------------------------------------- */
+[data-acting-guild] {
+  display: inline-flex;
+  align-items: center;
+}
+
+[data-acting-guild] [data-form-field] {
+  margin-bottom: 0;
+  flex-direction: row;
+  align-items: center;
+}
+
+/* Hide the label visually but keep it for screen readers. */
+[data-acting-guild] [data-form-field] > label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+[data-acting-guild] input,
+[data-acting-guild] select {
+  height: 32px;
+  padding-block: 0;
+  font-size: 0.8125rem;
+  background: var(--surface-alt);
+  border-radius: var(--radius-pill);
+  min-width: 160px;
+}
+
+/* -------------------------------------------------------------------------
+   Screen headers + sections
+   ------------------------------------------------------------------------- */
+[data-screen-header] {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+[data-screen-header] h1 {
+  margin: 0;
+}
+
+[data-screen-intro] {
+  margin-top: var(--space-1);
+  color: var(--text-muted);
+  max-width: 60ch;
+}
+
+section[aria-labelledby] {
+  margin-block: var(--space-6);
+}
+
+section[aria-labelledby]:first-child {
+  margin-top: 0;
+}
+
+@media (max-width: 640px) {
+  [data-screen-header] {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+/* Generic content cards for create/detail sections. */
+[data-create-section],
+[data-verification-panel],
+[data-guild-settings],
+[data-tournament-summary],
+[data-report-form] {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  margin-bottom: var(--space-5);
+}
+
+/* -------------------------------------------------------------------------
+   Dashboard (HomeScreen nav cards)
+   ------------------------------------------------------------------------- */
+[data-dashboard] {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+[data-dashboard] > li {
+  display: flex;
+}
+
+[data-dash-card] {
+  display: block;
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  color: var(--text);
+  text-decoration: none;
+  transition: border-color 120ms ease, transform 120ms ease,
+    box-shadow 120ms ease;
+}
+
+[data-dash-card]:hover {
+  border-color: rgba(109, 92, 246, 0.5);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+  text-decoration: none;
+}
+
+[data-dash-card]:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+[data-dash-card] h3 {
+  margin: 0 0 var(--space-1);
+  color: var(--text);
+}
+
+[data-dash-card] p {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+/* -------------------------------------------------------------------------
+   NotFound / NotAuthorized surfaces
+   ------------------------------------------------------------------------- */
+[data-not-found],
+[data-not-authorized] {
+  max-width: 560px;
+  margin-inline: auto;
+  text-align: center;
+}
+
+[data-not-authorized] {
+  margin-block: clamp(40px, 10vh, 120px);
+}
+
+[data-not-found] h1,
+[data-not-authorized] h1 {
+  text-align: center;
+}
+
+[data-not-found-home],
+[data-not-authorized-home] {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) 14px;
+  background: var(--primary);
+  color: var(--on-primary);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xs);
+  transition: background-color 120ms ease;
+}
+
+[data-not-found-home]:hover,
+[data-not-authorized-home]:hover {
+  background: var(--primary-hover);
+  text-decoration: none;
+}
+
+[data-not-found-home]:focus-visible,
+[data-not-authorized-home]:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* -------------------------------------------------------------------------
+   Bracket
+   ------------------------------------------------------------------------- */
+[data-bracket] {
+  overflow-x: auto;
+  padding-bottom: var(--space-2);
+}
+
+[data-bracket-rounds] {
+  display: flex;
+  gap: var(--space-6);
+  align-items: flex-start;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+[data-bracket-round] {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 220px;
+}
+
+[data-bracket-round-title] {
+  margin: 0;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+[data-bracket-round-matches] {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  justify-content: space-around;
+  flex: 1;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+[data-bracket-match] {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+[data-bracket-match-body] {
+  display: flex;
+  flex-direction: column;
+}
+
+[data-bracket-slot] {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+}
+
+[data-bracket-slot] + [data-bracket-slot] {
+  border-top: 1px solid var(--border);
+}
+
+[data-bracket-team] {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[data-bracket-slot][data-empty] [data-bracket-team] {
+  color: var(--text-muted);
+}
+
+[data-bracket-slot][data-winner] {
+  font-weight: 600;
+  background: rgba(52, 211, 153, 0.1);
+  box-shadow: inset 2px 0 0 var(--success);
+}
+
+[data-bracket-slot]:not([data-winner]) [data-bracket-team] {
+  /* loser/undecided sits at default text; only winner emphasized */
+}
+
+[data-bracket-winner-mark] {
+  color: var(--success);
+  font-weight: 700;
+  flex: none;
+}
+
+[data-bracket-bye-note],
+[data-bracket-empty] {
+  font-style: italic;
+  color: var(--text-muted);
+  text-align: center;
+  padding: var(--space-3);
+  margin: 0;
+}
+
+[data-bracket-override] {
+  display: inline-block;
+  margin: var(--space-2) var(--space-3);
+  padding: var(--space-1) var(--space-3);
+  font-family: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+[data-bracket-override]:hover {
+  background: rgba(109, 92, 246, 0.12);
+}
+
+/* -------------------------------------------------------------------------
+   Misc lists / definition lists used in detail screens
+   ------------------------------------------------------------------------- */
+/* Definition lists in detail screens wrap each pair in a <div>
+   (<dl><div><dt/><dd/></div>...</dl>), so the dl is a column of rows and each
+   wrapper row is the label/value grid. */
+dl {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+dl > div {
+  display: grid;
+  grid-template-columns: minmax(120px, max-content) 1fr;
+  gap: var(--space-2) var(--space-4);
+  align-items: baseline;
+}
+
+dt {
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+dd {
+  margin: 0;
+  color: var(--text);
+}
+
+/* -------------------------------------------------------------------------
+   Animations
+   ------------------------------------------------------------------------- */
+@keyframes lol-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes lol-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@keyframes lol-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes lol-pop {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes lol-opacity-pulse {
+  from {
+    opacity: 0.4;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* -------------------------------------------------------------------------
+   Reduced motion
+   ------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* Spinner: opacity pulse instead of rotation. */
+  [role="status"][data-spinner]::before {
+    animation: lol-opacity-pulse 1.2s ease-in-out infinite alternate !important;
+  }
+
+  /* Busy button ring: static 3/4 ring, no spin. */
+  button[data-variant][aria-busy="true"]::after {
+    animation: none !important;
+    border-top-color: currentColor;
+  }
+
+  [data-status~="live"]::before,
+  [data-status~="running"]::before,
+  [data-status~="in_progress"]::before,
+  [data-status~="in_game"]::before,
+  [data-status-badge][data-status~="live"]::before,
+  [data-status-badge][data-status~="running"]::before,
+  [data-status-badge][data-status~="in_progress"]::before,
+  [data-status-badge][data-status~="in_game"]::before {
+    animation: none !important;
+  }
+}

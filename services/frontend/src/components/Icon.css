@@ -1,0 +1,21 @@
+/* Icon — inline 24x24 line glyphs.
+   Co-located styles for the <Icon> component. Geometry/stroke live on the SVG
+   element (so they inherit text color via currentColor); this file only governs
+   layout/alignment within text and interactive contexts. No design-token colors
+   are duplicated here — color is inherited. */
+
+[data-icon] {
+  /* Sit on the text baseline cleanly when inline with a label. */
+  display: inline-block;
+  vertical-align: middle;
+  /* Never shrink inside a flex row (e.g. nav item, button). */
+  flex: none;
+  /* Prevent the icon from intercepting clicks meant for its button/link. */
+  pointer-events: none;
+}
+
+/* When the icon is itself the only child of an interactive control, the control
+   owns the pointer; keep the visual crisp by snapping to the pixel grid. */
+[data-icon] {
+  shape-rendering: geometricPrecision;
+}

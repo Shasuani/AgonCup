@@ -101,7 +101,11 @@ export function TournamentDetail({ tournamentId, matches = [] }: TournamentDetai
         <dl data-tournament-summary>
           <div>
             <dt>Status</dt>
-            <dd data-status>{t.status}</dd>
+            <dd>
+              <span data-status-badge data-status={t.status}>
+                {t.status}
+              </span>
+            </dd>
           </div>
           <div>
             <dt>Format</dt>

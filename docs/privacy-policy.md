@@ -1,4 +1,4 @@
-# Privacy Policy — LeagueOfLeagues (DRAFT / STUB)
+conti# Privacy Policy — LeagueOfLeagues (DRAFT / STUB)
 
 > **Placeholder.** A public, hosted privacy policy is required for Riot product
 > registration and Discord app verification. Replace this with a legally reviewed

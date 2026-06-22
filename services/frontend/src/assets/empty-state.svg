@@ -1,0 +1,44 @@
+<svg width="240" height="180" viewBox="0 0 240 180" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="No data yet">
+  <defs>
+    <linearGradient id="es-surface" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#191c24"/>
+      <stop offset="1" stop-color="#111319"/>
+    </linearGradient>
+    <linearGradient id="es-accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6d5cf6"/>
+      <stop offset="1" stop-color="#8b7dff"/>
+    </linearGradient>
+  </defs>
+
+  <!-- ambient glow -->
+  <ellipse cx="120" cy="150" rx="86" ry="14" fill="#6d5cf6" opacity="0.10"/>
+
+  <!-- bracket panel -->
+  <rect x="40" y="30" width="160" height="116" rx="12" fill="url(#es-surface)" stroke="#272b36" stroke-width="1.5"/>
+
+  <!-- left column: two empty seeds -->
+  <rect x="56" y="48" width="44" height="20" rx="5" fill="#0a0b0f" stroke="#272b36" stroke-width="1.25"/>
+  <rect x="56" y="78" width="44" height="20" rx="5" fill="#0a0b0f" stroke="#272b36" stroke-width="1.25"/>
+  <rect x="56" y="108" width="44" height="20" rx="5" fill="#0a0b0f" stroke="#272b36" stroke-width="1.25"/>
+  <!-- placeholder dashes inside seeds -->
+  <line x1="64" y1="58" x2="92" y2="58" stroke="#272b36" stroke-width="2" stroke-linecap="round"/>
+  <line x1="64" y1="88" x2="92" y2="88" stroke="#272b36" stroke-width="2" stroke-linecap="round"/>
+  <line x1="64" y1="118" x2="92" y2="118" stroke="#272b36" stroke-width="2" stroke-linecap="round"/>
+
+  <!-- bracket connectors -->
+  <path d="M100 58 H116 V88" fill="none" stroke="#272b36" stroke-width="1.5" stroke-linecap="round"/>
+  <path d="M100 88 H116" fill="none" stroke="#272b36" stroke-width="1.5" stroke-linecap="round"/>
+  <path d="M116 88 H132" fill="none" stroke="#272b36" stroke-width="1.5" stroke-linecap="round"/>
+
+  <!-- final slot (highlighted, awaiting) -->
+  <rect x="132" y="78" width="48" height="22" rx="6" fill="#191c24" stroke="url(#es-accent)" stroke-width="1.5" stroke-dasharray="4 4"/>
+  <path d="M150 89 h12" stroke="#6d5cf6" stroke-width="2.25" stroke-linecap="round" opacity="0.85"/>
+
+  <!-- trophy mark above final, muted -->
+  <g opacity="0.9" transform="translate(148 44)">
+    <path d="M4 0 h16 v4 a8 8 0 0 1 -16 0 z" fill="url(#es-accent)" opacity="0.85"/>
+    <path d="M0 1 h4 v3 a4 4 0 0 1 -4 0 z M20 1 h4 v3 a4 4 0 0 1 -4 -3 z" fill="#6d5cf6" opacity="0.6"/>
+    <rect x="10" y="11" width="4" height="6" fill="#8b7dff"/>
+    <rect x="6" y="16" width="12" height="3" rx="1.5" fill="#6d5cf6"/>
+  </g>
+</svg>

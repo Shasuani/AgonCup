@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="180" height="180" viewBox="0 0 180 180" role="img" aria-label="LeagueOfLeagues">
+  <defs>
+    <linearGradient id="atiCobalt" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7e6ff8"/>
+      <stop offset="1" stop-color="#6d5cf6"/>
+    </linearGradient>
+    <linearGradient id="atiTile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#191c24"/>
+      <stop offset="1" stop-color="#0a0b0f"/>
+    </linearGradient>
+    <radialGradient id="atiGlow" cx="0.5" cy="0.42" r="0.6">
+      <stop offset="0" stop-color="#6d5cf6" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#6d5cf6" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <!-- full-bleed dark tile (iOS masks corners itself) -->
+  <rect x="0" y="0" width="180" height="180" rx="40" fill="url(#atiTile)"/>
+  <rect x="0" y="0" width="180" height="180" rx="40" fill="url(#atiGlow)"/>
+  <rect x="1" y="1" width="178" height="178" rx="39" fill="none" stroke="#272b36" stroke-width="2"/>
+  <!-- tournament summit mark, padded -->
+  <g fill="none" stroke="url(#atiCobalt)" stroke-width="13" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M52 76 L90 42 L128 76"/>
+    <path d="M52 116 L90 82 L128 116"/>
+  </g>
+  <circle cx="90" cy="138" r="13" fill="#8b7dff"/>
+</svg>

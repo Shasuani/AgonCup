@@ -40,7 +40,8 @@ PY_SERVICE_DIRS := \
 
 PY_PKG_DIRS := $(PY_LIB_DIRS) $(PY_SERVICE_DIRS)
 
-.PHONY: help up down build-bases test test-db lint format typecheck gen-clients fixtures
+.PHONY: help up down build-bases test test-db lint format typecheck gen-clients fixtures \
+	dev dev-backend dev-frontend
 
 # --- DB / RLS integration test config ----------------------------------------
 # Local equivalent of the CI `db-rls` job. Assumes a REACHABLE Postgres (e.g.
@@ -67,6 +68,26 @@ up: build-bases ## Build base images, then bring the stack up (detached, built).
 
 down: ## Stop the stack and remove containers/networks (keeps named volumes).
 	$(COMPOSE_CMD) down
+
+# --- Local host dev (NO docker) ----------------------------------------------
+# The SPA "Dev login" needs BOTH processes up: the backend on :8000 AND the Vite
+# dev server on :5173 (which proxies /api -> :8000). A "(500)" on dev-login means
+# the proxy could not reach the backend, i.e. `dev-backend` is not running.
+# Run these in two terminals, or `make dev` to run both together.
+dev-backend: ## Run the FastAPI backend on :8000 (host; reads services/backend/.env).
+	PYTHONPATH=src $(UV) run --directory services/backend \
+		uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+dev-frontend: ## Run the Vite admin SPA on :5173 (proxies /api -> :8000).
+	cd services/frontend && npm run dev
+
+dev: ## Run backend (:8000) AND frontend (:5173) together; Ctrl-C stops both.
+	@echo "==> backend :8000  +  frontend :5173  (Ctrl-C stops both)"
+	@trap 'kill 0' EXIT INT TERM; \
+		( PYTHONPATH=src $(UV) run --directory services/backend \
+			uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload ) & \
+		( cd services/frontend && npm run dev ) & \
+		wait
 
 # --- Quality gates -----------------------------------------------------------
 # Each loop iterates the package dirs; `[ -d ... ]` keeps it green before a

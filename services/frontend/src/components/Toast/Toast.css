@@ -1,0 +1,195 @@
+/* =========================================================================
+   Toast notifications — Cobalt Slate
+   Fixed top-right stacked region, portal-rendered to <body>. All colors,
+   spacing, radii and shadows come from the global :root tokens.
+   ========================================================================= */
+
+/* Fixed region above modals/overlays; non-interactive except for the toasts. */
+[data-toaster] {
+  position: fixed;
+  top: var(--space-4);
+  right: var(--space-4);
+  z-index: 60; /* above modal (50) and header (40) */
+  display: flex;
+  justify-content: flex-end;
+  pointer-events: none; /* let clicks fall through the empty region */
+  max-width: calc(100% - 2 * var(--space-4));
+}
+
+[data-toast-list] {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  width: 360px;
+  max-width: 100%;
+}
+
+/* ---- Individual toast ---- */
+[data-toast] {
+  pointer-events: auto; /* re-enable interaction on the card itself */
+  position: relative;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  animation: lol-toast-in 200ms ease;
+}
+
+[data-toast][data-leaving] {
+  animation: lol-toast-out 180ms ease forwards;
+}
+
+/* Variant accent on the left edge + icon color. */
+[data-toast][data-variant="success"] {
+  border-left-color: var(--success);
+}
+[data-toast][data-variant="success"] [data-toast-icon] {
+  color: var(--success);
+}
+
+[data-toast][data-variant="error"] {
+  border-left-color: var(--danger);
+}
+[data-toast][data-variant="error"] [data-toast-icon] {
+  color: var(--danger);
+}
+
+[data-toast][data-variant="warning"] {
+  border-left-color: var(--warning);
+}
+[data-toast][data-variant="warning"] [data-toast-icon] {
+  color: var(--warning);
+}
+
+[data-toast][data-variant="info"] {
+  border-left-color: var(--accent);
+}
+[data-toast][data-variant="info"] [data-toast-icon] {
+  color: var(--accent);
+}
+
+[data-toast-icon] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+  flex: none;
+}
+
+[data-toast-content] {
+  min-width: 0; /* allow text to wrap/ellipsize within the grid cell */
+}
+
+[data-toast-title] {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+[data-toast-description] {
+  margin: var(--space-1) 0 0;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+/* Title-only toast: no extra top margin from a missing description. */
+[data-toast-title]:only-child {
+  margin: 0;
+}
+
+/* ---- Dismiss button ---- */
+[data-toast-dismiss] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  margin: -2px -4px 0 0;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+[data-toast-dismiss]:hover {
+  color: var(--text);
+  background: var(--surface-alt);
+}
+
+[data-toast-dismiss]:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* ---- Responsive: full-width stack on narrow viewports ---- */
+@media (max-width: 480px) {
+  [data-toaster] {
+    left: var(--space-3);
+    right: var(--space-3);
+    top: var(--space-3);
+    max-width: none;
+  }
+
+  [data-toast-list] {
+    width: 100%;
+  }
+}
+
+/* ---- Animations ---- */
+@keyframes lol-toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes lol-toast-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateX(16px) scale(0.98);
+  }
+}
+
+/* ---- Reduced motion: cross-fade only, no translate/scale ---- */
+@media (prefers-reduced-motion: reduce) {
+  [data-toast] {
+    animation: lol-fade 120ms ease;
+  }
+
+  [data-toast][data-leaving] {
+    animation: lol-toast-fade-out 100ms ease forwards;
+  }
+}
+
+@keyframes lol-toast-fade-out {
+  to {
+    opacity: 0;
+  }
+}

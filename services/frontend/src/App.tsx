@@ -14,6 +14,8 @@ import { RequireAuth, RequireRole } from "./auth/RequireRole";
 import { GUILD_ADMIN, PLATFORM_OPERATOR } from "./auth/roles";
 import { AppLayout } from "./layout/AppLayout";
 import { Spinner } from "./components/Spinner";
+import { ThemeProvider } from "./theme";
+import { ToastProvider } from "./components/Toast";
 import type { ApiClient } from "@lol/clients-ts";
 
 // Eager (tiny) auth screens.
@@ -28,6 +30,8 @@ const TeamsScreen = lazy(() => import("./screens/teams/TeamsScreen"));
 const AccountsScreen = lazy(() => import("./screens/accounts/AccountsScreen"));
 const DisputeQueueScreen = lazy(() => import("./screens/results/DisputeQueueScreen"));
 const AuditLogScreen = lazy(() => import("./screens/audit/AuditLogScreen"));
+const GuildsScreen = lazy(() => import("./screens/guilds/GuildsScreen"));
+const NotFound = lazy(() => import("./screens/NotFound"));
 
 const ADMIN_ROLES = [GUILD_ADMIN, PLATFORM_OPERATOR] as const;
 const OPERATOR_ROLES = [PLATFORM_OPERATOR] as const;
@@ -48,11 +52,15 @@ export function AppProviders({
   client,
 }: AppProvidersProps): JSX.Element {
   return (
-    <AuthProvider initialSession={initialSession}>
-      <ActingGuildProvider initialGuildId={initialGuildId}>
-        <ApiProvider client={client}>{children}</ApiProvider>
-      </ActingGuildProvider>
-    </AuthProvider>
+    <ThemeProvider>
+      <AuthProvider initialSession={initialSession}>
+        <ActingGuildProvider initialGuildId={initialGuildId}>
+          <ApiProvider client={client}>
+            <ToastProvider>{children}</ToastProvider>
+          </ApiProvider>
+        </ActingGuildProvider>
+      </AuthProvider>
+    </ThemeProvider>
   );
 }
 
@@ -78,10 +86,16 @@ export function AppRoutes(): JSX.Element {
 
             <Route element={<RequireRole anyOf={OPERATOR_ROLES} />}>
               <Route path="audit" element={<AuditLogScreen />} />
+              <Route path="guilds" element={<GuildsScreen />} />
             </Route>
+
+            {/* Unknown paths under the authed shell render an in-layout 404. */}
+            <Route path="*" element={<NotFound />} />
           </Route>
         </Route>
 
+        {/* Genuinely unknown public paths fall back to home (RequireAuth then
+            redirects unauthenticated users to /login). */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Suspense>

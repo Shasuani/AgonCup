@@ -45,7 +45,11 @@ class ScreenBoundary extends Component<{ children: ReactNode }, { failed: boolea
 }
 
 function statusCell(t: TournamentResponse): ReactNode {
-  return <span data-status>{t.status}</span>;
+  return (
+    <span data-status-badge data-status={t.status}>
+      {t.status}
+    </span>
+  );
 }
 
 function TournamentsBody(): JSX.Element {

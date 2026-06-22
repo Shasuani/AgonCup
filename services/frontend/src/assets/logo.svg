@@ -1,0 +1,22 @@
+<svg width="180" height="32" viewBox="0 0 180 32" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="LeagueOfLeagues">
+  <defs>
+    <linearGradient id="llLogoGrad" x1="4" y1="2" x2="28" y2="30" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6d5cf6"/>
+      <stop offset="1" stop-color="#8b7dff"/>
+    </linearGradient>
+  </defs>
+  <!-- Hex sigil mark -->
+  <g>
+    <path d="M16 2.5 27.7 9.25v13.5L16 29.5 4.3 22.75V9.25L16 2.5Z"
+          fill="#191c24" stroke="url(#llLogoGrad)" stroke-width="1.6" stroke-linejoin="round"/>
+    <path d="M11.5 10v12h4.5" fill="none" stroke="url(#llLogoGrad)" stroke-width="2.1"
+          stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M20.5 10v12" fill="none" stroke="#8b7dff" stroke-width="2.1"
+          stroke-linecap="round" stroke-linejoin="round" opacity="0.55"/>
+    <path d="M16 16h4.5" fill="none" stroke="url(#llLogoGrad)" stroke-width="2.1"
+          stroke-linecap="round"/>
+  </g>
+  <!-- Wordmark: inherits currentColor; "Of" tinted with brand accent -->
+  <text x="40" y="22" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+        font-size="17" font-weight="700" letter-spacing="-0.3" fill="currentColor">League<tspan fill="#8b7dff" font-weight="600">Of</tspan>Leagues</text>
+</svg>

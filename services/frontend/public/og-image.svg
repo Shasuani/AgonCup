@@ -1,0 +1,92 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="LeagueOfLeagues — Tournament Operations Console. Run your League of Legends tournaments.">
+  <title>LeagueOfLeagues — Tournament Operations Console</title>
+  <defs>
+    <!-- Cobalt brand background gradient (bg -> surface, with cobalt bloom) -->
+    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="630" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0a0b0f"/>
+      <stop offset="0.55" stop-color="#111319"/>
+      <stop offset="1" stop-color="#0a0b0f"/>
+    </linearGradient>
+    <radialGradient id="bloom" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse"
+      gradientTransform="translate(940 120) rotate(135) scale(640 640)">
+      <stop offset="0" stop-color="#6d5cf6" stop-opacity="0.32"/>
+      <stop offset="0.5" stop-color="#6d5cf6" stop-opacity="0.08"/>
+      <stop offset="1" stop-color="#6d5cf6" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="bloom2" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse"
+      gradientTransform="translate(140 600) rotate(-45) scale(520 520)">
+      <stop offset="0" stop-color="#8b7dff" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#8b7dff" stop-opacity="0"/>
+    </radialGradient>
+    <!-- Logo mark gradient: primary -> accent -->
+    <linearGradient id="mark" x1="0" y1="0" x2="120" y2="120" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7e6ff8"/>
+      <stop offset="1" stop-color="#6d5cf6"/>
+    </linearGradient>
+    <linearGradient id="wordmark" x1="0" y1="0" x2="0" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#e8eaf0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Base -->
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect width="1200" height="630" fill="url(#bloom)"/>
+  <rect width="1200" height="630" fill="url(#bloom2)"/>
+
+  <!-- Subtle bracket-grid motif (right side) — evokes a tournament bracket -->
+  <g stroke="#272b36" stroke-width="2" fill="none" opacity="0.55">
+    <path d="M812 150 h44 v60 h44"/>
+    <path d="M812 270 h44 v-60"/>
+    <path d="M812 360 h44 v60 h44"/>
+    <path d="M812 480 h44 v-60"/>
+    <path d="M944 210 h44 v120 h44"/>
+    <path d="M944 420 h44 v-120"/>
+    <path d="M1032 330 h60"/>
+  </g>
+  <g fill="#191c24" stroke="#272b36" stroke-width="2" opacity="0.7">
+    <rect x="760" y="138" width="52" height="24" rx="6"/>
+    <rect x="760" y="198" width="52" height="24" rx="6"/>
+    <rect x="760" y="348" width="52" height="24" rx="6"/>
+    <rect x="760" y="408" width="52" height="24" rx="6"/>
+  </g>
+  <g fill="#6d5cf6" opacity="0.85">
+    <circle cx="1092" cy="330" r="6"/>
+  </g>
+
+  <!-- Hairline frame -->
+  <rect x="0.5" y="0.5" width="1199" height="629" rx="0" stroke="#272b36" stroke-opacity="0.6"/>
+
+  <!-- ===== Content block ===== -->
+  <g transform="translate(96 200)">
+    <!-- Logo mark: shield + interlocked play/bracket motif -->
+    <g transform="translate(0 0)">
+      <rect x="0" y="0" width="120" height="120" rx="28" fill="url(#mark)"/>
+      <rect x="0.75" y="0.75" width="118.5" height="118.5" rx="27.25" fill="none" stroke="#ffffff" stroke-opacity="0.18" stroke-width="1.5"/>
+      <!-- Two interlocking "L" / chevron arms = League of Leagues -->
+      <g fill="#ffffff">
+        <path d="M34 30 h16 v44 h30 v16 H34 Z" opacity="0.95"/>
+        <path d="M86 90 h-16 V46 H40 V30 h46 Z" opacity="0.55"/>
+      </g>
+    </g>
+
+    <!-- Wordmark -->
+    <text x="152" y="44" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+      font-size="58" font-weight="800" letter-spacing="-1.5" fill="url(#wordmark)">LeagueOfLeagues</text>
+
+    <!-- Eyebrow / category -->
+    <text x="154" y="86" font-family="'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace"
+      font-size="20" font-weight="600" letter-spacing="3" fill="#8b7dff">TOURNAMENT OPERATIONS CONSOLE</text>
+
+    <!-- Tagline (textLength locks width so fallback fonts never clip the OG card) -->
+    <text x="0" y="186" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+      font-size="44" font-weight="600" letter-spacing="-0.5" fill="#e8eaf0"
+      textLength="760" lengthAdjust="spacingAndGlyphs">Run your League of Legends tournaments</text>
+    <text x="0" y="232" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+      font-size="24" font-weight="400" fill="#9ca2b2"
+      textLength="820" lengthAdjust="spacingAndGlyphs">Autonomous custom-lobby orchestration · Discord-native · multi-tenant</text>
+  </g>
+
+  <!-- Accent baseline -->
+  <rect x="96" y="540" width="1008" height="3" rx="1.5" fill="#6d5cf6" opacity="0.5"/>
+</svg>

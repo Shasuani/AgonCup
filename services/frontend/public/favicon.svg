@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" role="img" aria-label="LeagueOfLeagues">
+  <defs>
+    <linearGradient id="favCobalt" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7e6ff8"/>
+      <stop offset="1" stop-color="#6d5cf6"/>
+    </linearGradient>
+    <linearGradient id="favTile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#191c24"/>
+      <stop offset="1" stop-color="#0a0b0f"/>
+    </linearGradient>
+  </defs>
+  <!-- dark rounded tile -->
+  <rect x="1" y="1" width="30" height="30" rx="7" fill="url(#favTile)" stroke="#272b36" stroke-width="1"/>
+  <!-- tournament summit: stacked bracket chevrons converging to a champion apex -->
+  <g fill="none" stroke="url(#favCobalt)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <!-- apex / crown peak -->
+    <path d="M9 13 L16 7 L23 13"/>
+    <!-- mid bracket tier -->
+    <path d="M9 20 L16 14 L23 20"/>
+  </g>
+  <!-- base champion node -->
+  <circle cx="16" cy="24" r="2.4" fill="#8b7dff"/>
+</svg>

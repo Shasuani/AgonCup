@@ -1,0 +1,199 @@
+/* StatCard — dashboard KPI cards.
+   Co-located styles for the StatCard / StatCardGrid components. Every color,
+   space, radius and shadow is a Cobalt Slate design token from styles/global.css
+   :root (no hardcoded duplicates). Interactive cards inherit the global
+   :focus-visible ring; the shimmer honors prefers-reduced-motion. */
+
+/* -------------------------------------------------------------------------
+   Grid
+   ------------------------------------------------------------------------- */
+[data-statcard-grid] {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: var(--space-4);
+  margin: 0;
+}
+
+/* -------------------------------------------------------------------------
+   Card
+   ------------------------------------------------------------------------- */
+[data-statcard] {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-height: 112px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  color: var(--text);
+}
+
+/* Link variant: same surface, but interactive affordances. */
+a[data-statcard-link] {
+  text-decoration: none;
+  color: var(--text);
+  transition: border-color 120ms ease, transform 120ms ease,
+    box-shadow 120ms ease;
+}
+
+a[data-statcard-link]:hover {
+  border-color: rgba(109, 92, 246, 0.5);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+  text-decoration: none;
+}
+
+a[data-statcard-link]:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* -------------------------------------------------------------------------
+   Header row: label + icon
+   ------------------------------------------------------------------------- */
+[data-statcard-top] {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+[data-statcard-label] {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+[data-statcard-icon] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border-radius: var(--radius-md);
+  color: var(--accent);
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+}
+
+/* On a link card, lift the icon chip toward the brand color on hover. */
+a[data-statcard-link]:hover [data-statcard-icon] {
+  border-color: rgba(109, 92, 246, 0.4);
+}
+
+/* -------------------------------------------------------------------------
+   Value row
+   ------------------------------------------------------------------------- */
+[data-statcard-value-row] {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-top: auto;
+}
+
+[data-statcard-value] {
+  font-size: 1.75rem;
+  line-height: 1.1;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+/* Unavailable placeholder ("—") reads as muted, not as a real figure. */
+[data-statcard-value][data-unavailable] {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+/* -------------------------------------------------------------------------
+   Delta / trend chip
+   ------------------------------------------------------------------------- */
+[data-statcard-delta] {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  font-size: 0.75rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  /* Neutral default — direction still conveyed by the arrow glyph + text. */
+  color: var(--text-muted);
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+[data-statcard-delta][data-trend="up"] {
+  color: #6ee7b7;
+  background: rgba(52, 211, 153, 0.14);
+  border-color: rgba(52, 211, 153, 0.35);
+}
+
+[data-statcard-delta][data-trend="down"] {
+  color: #fca5a5;
+  background: rgba(248, 113, 113, 0.14);
+  border-color: rgba(248, 113, 113, 0.35);
+}
+
+/* -------------------------------------------------------------------------
+   Sublabel
+   ------------------------------------------------------------------------- */
+[data-statcard-sublabel] {
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+[data-statcard-sublabel][data-muted] {
+  color: var(--text-muted);
+}
+
+/* -------------------------------------------------------------------------
+   Loading shimmer (skeleton stands in for the value)
+   ------------------------------------------------------------------------- */
+[data-statcard-skeleton] {
+  display: block;
+  width: 72px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(
+    90deg,
+    var(--surface-alt) 25%,
+    var(--border) 37%,
+    var(--surface-alt) 63%
+  );
+  background-size: 400% 100%;
+  animation: statcard-shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes statcard-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0 0;
+  }
+}
+
+/* Honor reduced-motion: drop the moving sheen, keep a static muted bar. */
+@media (prefers-reduced-motion: reduce) {
+  [data-statcard-skeleton] {
+    animation: none !important;
+    background: var(--surface-alt);
+  }
+
+  a[data-statcard-link] {
+    transition: none !important;
+  }
+
+  a[data-statcard-link]:hover {
+    transform: none;
+  }
+}

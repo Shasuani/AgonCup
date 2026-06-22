@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="56" height="96" viewBox="0 0 56 96" fill="none" role="presentation" aria-hidden="true">
+  <!-- Seamless flat-top hexagon tile. The 56x96 cell repeats edge-to-edge:
+       hexes at the cell corners and center interlock to form a continuous
+       honeycomb. Very low contrast so it reads as a faint background texture
+       over the Cobalt Slate background. Uses currentColor so callers can tint it. -->
+  <defs>
+    <path id="hx" d="M14 0 L28 8 L28 24 L14 32 L0 24 L0 8 Z"/>
+  </defs>
+  <g stroke="currentColor" fill="none" stroke-width="1" opacity="0.5">
+    <!-- center column hex -->
+    <use href="#hx" x="14" y="16"/>
+    <!-- top + bottom (seam across vertical edges) -->
+    <use href="#hx" x="14" y="-32"/>
+    <use href="#hx" x="14" y="64"/>
+    <!-- offset columns producing the interlock (seam across horizontal edges) -->
+    <use href="#hx" x="-14" y="-8"/>
+    <use href="#hx" x="42" y="-8"/>
+    <use href="#hx" x="-14" y="40"/>
+    <use href="#hx" x="42" y="40"/>
+    <use href="#hx" x="-14" y="88"/>
+    <use href="#hx" x="42" y="88"/>
+  </g>
+</svg>

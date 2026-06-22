@@ -79,6 +79,73 @@ class RiotAccountDTO(_Base):
 
 
 # --------------------------------------------------------------------------- #
+# Desktop code + LCU account verification (replaces the icon challenge)        #
+# --------------------------------------------------------------------------- #
+class DesktopRegistrationDTO(_Base):
+    """Result of ``/register`` minting a one-time desktop-link code (PLAN.md §3.1).
+
+    The user runs ``/register`` in Discord; the backend mints a short-TTL,
+    single-use ``code`` bound to (discord user, origin guild). The user types it
+    into the desktop app, which reads the local LCU PUUID and completes the link.
+    """
+
+    attempt_id: UUID
+    code: str = Field(..., description="Grouped XXXX-XXXX one-time link code (display form).")
+    expires_at: datetime
+    origin_guild_id: UUID | None = None
+    instruction: str = Field(..., description="Short human instruction for the user.")
+
+
+class DesktopVerifyRequestDTO(_Base):
+    """Desktop -> backend verify body. The ``code`` IS the credential (no JWT).
+
+    The desktop reads the Riot ID (``game_name``/``tag_line``) and platform
+    ``region`` from the local LCU current-summoner + region-locale; the user
+    supplies the ``code`` from Discord. The backend resolves the **canonical**
+    78-char PUUID server-side via Account-V1 by-riot-id (the double
+    verification) — the desktop no longer sends the canonical puuid. The
+    advisory ``lcu_puuid`` (a 36-char LCU UUID, NOT the canonical identity) and
+    ``summoner_id`` (for LCU invites) are optional secondary signals.
+    """
+
+    code: str = Field(
+        ..., min_length=8, max_length=12, description="Hyphenated or not; normalized."
+    )
+    game_name: str = Field(..., min_length=1, max_length=64)
+    tag_line: str = Field(..., min_length=1, max_length=16)
+    region: str = Field(..., min_length=2, max_length=8, description="Platform route e.g. 'eun1'.")
+    lcu_puuid: str | None = Field(
+        default=None, max_length=128, description="Advisory LCU UUID (not canonical)."
+    )
+    summoner_id: str | None = Field(
+        default=None, max_length=64, description="LCU summonerId (for invites)."
+    )
+
+
+class DesktopVerifyResponseDTO(_Base):
+    """Successful desktop verify result: the account is now linked + verified.
+
+    Carries the resolved canonical Riot ID/region and a best-effort Solo/Duo
+    rank snapshot (``None`` when unranked or the rank fetch failed).
+    """
+
+    account_id: UUID
+    puuid: str = Field(..., description="Canonical 78-char Account-V1 puuid.")
+    verified: bool = Field(..., description="Always true on a 200 response.")
+    origin_guild_id: UUID | None = None
+    game_name: str | None = None
+    tag_line: str | None = None
+    region: str | None = None
+    # Solo/Duo rank snapshot (None when unranked or rank fetch failed):
+    tier: str | None = None
+    division: str | None = None
+    league_points: int | None = None
+    rank_text: str = Field(
+        default="Unranked", description="Display string e.g. 'Gold II, 45 LP'."
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Guild-scoped entities                                                       #
 # --------------------------------------------------------------------------- #
 class GuildDTO(_Base):

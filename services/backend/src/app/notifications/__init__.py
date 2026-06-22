@@ -23,6 +23,7 @@ from app.notifications.events import (
     NotificationKind,
     NotificationPayload,
     RegistrationApprovedPayload,
+    RegistrationVerifiedPayload,
     ResultRecordedPayload,
 )
 from app.notifications.service import (
@@ -33,6 +34,7 @@ from app.notifications.service import (
     publish_check_in_reminder,
     publish_match_ready,
     publish_registration_approved,
+    publish_registration_verified,
     publish_result_recorded,
 )
 
@@ -48,10 +50,12 @@ __all__ = [
     "RecordingNotificationPublisher",
     "RedisNotificationPublisher",
     "RegistrationApprovedPayload",
+    "RegistrationVerifiedPayload",
     "ResultRecordedPayload",
     "build_envelope",
     "publish_check_in_reminder",
     "publish_match_ready",
     "publish_registration_approved",
+    "publish_registration_verified",
     "publish_result_recorded",
 ]

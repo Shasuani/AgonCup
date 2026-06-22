@@ -9,8 +9,11 @@ immutable PUUID via
 This module also exposes a *minimal* Summoner-V4 ``by-puuid`` call used only to
 read ``profileIconId`` for the ownership-challenge nonce (PLAN.md §3.1
 verification). Summoner-V4 is **platform-routed** (``na1``/``euw1``/...), not
-continental — see :class:`lol_riot.routing.PlatformRoute`. Everything else
-(Tournament-V5, provider/callback, Match-V5) is out of scope for v3.
+continental — see :class:`lol_riot.routing.PlatformRoute`. It also exposes a
+*minimal* League-V4 ``entries/by-puuid`` call (also platform-routed) used to
+read the Solo/Duo rank snapshot at desktop verify time (best-effort, PLAN.md
+§3.5). Everything else (Tournament-V5, provider/callback, Match-V5) is out of
+scope for v3.
 
 All calls go through the shared :class:`~lol_riot.limiter.TokenBucketLimiter`
 (personal/standard key budget, PLAN.md §3.5), honor a ``429`` ``Retry-After``
@@ -58,6 +61,24 @@ class AccountDTO:
     puuid: str
     game_name: str
     tag_line: str
+
+
+@dataclass(frozen=True, slots=True)
+class LeagueEntryDTO:
+    """Typed view of a League-V4 ranked entry (PLAN.md §3.5 rank snapshot).
+
+    One element of the ``GET /lol/league/v4/entries/by-puuid/{puuid}`` array
+    (League-V4 is **platform-routed**, like Summoner-V4). The caller selects the
+    ``RANKED_SOLO_5x5`` entry for the Solo/Duo rank. ``rank`` is the roman
+    division (``"II"``) and is **empty** for apex tiers (MASTER and above).
+    """
+
+    queue_type: str
+    tier: str
+    rank: str
+    league_points: int
+    wins: int
+    losses: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,6 +159,10 @@ class RiotAccountClient:
     @staticmethod
     def _summoner_by_puuid_path(puuid: str) -> str:
         return f"/lol/summoner/v4/summoners/by-puuid/{quote(puuid, safe='')}"
+
+    @staticmethod
+    def _league_entries_by_puuid_path(puuid: str) -> str:
+        return f"/lol/league/v4/entries/by-puuid/{quote(puuid, safe='')}"
 
     @staticmethod
     def _parse_retry_after(response: httpx.Response) -> float:
@@ -243,6 +268,38 @@ class RiotAccountClient:
             summoner_id=data.get("id"),
         )
 
+    async def get_league_entries_by_puuid(
+        self, puuid: str, platform: PlatformRoute
+    ) -> list[LeagueEntryDTO]:
+        """Read ranked entries for a PUUID (PLAN.md §3.5 rank snapshot).
+
+        League-V4 ``GET /lol/league/v4/entries/by-puuid/{puuid}``.
+        **Platform-routed** (``na1``/``euw1``/...), like Summoner-V4 — so the
+        caller passes the player's :class:`PlatformRoute`, not a continent. A
+        ``200`` with an empty array means *fully unranked* (returns ``[]``).
+
+        This raises typed errors (``NotFound``/``RateLimited``/``RiotApiError``)
+        like every other call so the limiter/retry semantics stay uniform; the
+        **best-effort** policy (treat any failure as "rank unknown") lives in
+        the backend caller, NOT here.
+        """
+        path = self._league_entries_by_puuid_path(puuid)
+        response = await self._request(
+            platform.base_url, path, what="league_entries_by_puuid"
+        )
+        data = response.json()
+        return [
+            LeagueEntryDTO(
+                queue_type=e.get("queueType", ""),
+                tier=e.get("tier", ""),
+                rank=e.get("rank", ""),
+                league_points=int(e.get("leaguePoints", 0)),
+                wins=int(e.get("wins", 0)),
+                losses=int(e.get("losses", 0)),
+            )
+            for e in data
+        ]
+
     async def aclose(self) -> None:
         """Close the HTTP client if this instance owns it."""
         if self._client is not None and self._owns_client:
@@ -261,4 +318,4 @@ class RiotAccountClient:
         await self.aclose()
 
 
-__all__ = ["AccountDTO", "RiotAccountClient", "SummonerDTO"]
+__all__ = ["AccountDTO", "LeagueEntryDTO", "RiotAccountClient", "SummonerDTO"]

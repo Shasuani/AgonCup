@@ -36,7 +36,16 @@ function fakeAdapter(over: Partial<{ summoner: CurrentSummoner; throws: boolean 
   return {
     async getCurrentSummoner() {
       if (over.throws) throw new Error("no LCU");
-      return over.summoner ?? ({ puuid: "puuid-A", summonerId: "1", displayName: "x" } as CurrentSummoner);
+      return (
+        over.summoner ??
+        ({
+          puuid: "puuid-A",
+          summonerId: "1",
+          displayName: "x",
+          gameName: "Chama",
+          tagLine: "Shasu",
+        } as CurrentSummoner)
+      );
     },
   } as unknown as LcuAdapter;
 }
@@ -93,7 +102,15 @@ test("validateIdentity: mismatch surfaces an advisory warning, never throws", as
   const warnings: string[] = [];
   const rt = makeRuntime({
     verifiedPuuid: "puuid-Z" as Puuid,
-    adapter: fakeAdapter({ summoner: { puuid: "puuid-A", summonerId: "1", displayName: "x" } as CurrentSummoner }),
+    adapter: fakeAdapter({
+      summoner: {
+        puuid: "puuid-A",
+        summonerId: "1",
+        displayName: "x",
+        gameName: "Chama",
+        tagLine: "Shasu",
+      } as CurrentSummoner,
+    }),
     onWarn: (e) => warnings.push(e),
   });
   const res = await rt.validateIdentity();

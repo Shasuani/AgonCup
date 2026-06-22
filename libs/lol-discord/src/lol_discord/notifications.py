@@ -51,29 +51,56 @@ def _field(name: str, value: str, *, inline: bool = False) -> EmbedField:
 # --------------------------------------------------------------------------- #
 # Registration                                                                 #
 # --------------------------------------------------------------------------- #
-def registration_started(*, riot_id: str, target_icon: str) -> dict[str, Any]:
-    """Verification started: the player must equip ``target_icon`` (PLAN.md §3.5).
+def registration_code(*, code: str, expires_minutes: int = 15) -> dict[str, Any]:
+    """Verification started: finish linking in the desktop app (PLAN.md §3.5).
 
-    ``riot_id`` is the player-supplied Riot ID being claimed; ``target_icon`` is
-    the human-readable summoner-icon challenge to set, then confirm.
+    The player receives a one-time ``code`` (issued to their authenticated Discord
+    identity) which they enter in the LeagueOfLeagues desktop app. The desktop
+    reads the live League client (LCU) to obtain the player's PUUID and completes
+    the link — so there is no icon dance and no Riot ID required. The code is a
+    secret credential, so the embed is always sent ephemerally.
     """
     return build_embed(
-        "Verification started",
-        f"We're verifying ownership of **{riot_id}**.",
+        "Finish linking in the desktop app",
+        "Use the code below in the LeagueOfLeagues desktop app to link your "
+        "League account.",
         color=EmbedColor.WARNING,
         fields=[
-            _field("Next step", f"Equip the **{target_icon}** summoner icon, then confirm."),
-            _field("Riot ID", riot_id, inline=True),
+            _field("Your code", f"`{code}`", inline=True),
+            _field(
+                "Steps",
+                "1. Open the LeagueOfLeagues desktop app.\n"
+                "2. Make sure League is running and you're signed in.\n"
+                "3. Enter this code to link your account.",
+            ),
+            _field("Expires", f"in {expires_minutes} minutes", inline=True),
         ],
     )
 
 
-def registration_verified(*, riot_id: str) -> dict[str, Any]:
-    """Verification succeeded — the PUUID is now bound to the account (§3.5)."""
+def registration_verified(
+    *,
+    riot_id: str,
+    region: str | None = None,
+    rank_text: str | None = None,
+) -> dict[str, Any]:
+    """Verification succeeded — the canonical PUUID is now bound to the account (§3.5).
+
+    Optionally surfaces the resolved ``region`` (display label, e.g. ``"EUNE"``)
+    and the Solo/Duo ``rank_text`` snapshot (e.g. ``"Gold II, 45 LP"`` or
+    ``"Unranked"``). Both are rendered as inline fields only when provided, so
+    existing callers (and the central log-only path) keep working unchanged.
+    """
+    fields: list[EmbedField] = []
+    if region:
+        fields.append(_field("Region", region, inline=True))
+    if rank_text:
+        fields.append(_field("Solo/Duo", rank_text, inline=True))
     return build_embed(
         "Account verified",
         f"**{riot_id}** is verified and linked. You can now join teams and tournaments.",
         color=EmbedColor.SUCCESS,
+        fields=fields or None,
     )
 
 
@@ -267,7 +294,7 @@ def build_central_feed_item(
 
 
 __all__ = [
-    "registration_started",
+    "registration_code",
     "registration_verified",
     "team_created",
     "team_joined",

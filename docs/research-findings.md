@@ -552,6 +552,52 @@ both of which are now **false** under the locked autonomous direction.
 - Current Riot stance on **distributed, registered LCU write-automation** of
   custom-lobby setup (the Phase-0/1 DevRel spike).
 
+### Account verification: code + LCU flow (replaces the icon challenge)
+
+The original ownership proof was an **icon challenge**: Account-V1 resolved a
+Riot ID → PUUID, the backend issued a random `profileIconId` + single-use nonce,
+the user set that icon, and the worker confirmed it via Summoner-V4 `by-puuid`.
+That proved *control of the account* but coupled verification to **Account-V1**
+(a key the autonomous-LCU model otherwise does not need) and a manual icon dance.
+
+The current flow is **code + desktop/LCU**:
+
+1. `/register` (Discord) → backend mints a **one-time code** bound to
+   `(discord_user_id, origin_guild_id)`, TTL 15 min, single-use, **superseded**
+   on re-register, ~40 bits entropy (8 chars over a 31-symbol Crockford-base32
+   alphabet, ambiguous glyphs removed).
+2. The bot shows the code to the user (ephemeral) — no icon.
+3. The user enters the code in the **desktop (Electron) client**.
+4. The desktop reads the **local LCU current-summoner**
+   (`GET /lol-summoner/v1/current-summoner`, READ-ONLY) → PUUID + summoner name
+   + summonerId, and POSTs `{code, puuid, region, summoner_name, summoner_id}` to
+   `POST /api/v1/accounts/verify-desktop` (unauthenticated; the code IS the
+   credential).
+5. The backend validates the live code, binds the Discord user ↔ PUUID
+   (`verified=true`), and stores the **origin guild** on the `RiotAccount`.
+
+**Account-V1 is no longer required** — the PUUID comes from the LCU. Account-V1
+is kept only as an OPTIONAL display/Riot-ID resolver; the flow never depends on
+it.
+
+**PUUID trust boundary.** The backend **trusts the PUUID the desktop claims**,
+read from the local LCU. A casual user cannot place an arbitrary PUUID into their
+LCU without actually signing into that Riot account on that machine, so for
+normal users this is a strong possession proof. A **technical user can bypass the
+desktop app and forge the POST** with any `{code, puuid}` — the code only proves
+control of the *Discord registration*, not ownership of the claimed PUUID. This
+is **weaker** than the old icon challenge (which forced an observable account
+state change) but is **acceptable** under the platform's existing model:
+*advisory identity + cross-client corroboration across the 10 (forgeable) match
+reports + bounded admin override*. Mitigations: (1) `verify-desktop` is
+unauthenticated, so it is **per-IP rate-limited** (fixed window, ~10/min) with
+generic errors to resist code-guessing; (2) codes are single-use, 15-min TTL,
+superseded on re-register, ~40 bits entropy; (3) a PUUID already linked to a
+**different** user returns **409** (prevents silent takeover); (4) Account-V1 may
+be used post-hoc as a display resolver but is never the auth authority. Korea
+remains excluded; this is a **READ-ONLY** LCU path — no writes, no opt-in /
+kill-switch interaction.
+
 ### Sources
 
 **Tournament-V5 / Match-V5 non-viability for customs**

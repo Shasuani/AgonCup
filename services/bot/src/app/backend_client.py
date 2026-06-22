@@ -155,22 +155,21 @@ class BackendClient:
         return await self._require(self._post("/guilds/settings/update", payload))
 
     # -- accounts -----------------------------------------------------------
-    async def link_account(
-        self, ctx: DiscordContext, *, game_name: str, tag_line: str, region: str
-    ) -> dict[str, Any]:
-        """Start Riot account verification for the acting user (PLAN.md §3.5).
+    async def start_registration(self, ctx: DiscordContext) -> dict[str, Any]:
+        """Mint a one-time desktop-verification code for the acting user (PLAN.md §3.5).
 
-        Delegates to ``app.accounts.service.link_account`` on the backend; the bot
-        only relays the player-supplied Riot ID and renders the returned icon
-        challenge.
+        The backend bridge (``/accounts/link``, now code-minting) delegates to
+        ``app.accounts.service.start_desktop_registration`` and returns
+        ``{attempt_id, code, expires_at, origin_guild_id, instruction}``. The bot
+        only relays the asserted Discord context (no Riot ID / region) — the
+        desktop app reads the player's PUUID from the local League client (LCU)
+        and completes the link with this code.
         """
-        payload = {
-            "ctx": _ctx_payload(ctx),
-            "gameName": game_name,
-            "tagLine": tag_line,
-            "region": region,
-        }
-        return await self._require(self._post("/accounts/link", payload))
+        return await self._require(self._post("/accounts/link", {"ctx": _ctx_payload(ctx)}))
+
+    #: Back-compat alias for callers still referring to the old method name. The
+    #: signature is the new parameter-less one (the icon/Riot-ID flow is gone).
+    link_account = start_registration
 
     # -- teams --------------------------------------------------------------
     async def create_team(self, ctx: DiscordContext, *, name: str) -> dict[str, Any]:

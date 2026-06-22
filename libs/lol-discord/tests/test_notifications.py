@@ -9,7 +9,7 @@ from lol_discord import (
     build_central_feed_item,
     match_ready,
     match_result,
-    registration_started,
+    registration_code,
     registration_verified,
     team_created,
     team_joined,
@@ -35,13 +35,21 @@ def _field_values(embed: dict[str, object]) -> str:
 # --------------------------------------------------------------------------- #
 # Registration                                                                 #
 # --------------------------------------------------------------------------- #
-def test_registration_started() -> None:
-    embed = registration_started(riot_id="Faker#KR1", target_icon="Poro")
-    assert embed["title"] == "Verification started"
+def test_registration_code() -> None:
+    embed = registration_code(code="7K3M-QP9R")
+    assert embed["title"] == "Finish linking in the desktop app"
     assert embed["color"] == int(EmbedColor.WARNING)
     blob = _field_values(embed)
-    assert "Faker#KR1" in blob
-    assert "Poro" in blob
+    assert "7K3M-QP9R" in blob
+    assert "desktop app" in blob.lower()
+    assert "15 minutes" in blob
+    # No icon/thumbnail, no Riot ID leakage.
+    assert "thumbnail" not in embed
+
+
+def test_registration_code_custom_expiry() -> None:
+    embed = registration_code(code="ABCD-EFGH", expires_minutes=5)
+    assert "5 minutes" in _field_values(embed)
 
 
 def test_registration_verified() -> None:
@@ -49,6 +57,33 @@ def test_registration_verified() -> None:
     assert embed["title"] == "Account verified"
     assert embed["color"] == int(EmbedColor.SUCCESS)
     assert "Faker#KR1" in embed["description"]
+    # Backward-compatible: no region/rank => no fields.
+    assert "fields" not in embed
+
+
+def test_registration_verified_with_region_and_rank() -> None:
+    embed = registration_verified(
+        riot_id="Chama#Shasu",
+        region="EUNE",
+        rank_text="Gold II, 45 LP",
+    )
+    assert embed["color"] == int(EmbedColor.SUCCESS)
+    blob = _field_values(embed)
+    assert "Chama#Shasu" in blob
+    assert "EUNE" in blob
+    assert "Gold II, 45 LP" in blob
+    assert "Solo/Duo" in blob
+
+
+def test_registration_verified_unranked() -> None:
+    embed = registration_verified(
+        riot_id="Chama#Shasu",
+        region="EUNE",
+        rank_text="Unranked",
+    )
+    blob = _field_values(embed)
+    assert "Unranked" in blob
+    assert "EUNE" in blob
 
 
 # --------------------------------------------------------------------------- #

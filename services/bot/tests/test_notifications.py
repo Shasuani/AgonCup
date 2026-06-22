@@ -48,13 +48,54 @@ class _FakeUser:
     id = 42
 
 
+class _FakeDMUser:
+    """A Discord user we can DM; records embeds or raises a configured error."""
+
+    def __init__(self, user_id: int, *, raise_on_send: Exception | None = None) -> None:
+        self.id = user_id
+        self._raise_on_send = raise_on_send
+        self.sent: list[discord.Embed] = []
+
+    async def send(self, *, embed: discord.Embed, allowed_mentions: Any = None) -> None:
+        if self._raise_on_send is not None:
+            raise self._raise_on_send
+        self.sent.append(embed)
+
+
 class _FakeBot:
-    def __init__(self, guilds: list[_FakeGuild]) -> None:
+    def __init__(
+        self,
+        guilds: list[_FakeGuild],
+        *,
+        users: dict[int, _FakeDMUser] | None = None,
+        fetch_raises: Exception | None = None,
+    ) -> None:
         self.guilds = guilds
         self.user = _FakeUser()
+        self._users = users or {}
+        self._fetch_raises = fetch_raises
+        self.fetch_calls: list[int] = []
 
     def get_guild(self, guild_id: int) -> _FakeGuild | None:
         return next((g for g in self.guilds if g.id == guild_id), None)
+
+    def get_user(self, user_id: int) -> _FakeDMUser | None:
+        return self._users.get(user_id)
+
+    async def fetch_user(self, user_id: int) -> _FakeDMUser:
+        self.fetch_calls.append(user_id)
+        if self._fetch_raises is not None:
+            raise self._fetch_raises
+        if user_id in self._users:
+            return self._users[user_id]
+        raise discord.NotFound(_FakeResponse(), "unknown user")  # type: ignore[arg-type]
+
+
+class _FakeResponse:
+    """Minimal aiohttp-style response so discord.NotFound can be constructed."""
+
+    status = 404
+    reason = "Not Found"
 
 
 class _FakeBackend:
@@ -209,6 +250,120 @@ def test_unknown_kind_is_ignored() -> None:
 
 
 # ---------------------------------------------------------------------------
+# registration_verified — DM routing with guild-channel fallback (PLAN.md §3.2)
+# ---------------------------------------------------------------------------
+def _verified_envelope(origin_guild_id: str, discord_user_id: str) -> dict[str, Any]:
+    return _envelope(
+        origin_guild_id,
+        {
+            "kind": "registration_verified",
+            "discord_user_id": discord_user_id,
+            "riot_id": "Chama#Shasu",
+            "region": "EUNE",
+            "rank_text": "Gold II, 45 LP",
+        },
+    )
+
+
+def test_registration_verified_is_dmed_to_user() -> None:
+    channel = _FakeChannel(555)
+    guild = _FakeGuild(222, name="Guild", channel=channel)
+    dm_user = _FakeDMUser(9001)
+    bot = _FakeBot([guild], users={9001: dm_user})
+    backend = _FakeBackend(
+        {
+            222: {
+                "guild_id": "g-backend",
+                "discord_guild_id": 222,
+                "settings": {"notify_channel_id": 555},
+            }
+        }
+    )
+    pubsub = _FakePubSub([_verified_envelope("g-backend", "9001")])
+    sub = NotificationSubscriber(bot, redis=_FakeRedis(pubsub), backend=backend)  # type: ignore[arg-type]
+
+    asyncio.run(sub.run())
+
+    # DMed the user; did NOT post to the guild channel.
+    assert len(dm_user.sent) == 1
+    assert isinstance(dm_user.sent[0], discord.Embed)
+    assert channel.sent == []
+
+
+def test_registration_verified_dropped_when_dm_forbidden() -> None:
+    # PRIVACY: registration_verified is DM-ONLY. When the DM fails (DMs closed)
+    # we DROP it (log only) — we never broadcast the user's Riot ID/region/rank
+    # to a public guild channel without consent.
+    channel = _FakeChannel(555)
+    guild = _FakeGuild(222, name="Guild", channel=channel)
+    dm_user = _FakeDMUser(9001, raise_on_send=discord.Forbidden(_FakeResponse(), "DMs closed"))  # type: ignore[arg-type]
+    bot = _FakeBot([guild], users={9001: dm_user})
+    backend = _FakeBackend(
+        {
+            222: {
+                "guild_id": "g-backend",
+                "discord_guild_id": 222,
+                "settings": {"notify_channel_id": 555},
+            }
+        }
+    )
+    pubsub = _FakePubSub([_verified_envelope("g-backend", "9001")])
+    sub = NotificationSubscriber(bot, redis=_FakeRedis(pubsub), backend=backend)  # type: ignore[arg-type]
+
+    asyncio.run(sub.run())
+
+    # DM raised Forbidden -> dropped; NO public guild fallback (privacy).
+    assert dm_user.sent == []
+    assert channel.sent == []
+
+
+def test_registration_verified_dropped_when_user_unfetchable() -> None:
+    channel = _FakeChannel(555)
+    guild = _FakeGuild(222, name="Guild", channel=channel)
+    # No cached user; fetch_user raises NotFound (HTTPException) -> dropped.
+    bot = _FakeBot([guild], users={})
+    backend = _FakeBackend(
+        {
+            222: {
+                "guild_id": "g-backend",
+                "discord_guild_id": 222,
+                "settings": {"notify_channel_id": 555},
+            }
+        }
+    )
+    pubsub = _FakePubSub([_verified_envelope("g-backend", "9001")])
+    sub = NotificationSubscriber(bot, redis=_FakeRedis(pubsub), backend=backend)  # type: ignore[arg-type]
+
+    asyncio.run(sub.run())
+
+    assert bot.fetch_calls == [9001]
+    assert channel.sent == []
+
+
+def test_registration_verified_bad_user_id_dropped() -> None:
+    channel = _FakeChannel(555)
+    guild = _FakeGuild(222, name="Guild", channel=channel)
+    bot = _FakeBot([guild])
+    backend = _FakeBackend(
+        {
+            222: {
+                "guild_id": "g-backend",
+                "discord_guild_id": 222,
+                "settings": {"notify_channel_id": 555},
+            }
+        }
+    )
+    # Non-numeric discord_user_id -> int() raises ValueError -> dropped.
+    pubsub = _FakePubSub([_verified_envelope("g-backend", "not-a-snowflake")])
+    sub = NotificationSubscriber(bot, redis=_FakeRedis(pubsub), backend=backend)  # type: ignore[arg-type]
+
+    asyncio.run(sub.run())
+
+    assert bot.fetch_calls == []
+    assert channel.sent == []
+
+
+# ---------------------------------------------------------------------------
 # Pure helpers
 # ---------------------------------------------------------------------------
 def test_parse_envelope_handles_bytes_and_dict() -> None:
@@ -228,6 +383,18 @@ def test_build_embed_covers_every_kind() -> None:
         _build_embed("check_in_reminder", {"tournament_name": "C", "deadline": "5pm"}) is not None
     )
     assert _build_embed("match_ready", {"match_label": "R1", "host_name": "H"}) is not None
+    assert (
+        _build_embed(
+            "registration_verified",
+            {
+                "discord_user_id": "9001",
+                "riot_id": "Chama#Shasu",
+                "region": "EUNE",
+                "rank_text": "Unranked",
+            },
+        )
+        is not None
+    )
     assert (
         _build_embed(
             "result_recorded",

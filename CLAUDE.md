@@ -10,8 +10,15 @@ Up to 16 teams/tournament, many tournaments in parallel, run and reported throug
 **Discord**, with a desktop client that **autonomously runs each custom match via
 the local League client (LCU)** — there is **no Riot Tournament API** (Match-V5
 404s on customs; that path never existed). Results are corroborated across the 10
-players' (forgeable) clients with admin override; identity is verified once via
-**Account-V1** (PUUID is the canonical identity key).
+players' (forgeable) clients with admin override; identity is verified via a
+**one-time code + desktop/LCU flow with server-side Account-V1 resolution**
+(`/register` mints a code; the desktop reads the local LCU `current-summoner`
+**Riot ID** + `region` and submits `{code, game_name, tag_line, region}`; the
+backend resolves the **canonical PUUID** via Account-V1 `by-riot-id` — the
+double-verify — dedupes the `RiotAccount` on that PUUID, fetches a best-effort
+Solo/Duo rank via League-V4, and DMs the result in Discord). PUUID is the
+canonical identity key; **Account-V1 (Riot key) is REQUIRED** (not the LCU's
+36-char UUID, which is stored only as advisory `lcu_puuid`).
 
 ## Monorepo layout
 
@@ -90,7 +97,9 @@ Every guild-scoped table has Postgres **`FORCE ROW LEVEL SECURITY`** with a
   composite `(id, guild_id)` FK to a `UNIQUE(id, guild_id)` — a row physically
   cannot point at another guild's parent.
 
-Migrations: `services/backend/alembic/versions/` (chain `0001 -> 0002 -> 0003`).
+Migrations: `services/backend/alembic/versions/` (chain
+`0001 -> 0002 -> 0003 -> 0004 -> 0005`; 0004 added the desktop-code columns,
+0005 added the `riot_accounts` `lcu_puuid` + Solo/Duo rank-snapshot columns).
 `target_metadata = app.models.Base.metadata` (autogenerate works). Use
 **`sa.false()`** for boolean server defaults, never `func.false()` (compiles to a
 non-existent `false()` function and breaks `alembic upgrade head`).
@@ -135,13 +144,34 @@ non-existent `false()` function and breaks `alembic upgrade head`).
   LCU-write ToS spike is the **beta gate** (`docs/compliance-checklist.md`).
 - The desktop client **runs natively** (must reach `127.0.0.1` LCU/:2999); its
   Dockerfile is a build/packaging container only.
+- **Verification is code + desktop/LCU + server-side Account-V1**, not the old
+  icon-nonce: `/register` mints a one-time code (15-min TTL, single-use,
+  superseded on re-register); the desktop reads the local LCU `current-summoner`
+  **Riot ID** (`gameName`/`tagLine`) + `region` (from `/riotclient/region-locale`;
+  the LCU `puuid` is a non-canonical 36-char UUID and `session.platformId` is
+  `null`, so neither is trusted) READ-ONLY and POSTs
+  `{code, game_name, tag_line, region}` (+ advisory `lcu_puuid`/`summoner_id`) to
+  the unauthenticated, rate-limited `POST /api/v1/accounts/verify-desktop`. The
+  **code is the credential**; the backend resolves the **canonical 78-char PUUID**
+  via Account-V1 `by-riot-id` (the **double-verify** — a 404 rejects), **dedupes
+  the `RiotAccount` keyed on that canonical PUUID** (update-in-place, never a
+  second row; 409 if it belongs to another user), fetches a **best-effort**
+  League-V4 Solo/Duo rank snapshot (failure never fails the link), and publishes
+  a `registration_verified` notification so the bot **DMs the user** (fallback:
+  guild notify channel). Identity stays **advisory** (the resolve proves the Riot
+  ID exists, not ownership — corroboration + admin override is the backstop).
+  **Account-V1/Riot key is REQUIRED.** `registration_verified` is the **only**
+  notification kind carrying `discord_user_id` (DM-routed; exempt from the
+  central-feed `_FORBIDDEN_CENTRAL_KEYS` guard).
 - Commits/PRs are configured to carry **no AI attribution** — do not add
   `Co-Authored-By` trailers.
 
 ## Status
 
 Phases 0–2 done (~205 tests green): scaffold, data model + RLS, auth (Discord
-OAuth2 + JWT + refresh + RBAC), Account-V1 verification, PII lifecycle, tournament/
+OAuth2 + JWT + refresh + RBAC), code + desktop/LCU account verification
+(server-side Account-V1 PUUID resolution + dedupe + best-effort League-V4 rank
+snapshot + Discord DM), PII lifecycle, tournament/
 team/results CRUD + bracket, and autonomous LCU orchestration (state machine +
 backend + worker watchdog). See `PLAN.md §7` for the roadmap and the latest commit
 body for deferred hardening follow-ups.

@@ -85,8 +85,12 @@ export interface CurrentSummoner {
   readonly puuid: Puuid;
   /** Per-region numeric summoner id (used for invites, never for identity). */
   readonly summonerId: SummonerId;
-  /** Display name as the LCU reports it (best-effort, may be empty on drift). */
+  /** Display name as the LCU reports it (best-effort, EMPTY on modern clients). */
   readonly displayName: string;
+  /** Riot ID game name (e.g. "Chama") — reliable; the canonical identity half. */
+  readonly gameName: string;
+  /** Riot ID tag line (e.g. "Shasu") — reliable; pairs with {@link gameName}. */
+  readonly tagLine: string;
 }
 
 /** LCU-reported `gameId` — the corroboration join key (PLAN.md §3.6.5/§3.6.6). */
@@ -859,7 +863,10 @@ export class LcuAdapterImpl implements LcuAdapter {
 
   /**
    * `RE` — `GET /lol-summoner/v1/current-summoner`. READ-ONLY, own-client only.
-   * Parses `{ puuid, summonerId, displayName }` into a {@link CurrentSummoner}.
+   * Parses `{ puuid, summonerId, displayName, gameName, tagLine }` into a
+   * {@link CurrentSummoner}. `gameName`/`tagLine` are the reliable Riot ID halves
+   * (the canonical identity the backend resolves); `displayName` is EMPTY on
+   * modern clients (kept for back-compat, never used for identity).
    * ADVISORY identity signal only (PLAN.md §3.6 / §2): the caller compares the
    * PUUID to the backend's verified PUUID and warns on mismatch — it NEVER
    * gates auth, anti-smurf, or orchestration. Drift surfaces as
@@ -887,7 +894,11 @@ export class LcuAdapterImpl implements LcuAdapter {
         : ('' as SummonerId);
     const displayName =
       typeof rec['displayName'] === 'string' ? rec['displayName'] : '';
-    return { puuid, summonerId, displayName };
+    const gameName =
+      typeof rec['gameName'] === 'string' ? rec['gameName'] : '';
+    const tagLine =
+      typeof rec['tagLine'] === 'string' ? rec['tagLine'] : '';
+    return { puuid, summonerId, displayName, gameName, tagLine };
   }
 
   // -- getGameflowPhase -----------------------------------------------------

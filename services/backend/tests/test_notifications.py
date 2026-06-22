@@ -86,6 +86,41 @@ async def test_registration_approved_serializes_expected_envelope() -> None:
     _assert_no_sensitive_fields(env)
 
 
+async def test_registration_verified_carries_discord_user_id_for_dm() -> None:
+    """The DM-routed kind is the ONE exception allowed to carry discord_user_id.
+
+    Unlike every other kind (public guild embeds, no identifiers), this one is
+    DMed to the verifying user, so the snowflake rides in the payload by design.
+    """
+    from app.notifications import (
+        RegistrationVerifiedPayload,
+        publish_registration_verified,
+    )
+
+    publisher = RecordingNotificationPublisher()
+    returned = await publish_registration_verified(
+        publisher,
+        origin_guild_id=GUILD,
+        discord_user_id="123456789012345678",
+        riot_id="Chama#Shasu",
+        region="EUNE",
+        rank_text="Solo/Duo: Gold II, 45 LP",
+    )
+
+    env = publisher.published[0]
+    assert env is returned
+    assert env.origin_guild_id == GUILD
+    assert env.kind is NotificationKind.REGISTRATION_VERIFIED
+    assert isinstance(env.payload, RegistrationVerifiedPayload)
+    assert env.payload.discord_user_id == "123456789012345678"
+    assert env.payload.riot_id == "Chama#Shasu"
+    assert env.payload.region == "EUNE"
+    assert env.payload.rank_text == "Solo/Duo: Gold II, 45 LP"
+    # Round-trips through the discriminated wire form.
+    parsed = NotificationEnvelope.model_validate(json.loads(env.model_dump_json()))
+    assert parsed == env
+
+
 async def test_check_in_reminder_serializes_expected_envelope() -> None:
     publisher = RecordingNotificationPublisher()
 

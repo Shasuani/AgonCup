@@ -61,6 +61,7 @@ from app.notifications.events import (
     NotificationEnvelope,
     NotificationPayload,
     RegistrationApprovedPayload,
+    RegistrationVerifiedPayload,
     ResultRecordedPayload,
 )
 
@@ -151,6 +152,36 @@ async def publish_registration_approved(
     return envelope
 
 
+async def publish_registration_verified(
+    publisher: NotificationPublisher,
+    *,
+    origin_guild_id: str,
+    discord_user_id: str,
+    riot_id: str,
+    region: str,
+    rank_text: str,
+) -> NotificationEnvelope:
+    """Emit ``registration_verified`` (PLAN.md §3.1). Returns the published envelope.
+
+    PRIVACY EXCEPTION: this is the only ``publish_*`` helper whose payload carries
+    a ``discord_user_id`` — it is DM-routed (the bot DMs the verifying user, with
+    the guild notify channel only as a fallback), NOT a public guild embed. It is
+    exempt-by-design from the central-feed identifier guard and must never be
+    projected onto the central feed.
+    """
+    envelope = build_envelope(
+        origin_guild_id=origin_guild_id,
+        payload=RegistrationVerifiedPayload(
+            discord_user_id=discord_user_id,
+            riot_id=riot_id,
+            region=region,
+            rank_text=rank_text,
+        ),
+    )
+    await publisher.publish(envelope)
+    return envelope
+
+
 async def publish_check_in_reminder(
     publisher: NotificationPublisher,
     *,
@@ -225,5 +256,6 @@ __all__ = [
     "publish_check_in_reminder",
     "publish_match_ready",
     "publish_registration_approved",
+    "publish_registration_verified",
     "publish_result_recorded",
 ]

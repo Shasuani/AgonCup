@@ -14,6 +14,8 @@ function summoner(puuid: string): CurrentSummoner {
     puuid: puuid as Puuid,
     summonerId: "123" as never,
     displayName: "Tester",
+    gameName: "Chama",
+    tagLine: "Shasu",
   };
 }
 

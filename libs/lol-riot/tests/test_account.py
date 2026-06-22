@@ -13,6 +13,7 @@ import pytest
 from lol_riot import (
     AccountDTO,
     ContinentalRoute,
+    LeagueEntryDTO,
     NotFound,
     PlatformRoute,
     RateLimited,
@@ -192,6 +193,120 @@ async def test_summoner_by_puuid_404_raises_not_found() -> None:
     client = _client(handler)
     with pytest.raises(NotFound):
         await client.get_summoner_by_puuid("missing", PlatformRoute.NA1)
+    await client.aclose()
+
+
+async def test_league_entries_by_puuid_uses_platform_host_and_maps() -> None:
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "queueType": "RANKED_SOLO_5x5",
+                    "tier": "GOLD",
+                    "rank": "II",
+                    "leaguePoints": 45,
+                    "wins": 30,
+                    "losses": 20,
+                },
+                {
+                    "queueType": "RANKED_FLEX_SR",
+                    "tier": "SILVER",
+                    "rank": "I",
+                    "leaguePoints": 10,
+                    "wins": 5,
+                    "losses": 7,
+                },
+            ],
+        )
+
+    # Account-V1 route is continental, but League-V4 must hit the platform host.
+    client = _client(handler, route=ContinentalRoute.EUROPE)
+    entries = await client.get_league_entries_by_puuid("PUUID-78", PlatformRoute.EUN1)
+
+    assert seen["url"] == (
+        "https://eun1.api.riotgames.com/lol/league/v4/entries/by-puuid/PUUID-78"
+    )
+    assert len(entries) == 2
+    assert isinstance(entries[0], LeagueEntryDTO)
+    solo = next(e for e in entries if e.queue_type == "RANKED_SOLO_5x5")
+    assert solo.tier == "GOLD"
+    assert solo.rank == "II"
+    assert solo.league_points == 45
+    assert solo.wins == 30
+    assert solo.losses == 20
+    await client.aclose()
+
+
+async def test_league_entries_by_puuid_empty_array_is_unranked() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[])
+
+    client = _client(handler)
+    entries = await client.get_league_entries_by_puuid("P", PlatformRoute.NA1)
+    assert entries == []
+    await client.aclose()
+
+
+async def test_league_entries_by_puuid_apex_tier_empty_division() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "queueType": "RANKED_SOLO_5x5",
+                    "tier": "MASTER",
+                    "rank": "",
+                    "leaguePoints": 312,
+                    "wins": 100,
+                    "losses": 80,
+                }
+            ],
+        )
+
+    client = _client(handler)
+    entries = await client.get_league_entries_by_puuid("P", PlatformRoute.NA1)
+    assert entries[0].tier == "MASTER"
+    assert entries[0].rank == ""
+    assert entries[0].league_points == 312
+    await client.aclose()
+
+
+async def test_league_entries_by_puuid_defaults_on_missing_fields() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[{}])
+
+    client = _client(handler)
+    entries = await client.get_league_entries_by_puuid("P", PlatformRoute.NA1)
+    assert entries[0] == LeagueEntryDTO(
+        queue_type="", tier="", rank="", league_points=0, wins=0, losses=0
+    )
+    await client.aclose()
+
+
+async def test_league_entries_by_puuid_404_raises_not_found() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    client = _client(handler)
+    with pytest.raises(NotFound):
+        await client.get_league_entries_by_puuid("missing", PlatformRoute.NA1)
+    await client.aclose()
+
+
+async def test_league_entries_by_puuid_url_encodes_puuid() -> None:
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["raw_path"] = request.url.raw_path.decode()
+        return httpx.Response(200, json=[])
+
+    client = _client(handler)
+    await client.get_league_entries_by_puuid("a/b c", PlatformRoute.NA1)
+    assert "a%2Fb%20c" in seen["raw_path"]
     await client.aclose()
 
 

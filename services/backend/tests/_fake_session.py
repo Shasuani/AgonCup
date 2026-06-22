@@ -16,11 +16,13 @@ from typing import Any
 from app.models import (
     Guild,
     Registration,
+    RiotAccount,
     Team,
     TeamMember,
     Tournament,
     User,
     UserGuildRole,
+    VerificationAttempt,
 )
 
 # Models the fake session can store/query for these phases.
@@ -32,6 +34,8 @@ _MODELS: tuple[type, ...] = (
     TeamMember,
     Tournament,
     Registration,
+    RiotAccount,
+    VerificationAttempt,
 )
 
 
@@ -95,6 +99,10 @@ class FakeSession:
             for obj in rows:
                 if getattr(obj, "id", None) is None and hasattr(obj, "id"):
                     obj.id = uuid.uuid4()
+
+    def begin_nested(self) -> _FakeTxn:
+        """SAVEPOINT stand-in (the code-mint loop wraps each INSERT in one)."""
+        return _FakeTxn()
 
     async def delete(self, obj: Any) -> None:
         bucket = self.store.get(type(obj))

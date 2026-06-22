@@ -41,7 +41,7 @@ PY_SERVICE_DIRS := \
 PY_PKG_DIRS := $(PY_LIB_DIRS) $(PY_SERVICE_DIRS)
 
 .PHONY: help up down build-bases test test-db lint format typecheck gen-clients fixtures \
-	dev dev-backend dev-frontend dev-bot
+	dev dev-backend dev-frontend dev-bot dev-desktop
 
 # --- DB / RLS integration test config ----------------------------------------
 # Local equivalent of the CI `db-rls` job. Assumes a REACHABLE Postgres (e.g.
@@ -84,6 +84,9 @@ dev-frontend: ## Run the Vite admin SPA on :5173 (proxies /api -> :8000).
 dev-bot: ## Run the Discord bot (host; sources services/bot/.env). Needs the backend up.
 	cd services/bot && set -a && . ./.env && set +a && \
 		PYTHONPATH=src $(UV) run python -m app.main
+
+dev-desktop: ## Build + launch the Electron desktop (LCU) client natively (must reach 127.0.0.1 LCU).
+	cd services/desktop && npm run build && npm start
 
 dev: ## Run backend (:8000) AND frontend (:5173) together; Ctrl-C stops both.
 	@echo "==> backend :8000  +  frontend :5173  (Ctrl-C stops both)"

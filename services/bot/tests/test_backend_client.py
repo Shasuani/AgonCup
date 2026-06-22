@@ -86,20 +86,39 @@ def test_onboard_guild_sends_service_auth(monkeypatch: Any) -> None:
     assert out["guild_id"] == "g1"
 
 
-def test_link_account_uses_riot_aliases(monkeypatch: Any) -> None:
+def test_start_registration_mints_code(monkeypatch: Any) -> None:
     client = _client(
         monkeypatch,
         _MockResponse(
-            200, {"verified": False, "target_icon_id": 7, "game_name": "X", "tag_line": "EU"}
+            200,
+            {
+                "attempt_id": "a1",
+                "code": "7K3M-QP9R",
+                "expires_at": "2026-06-21T00:15:00Z",
+                "origin_guild_id": "g1",
+                "instruction": "Open the desktop app and enter this code.",
+            },
         ),
     )
-    asyncio.run(client.link_account(CTX, game_name="X", tag_line="EU", region="euw1"))
+    out = asyncio.run(client.start_registration(CTX))
 
     sent = _MockAsyncClient.last_post
     assert sent["url"].endswith("/integrations/discord/accounts/link")
-    assert sent["json"]["gameName"] == "X"
-    assert sent["json"]["tagLine"] == "EU"
-    assert sent["json"]["region"] == "euw1"
+    # Only the asserted Discord context is relayed — no Riot ID / region.
+    assert sent["json"] == {
+        "ctx": {
+            "discord_user_id": 111,
+            "discord_guild_id": 222,
+            "is_discord_guild_admin": True,
+            "display_name": "Tester",
+        }
+    }
+    assert out["code"] == "7K3M-QP9R"
+
+
+def test_link_account_is_alias_of_start_registration() -> None:
+    # Back-compat: the old name maps to the new parameter-less method.
+    assert BackendClient.link_account is BackendClient.start_registration
 
 
 def test_create_tournament_payload(monkeypatch: Any) -> None:

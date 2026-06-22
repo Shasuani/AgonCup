@@ -8,6 +8,9 @@ from __future__ import annotations
 
 from .dtos import (
     MAX_TEAMS,
+    DesktopRegistrationDTO,
+    DesktopVerifyRequestDTO,
+    DesktopVerifyResponseDTO,
     GuildDTO,
     MatchDTO,
     MatchLobbyDTO,
@@ -54,6 +57,9 @@ __all__ = [
     "PlayerKDA",
     "QuorumDetail",
     "MatchResultDTO",
+    "DesktopRegistrationDTO",
+    "DesktopVerifyRequestDTO",
+    "DesktopVerifyResponseDTO",
     # Enums
     "GuildStatus",
     "TeamMemberRole",

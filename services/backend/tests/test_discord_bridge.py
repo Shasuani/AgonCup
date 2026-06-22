@@ -224,3 +224,41 @@ async def test_join_tournament_full_propagates_delegated_error() -> None:
             tournament_id=tournament.id,
             team_id=late.id,
         )
+
+
+# ---------------------------------------------------------------------------
+# Account linking — desktop code mint (delegated to app.accounts.service)
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_start_registration_mints_code_with_origin_guild() -> None:
+    from app.accounts import service as accounts_service
+    from app.models import VerificationAttempt
+
+    session = FakeSession()
+    guild = await _seed_onboarded_guild(session)
+
+    result = await bridge.start_registration(
+        session, ctx=_ctx(discord_user_id=DISCORD_MEMBER, is_admin=False)
+    )
+
+    attempt = session.store[VerificationAttempt][0]
+    assert attempt.verify_kind == accounts_service.VERIFY_KIND_DESKTOP_CODE
+    assert attempt.status == accounts_service.STATUS_PENDING
+    assert str(attempt.origin_guild_id) == str(guild.id)
+    assert result.origin_guild_id == str(guild.id)
+    assert result.code  # grouped display form
+    # The acting user was upserted (resolved by Discord snowflake).
+    assert any(u.discord_user_id == DISCORD_MEMBER for u in session.store[User])
+
+
+@pytest.mark.asyncio
+async def test_start_registration_tolerates_unonboarded_guild() -> None:
+    from app.models import VerificationAttempt
+
+    session = FakeSession()  # no guild seeded
+    result = await bridge.start_registration(
+        session, ctx=_ctx(discord_user_id=DISCORD_MEMBER, is_admin=False)
+    )
+    # Linking is global — a non-onboarded guild simply leaves origin_guild_id NULL.
+    assert result.origin_guild_id is None
+    assert session.store[VerificationAttempt][0].origin_guild_id is None

@@ -52,6 +52,7 @@ class NotificationKind(StrEnum):
     """
 
     REGISTRATION_APPROVED = "registration_approved"
+    REGISTRATION_VERIFIED = "registration_verified"
     CHECK_IN_REMINDER = "check_in_reminder"
     MATCH_READY = "match_ready"
     RESULT_RECORDED = "result_recorded"
@@ -67,6 +68,31 @@ class RegistrationApprovedPayload(_Strict):
     kind: Literal[NotificationKind.REGISTRATION_APPROVED] = NotificationKind.REGISTRATION_APPROVED
     tournament_name: str = Field(description="Display name of the tournament.")
     team_name: str = Field(description="Resolved display name of the registered team.")
+
+
+class RegistrationVerifiedPayload(_Strict):
+    """A Riot account was verified + linked from the desktop app (PLAN.md §3.1).
+
+    PRIVACY EXCEPTION (by design): this is the ONE notification kind that carries
+    a ``discord_user_id``. Unlike every other kind — which fan out to a *public*
+    guild ``notify_channel_id`` embed and therefore must never carry an
+    identifier — this kind is **DM-routed**: the bot DMs the verifying user
+    directly (falling back to the guild notify channel only if the DM fails). The
+    snowflake is required so the bot can address that DM.
+
+    Because it is DM-routed it is exempt-by-design from the central-feed
+    ``_FORBIDDEN_CENTRAL_KEYS`` guard (``lol_discord.notifications``): it must
+    NEVER be reused as a central-feed projection. ``riot_id`` is the resolved
+    Riot ID display string (``"Chama#Shasu"``), ``region`` a display label
+    (``"EUNE"``), and ``rank_text`` the Solo/Duo snapshot (``"Gold II, 45 LP"``
+    or ``"Unranked"``).
+    """
+
+    kind: Literal[NotificationKind.REGISTRATION_VERIFIED] = NotificationKind.REGISTRATION_VERIFIED
+    discord_user_id: str = Field(description="Snowflake of the user to DM (DM-routed kind).")
+    riot_id: str = Field(description="Resolved Riot ID display string, e.g. 'Chama#Shasu'.")
+    region: str = Field(description="Display region label, e.g. 'EUNE'.")
+    rank_text: str = Field(description="Solo/Duo rank snapshot display, or 'Unranked'.")
 
 
 class CheckInReminderPayload(_Strict):
@@ -110,6 +136,7 @@ class ResultRecordedPayload(_Strict):
 
 NotificationPayload = Annotated[
     RegistrationApprovedPayload
+    | RegistrationVerifiedPayload
     | CheckInReminderPayload
     | MatchReadyPayload
     | ResultRecordedPayload,
@@ -146,5 +173,6 @@ __all__ = [
     "NotificationKind",
     "NotificationPayload",
     "RegistrationApprovedPayload",
+    "RegistrationVerifiedPayload",
     "ResultRecordedPayload",
 ]

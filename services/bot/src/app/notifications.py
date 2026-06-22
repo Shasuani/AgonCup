@@ -71,6 +71,7 @@ def _build_embed(kind: str, payload: dict[str, Any]) -> dict[str, Any] | None:
         match_ready,
         match_result,
         registration_approved,
+        registration_verified,
         tournament_check_in,
     )
 
@@ -78,6 +79,14 @@ def _build_embed(kind: str, payload: dict[str, Any]) -> dict[str, Any] | None:
         return registration_approved(
             tournament_name=payload.get("tournament_name", "the tournament"),
             team_name=payload.get("team_name", "Your team"),
+        )
+    if kind == "registration_verified":
+        # DM-routed account-verified notice: carries the resolved Riot ID, the
+        # region display label, and the best-effort Solo/Duo rank snapshot.
+        return registration_verified(
+            riot_id=payload.get("riot_id", "Your account"),
+            region=payload.get("region"),
+            rank_text=payload.get("rank_text"),
         )
     if kind == "check_in_reminder":
         return tournament_check_in(name=payload["tournament_name"], deadline=payload["deadline"])
@@ -187,13 +196,29 @@ class NotificationSubscriber:
             log.warning("notification payload missing kind")
             return
 
-        channel = await self._resolve_channel(origin_guild_id)
-        if channel is None:
-            return
-
         embed_dict = _build_embed(kind, payload)
         if embed_dict is None:
             log.info("ignoring unknown notification kind: %s", kind)
+            return
+
+        # ``registration_verified`` is the one DM-routed kind (it carries the
+        # user's discord_user_id so the bot can reach them directly). It is a
+        # PERSONAL confirmation containing the linker's Riot ID + region + rank.
+        # By design this is DM-ONLY: if the DM fails (DMs closed, bad id, REST
+        # error) we DROP it (log only) rather than fall back to a public guild
+        # channel — broadcasting a user's Riot ID + rank to a public channel
+        # merely because their DMs are closed is an unintended PII disclosure
+        # the user never consented to (privacy widening). The account is still
+        # linked; the confirmation is advisory.
+        if kind == "registration_verified":
+            if not await self._try_dm(payload.get("discord_user_id"), embed_dict):
+                log.info(
+                    "registration_verified DM not delivered; dropping (DM-only, no public fallback)"
+                )
+            return
+
+        channel = await self._resolve_channel(origin_guild_id)
+        if channel is None:
             return
 
         # Never ping @everyone/roles/users from a backend-driven notification or
@@ -202,6 +227,29 @@ class NotificationSubscriber:
             embed=discord.Embed.from_dict(embed_dict),
             allowed_mentions=discord.AllowedMentions.none(),
         )
+
+    async def _try_dm(self, discord_user_id: Any, embed_dict: dict[str, Any]) -> bool:
+        """Attempt to DM ``embed_dict`` to the given Discord user id.
+
+        Returns ``True`` if the DM was sent, ``False`` on any failure (closed DMs,
+        unknown/invalid id, REST error). The caller DROPS the notification on
+        ``False`` (no public guild fallback — see ``_dispatch``) to avoid leaking
+        the linker's Riot ID + rank to a public channel. Never raises — resilience
+        contract (PLAN.md §3.2).
+        """
+        if discord_user_id is None:
+            return False
+        try:
+            user_id = int(discord_user_id)
+            user = self._bot.get_user(user_id) or await self._bot.fetch_user(user_id)
+            await user.send(
+                embed=discord.Embed.from_dict(embed_dict),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return True
+        except (discord.Forbidden, discord.HTTPException, ValueError, TypeError) as exc:
+            log.info("registration_verified DM failed (%s); falling back to guild channel", exc)
+            return False
 
     async def _resolve_channel(self, origin_guild_id: str) -> discord.abc.Messageable | None:
         """Resolve the configured notify channel for a backend guild id (or ``None``).

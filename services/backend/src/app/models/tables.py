@@ -43,6 +43,7 @@ from sqlalchemy import (
     ForeignKey,
     ForeignKeyConstraint,
     Integer,
+    String,
     Text,
     UniqueConstraint,
     false,
@@ -125,6 +126,24 @@ class RiotAccount(Base):
     region: Mapped[str | None] = mapped_column(Text, nullable=True)
     verified: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # The guild the user ran /register from, copied from the verification attempt
+    # at verify time (the attempt may later be pruned). Plain FK; global table.
+    origin_guild_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("guilds.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    # Advisory 36-char LCU UUID (NOT the canonical PUUID) — a secondary possession
+    # signal sent by the desktop at verify time (PLAN.md §3.1). Nullable.
+    lcu_puuid: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Best-effort Solo/Duo rank snapshot taken at desktop-verify time (League-V4).
+    # All nullable: unranked / fetch-failed leaves them NULL (PLAN.md §3.5).
+    rank_tier: Mapped[str | None] = mapped_column(Text, nullable=True)
+    rank_division: Mapped[str | None] = mapped_column(Text, nullable=True)
+    rank_lp: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    rank_queue: Mapped[str | None] = mapped_column(Text, nullable=True)
+    rank_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 # ---------------------------------------------------------------------------
@@ -566,22 +585,53 @@ class PlayerCentralVisibility(Base):
 
 
 class VerificationAttempt(Base):
-    """One-time Account-V1 ownership challenge (PLAN.md §3.1). Global (account linking)."""
+    """One-time account-ownership challenge (PLAN.md §3.1). Global (account linking).
+
+    Two flavours (``verify_kind``):
+
+    * ``icon`` — legacy Account-V1 + Summoner-V4 profile-icon challenge: a random
+      ``target_icon_id`` + single-use ``nonce``, polled by the worker.
+    * ``desktop_code`` — the current flow: a one-time human-typeable ``code`` bound
+      to (user, ``origin_guild_id``); the desktop reads the LCU PUUID and POSTs it
+      back to complete the link. No icon, no nonce, no Account-V1 dependency.
+
+    ``puuid``/``nonce``/``target_icon_id`` are nullable so code-mint rows (which do
+    not know the PUUID until the desktop POSTs, and never use an icon/nonce) are
+    representable; icon rows still set all three.
+    """
 
     __tablename__ = "verification_attempts"
     __table_args__ = (
         CheckConstraint(
             "status in ('pending','verified','expired','failed')", name="status_allowed"
         ),
+        CheckConstraint("verify_kind in ('icon','desktop_code')", name="verify_kind_allowed"),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
     user_id: Mapped[uuid.UUID] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    puuid: Mapped[str] = mapped_column(Text, nullable=False)
-    nonce: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
-    target_icon_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    # PUUID unknown at code-mint time; filled when the desktop POSTs (icon flow
+    # sets it up front from Account-V1).
+    puuid: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Icon flow only — single-use challenge nonce (UNIQUE ignores NULLs in PG).
+    nonce: Mapped[str | None] = mapped_column(Text, nullable=True, unique=True)
+    # Icon flow only — the profile icon the user must set.
+    target_icon_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Desktop-code flow only — the one-time link credential (stored de-hyphenated).
+    # String(12) matches migration 0004 VARCHAR(12) (keeps autogenerate clean).
+    code: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    # Which verification flow this row belongs to (worker poll skips code rows).
+    # String(16) matches migration 0004 VARCHAR(16) (keeps autogenerate clean).
+    verify_kind: Mapped[str] = mapped_column(String(16), nullable=False, server_default="icon")
+    # Desktop-code flow — the guild the user ran /register from (plain FK; global).
+    origin_guild_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("guilds.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = created_at_col()

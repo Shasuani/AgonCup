@@ -113,6 +113,67 @@ def test_result_report_and_match_result_roundtrip() -> None:
     assert result.quorum_detail.both_teams_represented is True
 
 
+def test_desktop_verify_request_new_shape() -> None:
+    """Request drops canonical puuid; carries Riot ID + region + advisory signals."""
+    req = ls.DesktopVerifyRequestDTO(
+        code="ABCD-EFGH",
+        game_name="Chama",
+        tag_line="Shasu",
+        region="eun1",
+        lcu_puuid="ec15f3f7-785e-57e8-8931-590e59d62f9e",
+        summoner_id="55997829",
+    )
+    assert req.game_name == "Chama"
+    assert req.tag_line == "Shasu"
+    assert req.region == "eun1"
+    assert req.lcu_puuid is not None and req.summoner_id == "55997829"
+
+    # Optional advisory fields default to None.
+    minimal = ls.DesktopVerifyRequestDTO(
+        code="ABCD-EFGH", game_name="g", tag_line="t", region="na1"
+    )
+    assert minimal.lcu_puuid is None
+    assert minimal.summoner_id is None
+
+    # game_name/tag_line are required (canonical puuid no longer accepted).
+    with pytest.raises(ValidationError):
+        ls.DesktopVerifyRequestDTO(code="ABCD-EFGH", region="na1")  # type: ignore[call-arg]
+    with pytest.raises(ValidationError):
+        ls.DesktopVerifyRequestDTO(
+            code="ABCD-EFGH",
+            game_name="g",
+            tag_line="t",
+            region="na1",
+            puuid="legacy",  # type: ignore[call-arg]
+        )
+
+
+def test_desktop_verify_response_rank_snapshot() -> None:
+    resp = ls.DesktopVerifyResponseDTO(
+        account_id=uuid4(),
+        puuid="canonical-78-char-puuid",
+        verified=True,
+        game_name="Chama",
+        tag_line="Shasu",
+        region="eun1",
+        tier="GOLD",
+        division="II",
+        league_points=45,
+        rank_text="Gold II, 45 LP",
+    )
+    assert resp.verified is True
+    assert resp.tier == "GOLD"
+    assert resp.rank_text == "Gold II, 45 LP"
+
+    # rank_text defaults to "Unranked"; rank fields default to None.
+    unranked = ls.DesktopVerifyResponseDTO(
+        account_id=uuid4(), puuid="p", verified=True
+    )
+    assert unranked.rank_text == "Unranked"
+    assert unranked.tier is None
+    assert unranked.league_points is None
+
+
 def test_extra_fields_forbidden() -> None:
     with pytest.raises(ValidationError):
         ls.UserDTO(

@@ -26,6 +26,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.accounts import service as accounts_service
 from app.guilds import service as guilds_service
 from app.guilds.settings import GuildSettings, GuildSettingsPatch
 from app.models import Guild, Registration, Team, TeamMember, Tournament, User
@@ -145,6 +146,41 @@ async def update_guild_settings(
 
 
 # ---------------------------------------------------------------------------
+# Account linking (delegated to app.accounts.service) — desktop code flow
+# ---------------------------------------------------------------------------
+async def start_registration(
+    session: AsyncSession, *, ctx: DiscordContext
+) -> accounts_service.DesktopRegistrationResult:
+    """Mint a one-time desktop-link code for the acting user (PLAN.md §3.1).
+
+    Account linking is GLOBAL (``verification_attempts`` is not guild-scoped), so
+    this does NOT set the tenant GUC. It still resolves the backend ``guild_id``
+    from the Discord guild to record it as ``origin_guild_id`` on the attempt (the
+    guild the user ran ``/register`` from), then delegates the code mint.
+
+    Unlike the other bridge calls, a guild that was never onboarded is tolerated —
+    a user can link their account from anywhere; ``origin_guild_id`` is simply left
+    NULL in that case (the link itself is global).
+    """
+    user = await guilds_service.upsert_user_by_discord_id(
+        session,
+        discord_user_id=ctx.discord_user_id,
+        display_name=ctx.display_name,
+    )
+    try:
+        guild = await guilds_service.resolve_guild_by_discord_id(
+            session, discord_guild_id=ctx.discord_guild_id
+        )
+        origin_guild_id: str | None = str(guild.id)
+    except guilds_service.GuildNotOnboardedError:
+        origin_guild_id = None
+
+    return await accounts_service.start_desktop_registration(
+        session, user_id=str(user.id), origin_guild_id=origin_guild_id
+    )
+
+
+# ---------------------------------------------------------------------------
 # Teams (delegated to app.teams.service)
 # ---------------------------------------------------------------------------
 async def create_team(session: AsyncSession, *, ctx: DiscordContext, name: str) -> Team:
@@ -250,6 +286,7 @@ __all__ = [
     "leave_tournament",
     "list_tournaments",
     "onboard_guild",
+    "start_registration",
     "tournament_status",
     "update_guild_settings",
 ]

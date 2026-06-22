@@ -6,7 +6,7 @@ Account-V1 only (no Tournament-V5, no Match-V5), plus a minimal Summoner-V4
 
 from __future__ import annotations
 
-from lol_riot.account import AccountDTO, RiotAccountClient, SummonerDTO
+from lol_riot.account import AccountDTO, LeagueEntryDTO, RiotAccountClient, SummonerDTO
 from lol_riot.exceptions import NotFound, RateLimited, RiotApiError
 from lol_riot.limiter import TokenBucketLimiter
 from lol_riot.routing import ContinentalRoute, PlatformRoute
@@ -14,6 +14,7 @@ from lol_riot.routing import ContinentalRoute, PlatformRoute
 __all__ = [
     "AccountDTO",
     "ContinentalRoute",
+    "LeagueEntryDTO",
     "NotFound",
     "PlatformRoute",
     "RateLimited",

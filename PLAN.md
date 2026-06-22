@@ -39,10 +39,17 @@ That path is **removed entirely** in v3. The load-bearing changes:
    creation. There is **no LCU host migration**: host loss tears down the lobby,
    so failover = pre-emptive `promote` (planned) or full re-create + re-invite
    (unplanned), driven by a fenced, phase-gated state machine.
-6. **Riot Web API shrinks to Account-V1 only** (Riot ID → PUUID, one-time
-   linking; optional minimal Summoner-V4 for the icon nonce). A **personal/
-   standard key suffices** — **no Tournament API, no production-key review, no
-   "no beta without key" gate.** Match-V5 is **OUT for v1.** This removes the
+6. **Verification is a code + desktop/LCU flow with server-side Account-V1
+   resolution** (`/register` mints a one-time code; the desktop reads the local
+   LCU `current-summoner` **Riot ID** — `gameName`/`tagLine` — plus the platform
+   `region` and submits `{code, game_name, tag_line, region}`). The backend then
+   resolves the **canonical 78-char PUUID** via Account-V1 `by-riot-id` (the
+   "double verification": the code proves Discord-registration control, the
+   Account-V1 resolve proves the Riot ID is real — a 404 rejects the link). A
+   **Riot personal/standard key is REQUIRED** for this resolve (and the
+   best-effort Solo/Duo rank snapshot via League-V4) — **no Tournament API, no
+   production-key review, no "no beta without key" gate.** Match-V5 is **OUT for
+   v1.** This removes the
    4+ week production-key approval from the critical path.
 7. **The internet-facing `/riot/callback` ingress is gone.** Riot never calls
    back. It is replaced by an **authenticated desktop result-report ingress**
@@ -148,7 +155,10 @@ Guild            id, discord_guild_id, name, settings(jsonb), is_central,
 User             id, discord_user_id, display_name, created_at            # global
 RiotAccount      id, user_id, puuid (UNIQUE, canonical), summoner_id,
                  display_name(gameName,tagLine, refreshable, NON-identity),
-                 region, verified, verified_at                            # global
+                 region, verified, verified_at, origin_guild_id,
+                 lcu_puuid(advisory 36-char LCU UUID),                    # global
+                 rank_tier, rank_division, rank_lp, rank_queue,
+                 rank_checked_at  (best-effort Solo/Duo snapshot, mig 0005)
 Team             id, name, guild_id, captain_user_id, created_at          # UNIQUE(id,guild_id)
 TeamMember       team_id, user_id, role(captain|player|sub)
 Tournament       id, guild_id, name, status, format, max_teams(=16),
@@ -189,7 +199,8 @@ ResultNonce      id, match_id, puuid, nonce, lcu_game_id(nullable),
 CentralFeedItem  id, source_guild_id, tournament_id, projected_fields(jsonb whitelist),
                  published_by, published_at, approved_by, approved_at, revoked_at
 PlayerCentralVisibility  user_id, tournament_id, visibility(team_only|show_riot_id)
-VerificationAttempt  id, user_id, puuid, nonce, target_icon_id, status, expires_at
+VerificationAttempt  id, user_id, puuid(nullable), code, origin_guild_id, verify_kind,
+                 nonce(nullable, legacy), target_icon_id(nullable, legacy), status, expires_at
 AuditLog         id, actor_id, actor_kind(platform|guild|system), guild_id,
                  action, entity, before, after, ts                       # append-only
 ```
@@ -230,7 +241,9 @@ Key rules and constraints:
 **Modules**
 - `auth/` — Discord OAuth2 (auth-code + `state`), short-lived access JWT +
   rotating revocable refresh tokens, per-(user, guild) authorization.
-- `accounts/` — Riot account linking (Account-V1) + the hardened verification flow.
+- `accounts/` — account linking via the **code + desktop/LCU verification flow**
+  with **server-side Account-V1 PUUID resolution** (the double-verify) + a
+  best-effort League-V4 Solo/Duo rank snapshot.
 - `tournaments/` — CRUD, bracket generation, seeding, check-in, policy-rule
   enforcement.
 - `orchestration/` — **host-epoch lease + designation**, the per-match lobby
@@ -246,15 +259,56 @@ Key rules and constraints:
 N=3..16 incl. byes; walkover/forfeit is a *result type*, not a bracket shape;
 winner advancement is a pure function of `(adjudicated result → next slot)`.
 
-**Account verification (hardened, Account-V1 only):**
-1. Resolve Riot ID → `puuid` via Account-V1 `by-riot-id` at link time; persist
-   `puuid` (canonical) and `summoner_id`.
-2. **Server-side ownership challenge:** single-use, short-TTL nonce bound to
-   `(discord_user_id, puuid)` mapped to a random target `profileIconId`; an arq
-   job polls Summoner-V4 `by-puuid` and marks verified on match (bounded retries,
-   hard expiry). Rate-limit `/register` per user and per guild before any Riot
-   call. (LCU `current-summoner` PUUID is an *advisory* secondary signal only.)
-3. Support **re-verification and revocation**; `verified=true` is not permanent.
+**Account verification (code + desktop/LCU flow):**
+1. **`/register` mints a one-time code** bound to `(discord_user_id, origin_guild_id)`
+   with a 15-min TTL (the existing `VERIFICATION_TTL`). The code is single-use,
+   8 chars over a 31-symbol unambiguous Crockford-base32 alphabet (~40 bits),
+   shown grouped `XXXX-XXXX` ephemerally in Discord. A new `/register` for the
+   same `(user, guild)` **supersedes** any prior pending code. The bot no longer
+   shows a profile-icon challenge and never asks for a Riot ID.
+2. **Desktop completes verification.** The user enters the code in the Electron
+   client, which reads the **local LCU `current-summoner`** (READ-ONLY) for the
+   **Riot ID** (`gameName`/`tagLine`) and the platform `region` (from
+   `/riotclient/region-locale`, e.g. `webRegion "eune" → "eun1"`; the LCU
+   `puuid` is a 36-char UUID that is **NOT** the canonical identity and
+   `/lol-login/v1/session.platformId` is `null`, so neither is trusted for
+   identity/region). It `POST`s `{code, game_name, tag_line, region}` (plus an
+   advisory `lcu_puuid` and `summoner_id` for invites) to the unauthenticated
+   `POST /api/v1/accounts/verify-desktop`. The **code itself is the credential**
+   (issued to an authenticated Discord user).
+3. **Backend resolves + dedupes.** The backend validates the pending/unexpired
+   code, then resolves the **canonical 78-char PUUID** via Account-V1
+   `by-riot-id(gameName, tagLine)` — continental-routed from the platform
+   `region`. A 404 means the Riot ID does not exist → reject (404). It then
+   **dedupe-upserts the `RiotAccount` keyed on the canonical PUUID** (`verified=true`,
+   persists `region`/`origin_guild_id`/`game_name`/`tag_line`/`lcu_puuid`),
+   **updating the existing row in place** — including any prior unverified
+   row carrying the same canonical PUUID — so it **never creates a duplicate**.
+   A canonical PUUID already linked to a **different** user returns **409**. The
+   endpoint is **per-IP rate-limited** with generic errors to resist code-guessing.
+4. **Rank snapshot + Discord DM.** After resolving the PUUID the backend makes a
+   **best-effort** League-V4 `entries/by-puuid` call (platform-routed) and stores
+   the `RANKED_SOLO_5x5` tier/division/LP snapshot on the account (a rank-fetch
+   failure is logged and **never fails the link**). On success it publishes a
+   `registration_verified` notification; the bot **DMs the user** (falling back
+   to the guild notify channel) e.g. *"Linked: Chama#Shasu (EUNE) — Solo/Duo:
+   Gold II, 45 LP"*. This is the **only** notification kind that carries
+   `discord_user_id` (DM-routed; exempt by design from the central-feed guard).
+5. **Trust boundary (double verification):** the code proves control of the
+   Discord registration; the Account-V1 resolve proves the Riot ID is **real**.
+   Resolving by Riot ID proves the Riot ID *exists*, not that the submitter
+   *owns* it — a technical user could type someone else's public Riot ID — so
+   identity stays **advisory**: the possession signal is the LCU read (you must
+   be signed into that client) plus the optional `lcu_puuid`, and true ownership
+   is backstopped by **cross-client result corroboration + admin override**,
+   never by this endpoint alone. Dedupe-by-canonical-PUUID (409 on conflict)
+   prevents account-takeover-by-duplicate. This is a **stronger** trust model
+   than blindly trusting the desktop-sent LCU UUID (which also caused the
+   duplicate-row bug this flow fixes).
+6. **Account-V1 is REQUIRED** (Riot ID → canonical PUUID is the server-side
+   double-verify), not optional. Support **re-verification and revocation**;
+   `verified=true` is not permanent. The legacy profile-icon nonce challenge
+   (and its Summoner-V4 polling) is **retired**.
 
 ### 3.2 Discord Bot (multi-tenant)
 
@@ -349,17 +403,26 @@ shift is then a **single fix/disable point**.
   (cost-free anti-abuse — no stake/currency, which would suppress the
   minority-team signal that is the main collusion defense).
 
-### 3.5 Riot Integration — Account-V1 linking only
+### 3.5 Riot Integration — Account-V1 REQUIRED (server-side double-verify)
 
-**The only Riot Web API used.** One-time account linking: Riot ID
-(`gameName`+`tagLine`) → PUUID via
-`GET /riot/account/v1/accounts/by-riot-id/{gameName}/{tagLine}` on a continental
-cluster (`americas|asia|europe` — **not** `na1/euw1`); optional
-`Summoner-V4 by-puuid` for the profile-icon nonce. **PUUID is canonical and
-immutable.** A **personal/standard key** suffices (20 req/s, 100 req/2min) — **no
-Tournament API, no production review, no provider, no callback, no Match-V5.**
-**Match-V5 is OUT for v1.** A light token-bucket limiter (honor 429 `Retry-After`)
-protects the one-time linking + verification polling; this is *not* the
+**A Riot Web API key IS required for verification.** The desktop reads the Riot
+ID (`gameName`/`tagLine`) + platform `region` from the LCU, but the backend
+resolves the **canonical 78-char PUUID server-side** via Account-V1
+(`GET /riot/account/v1/accounts/by-riot-id/{gameName}/{tagLine}` on a continental
+cluster `americas|asia|europe`) — this resolve **IS** the double-verification (a
+404 ⇒ the Riot ID does not exist ⇒ reject). The LCU `puuid` is a 36-char UUID
+that is **not** the canonical identity and is stored only as an advisory
+`lcu_puuid`. Region is taken from `/riotclient/region-locale` (the LCU
+`session.platformId` is `null`); `_PLATFORM_TO_CONTINENT` maps the platform
+route (e.g. `eun1`) to its continent for the by-riot-id call. After resolving the
+PUUID a **best-effort** League-V4 `GET /lol/league/v4/entries/by-puuid/{puuid}`
+(**platform-routed**, e.g. `eun1`) fetches the `RANKED_SOLO_5x5` snapshot
+(tier/division/LP, persisted on the `RiotAccount`); any failure is logged and
+**never fails the link**. The profile-icon nonce (and its Summoner-V4 polling)
+is **retired**. A **personal/standard key** suffices (20 req/s, 100 req/2min) —
+**no Tournament API, no production review, no provider, no callback, no
+Match-V5.** **Match-V5 is OUT for v1.** A light token-bucket limiter (honor 429
+`Retry-After`) protects the Account-V1 + League-V4 lookups; this is *not* the
 per-match, per-region tournament-scale limiter v2 needed.
 
 > **Public-launch caveat:** a personal key may not legally back a *public* app; a

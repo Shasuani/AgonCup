@@ -19,14 +19,12 @@ guards, bracket planning, Account-V1 resolution all stay in their owning service
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from lol_riot import RiotAccountClient
 from pydantic import BaseModel, Field
 
 from app.accounts import service as accounts_service
-from app.config import Settings, get_settings
 from app.db import SessionLocal
 from app.guilds import service as guilds_service
 from app.guilds.settings import GuildSettings, GuildSettingsPatch
@@ -117,23 +115,19 @@ class ContextRequest(BaseModel):
     ctx: DiscordContextIn
 
 
-class LinkAccountRequest(BaseModel):
-    ctx: DiscordContextIn
-    game_name: str = Field(min_length=1, max_length=64, alias="gameName")
-    tag_line: str = Field(min_length=1, max_length=16, alias="tagLine")
-    region: str = Field(min_length=2, max_length=8)
+class RegisterCodeResponse(BaseModel):
+    """A minted one-time desktop-link code returned to the bot (PLAN.md §3.1).
 
-    model_config = {"populate_by_name": True}
+    Mirrors ``lol_schemas.DesktopRegistrationDTO``. The bot renders ``code`` to the
+    user (ephemerally); the user types it into the desktop app to finish linking.
+    No Riot ID / icon is involved any more.
+    """
 
-
-class LinkAccountResponse(BaseModel):
-    account_id: str
-    puuid: str
-    verified: bool
     attempt_id: str
-    target_icon_id: int
-    game_name: str
-    tag_line: str
+    code: str
+    expires_at: datetime
+    origin_guild_id: str | None = None
+    instruction: str
 
 
 class TeamCreateRequest(BaseModel):
@@ -317,66 +311,44 @@ async def update_settings(body: SettingsUpdateRequest) -> GuildSettingsModel:
 
 
 # ---------------------------------------------------------------------------
-# Account linking (delegated to app.accounts.service; Riot client built here)
+# Account linking — mint a one-time desktop-link code (delegated, no Riot ID)
 # ---------------------------------------------------------------------------
+#: Short human instruction echoed back to the bot for the code embed.
+_REGISTER_INSTRUCTION = (
+    "Open the LeagueOfLeagues desktop app, make sure League is running and you're "
+    "signed in, then enter this code to link your account."
+)
+
+
 @router.post(
     "/accounts/link",
-    response_model=LinkAccountResponse,
-    summary="Start Riot account verification for the acting user (service-auth)",
+    response_model=RegisterCodeResponse,
+    summary="Mint a one-time desktop-link code for the acting user (service-auth)",
 )
-async def link_account(
-    body: LinkAccountRequest,
-    settings: Annotated[Settings, Depends(get_settings)],
-) -> LinkAccountResponse:
-    """Resolve the acting user, then DELEGATE to the accounts service.
+async def link_account(body: ContextRequest) -> RegisterCodeResponse:
+    """Mint a one-time code that the user finishes linking with in the desktop app.
 
-    Account linking is GLOBAL (not guild-scoped): the user is resolved by Discord
-    snowflake, but the link itself uses a plain session (no tenant GUC), mirroring
-    ``app.accounts.router``. The Riot client is constructed here exactly as in that
-    router; the bridge adds no Account-V1 logic of its own.
+    The icon/Account-V1 challenge is gone: the desktop reads the local LCU PUUID,
+    so ``/register`` only needs to mint a code bound to (user, origin guild) — no
+    Riot ID, no region, no icon. Account linking is GLOBAL (no tenant GUC); the
+    bridge resolves the backend ``guild_id`` only to record ``origin_guild_id``.
     """
     try:
-        platform = accounts_service.parse_platform_region(body.region)
-    except accounts_service.InvalidRegion as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
-        ) from exc
-
-    client = RiotAccountClient(settings.riot_api_key, accounts_service.continent_for(platform))
-    try:
         async with SessionLocal() as session, session.begin():
-            user = await guilds_service.upsert_user_by_discord_id(
-                session,
-                discord_user_id=body.ctx.discord_user_id,
-                display_name=body.ctx.display_name,
-            )
-            result = await accounts_service.link_account(
-                session,
-                client,
-                user_id=str(user.id),
-                game_name=body.game_name,
-                tag_line=body.tag_line,
-                region=body.region,
-            )
-    except accounts_service.UnknownRiotId as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except accounts_service.RiotUnavailable as exc:
-        log.warning("account_v1_unavailable", error=str(exc))
+            result = await bridge.start_registration(session, ctx=body.ctx.to_ctx())
+    except accounts_service.CodeMintError as exc:
+        log.error("code_mint_failed", error=str(exc))
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Riot Account-V1 unavailable; try again",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="could not mint a code; try again",
         ) from exc
-    finally:
-        await client.aclose()
 
-    return LinkAccountResponse(
-        account_id=result.account_id,
-        puuid=result.puuid,
-        verified=result.verified,
+    return RegisterCodeResponse(
         attempt_id=result.attempt_id,
-        target_icon_id=result.target_icon_id,
-        game_name=result.game_name,
-        tag_line=result.tag_line,
+        code=result.code,
+        expires_at=result.expires_at,
+        origin_guild_id=result.origin_guild_id,
+        instruction=_REGISTER_INSTRUCTION,
     )
 
 

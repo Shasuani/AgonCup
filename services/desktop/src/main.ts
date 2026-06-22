@@ -40,6 +40,8 @@ import {
   type WebSocketFactory,
 } from "./transport/wsTransport.js";
 import { checkLcuIdentity, type IdentityCheckResult } from "./identity/identityCheck.js";
+import { readCurrentSummoner } from "./lcu/readSummoner.js";
+import { verifyDesktop } from "./lcu/verify.js";
 
 /** Default heartbeat cadence while pre-game/in-game (PLAN.md §3.6.1 ~2-3s). */
 const DEFAULT_HEARTBEAT_MS = 2_500;
@@ -200,33 +202,128 @@ function isMainEntry(): boolean {
 }
 
 /**
+ * Dev wiring: authenticate to the backend (dev-login mints an access JWT), build
+ * the {@link DesktopRuntime}, and — if ``DESKTOP_MATCH_ID`` is set — join that
+ * match's realtime channel. Connection events are logged to the terminal.
+ * Overridable via ``BACKEND_URL`` / ``REALTIME_URL`` / ``DESKTOP_MATCH_ID``.
+ * Real session/match-assigned wiring replaces this; kept behind bootstrap so the
+ * module import stays IO-free (test import-safety).
+ */
+async function connectBackend(
+  adapter: LcuAdapter,
+  log: (event: string, detail?: Record<string, unknown>) => void,
+): Promise<void> {
+  const backendUrl = process.env["BACKEND_URL"] ?? "http://localhost:8000";
+  const realtimeUrl = process.env["REALTIME_URL"] ?? "ws://localhost:8000/api/v1/realtime/ws";
+  const matchId = process.env["DESKTOP_MATCH_ID"];
+
+  let token: string;
+  try {
+    const res = await fetch(`${backendUrl}/api/v1/auth/dev-login`, { method: "POST" });
+    if (!res.ok) {
+      log("backend_auth_failed", { status: res.status });
+      return;
+    }
+    token = ((await res.json()) as { access_token: string }).access_token;
+    log("backend_authenticated", { backendUrl });
+  } catch (err) {
+    log("backend_unreachable", { backendUrl, detail: String(err) });
+    return;
+  }
+
+  const runtime = new DesktopRuntime({
+    adapter,
+    config: { realtimeUrl, token, verifiedPuuid: undefined },
+    onWarn: log,
+  });
+
+  if (matchId === undefined || matchId === "") {
+    log("realtime_idle", { hint: "set DESKTOP_MATCH_ID to join a match's realtime channel" });
+    return;
+  }
+  log("realtime_subscribing", { realtimeUrl, matchId });
+  runtime.onMatchAssigned(matchId);
+}
+
+/**
  * Boot the Electron app: open a window and (in a later phase) wire the
  * {@link DesktopRuntime} to the authenticated session. Kept out of module scope
  * so importing this file never touches Electron (test import-safety).
  */
 async function bootstrap(): Promise<void> {
   // Imported lazily so `electron` is never required during a unit-test import.
-  const { app, BrowserWindow } = await import("electron");
+  const { app, BrowserWindow, ipcMain } = await import("electron");
+  const path = await import("node:path");
+
+  // IPC bridge for the account-linking flow (preload exposes `window.lol.*`).
+  // The main process does BOTH the READ-ONLY LCU read and the backend POST so
+  // the sandboxed renderer never touches node/network.
+  ipcMain.handle("lol:read-summoner", async () => {
+    const result = await readCurrentSummoner();
+    if (result.ok) {
+      return {
+        ok: true,
+        puuid: result.puuid,
+        summonerName: result.displayName,
+        gameName: result.gameName,
+        tagLine: result.tagLine,
+        summonerId: result.summonerId,
+        region: result.region,
+      };
+    }
+    return { ok: false, reason: result.reason, detail: result.detail };
+  });
+  ipcMain.handle(
+    "lol:verify",
+    async (_event, args: { code: string }) => {
+      const result = await verifyDesktop({ code: args.code });
+      if (result.ok) {
+        return {
+          ok: true,
+          accountId: result.accountId,
+          puuid: result.puuid,
+          ...(result.tier !== undefined ? { tier: result.tier } : {}),
+          ...(result.division !== undefined ? { division: result.division } : {}),
+          ...(result.leaguePoints !== undefined ? { leaguePoints: result.leaguePoints } : {}),
+          ...(result.rankText !== undefined ? { rankText: result.rankText } : {}),
+        };
+      }
+      return { ok: false, status: result.status, detail: result.detail };
+    },
+  );
 
   const createWindow = (): unknown => {
     const win = new BrowserWindow({
       width: 1024,
       height: 720,
-      webPreferences: { contextIsolation: true, nodeIntegration: false },
+      title: "LeagueOfLeagues — Desktop",
+      backgroundColor: "#0a0b0f",
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false,
+        // CommonJS preload (.cjs): the package is "type":"module", so a .js preload
+      // would be ESM, which Electron only loads from a .mjs file — loading it as a
+      // .js fails silently ("Unable to load preload script") and window.lol is
+      // undefined. A .cjs preload loads reliably under contextIsolation.
+      preload: path.join(app.getAppPath(), "dist", "preload.cjs"),
+      },
     });
-    // Phase 0: a placeholder local page is loaded in a later phase.
+    // Branded status page (static/index.html). app.getAppPath() resolves to the
+    // desktop project dir under `electron .` and the asar root when packaged.
+    void win.loadFile(path.join(app.getAppPath(), "static", "index.html"));
     return win;
   };
 
   await app.whenReady();
 
-  // Constructed here so the adapter's lifecycle follows the app's. The runtime
-  // (WS transport + per-match controllers) is wired to the authenticated
-  // session in a later phase; identity validation runs on startup.
+  // The LCU adapter's lifecycle follows the app's.
   const adapter = createLcuAdapter();
-  void adapter;
 
   createWindow();
+
+  // Dev wiring: authenticate + (optionally) join a match's realtime channel.
+  // Events are logged to this terminal (watch `make dev-desktop` output).
+  void connectBackend(adapter, (event, detail) => console.log(`[desktop] ${event}`, detail ?? {}));
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

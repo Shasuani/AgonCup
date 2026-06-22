@@ -29,6 +29,14 @@
 - [ ] **No in-match gameplay automation, ever** (reads of `:2999` only in-game).
 - [ ] Pin a validated client patch; CI-validate `eog-stats-block`/`eventdata`
       parsers against live fixtures + a Swagger mirror each patch.
+- [x] **Account verification = READ-ONLY LCU.** The desktop verify path
+      (`POST /api/v1/accounts/verify-desktop`) reads only
+      `GET /lol-summoner/v1/current-summoner` (PUUID + summonerId + name) to link
+      an account against a one-time `/register` code. **No write surface, no
+      opt-in / presence / kill-switch interaction** — it is outside the LCU-write
+      gate entirely. Identity validation via `current-summoner` PUUID is permitted
+      (advisory; client-asserted PUUIDs are spoofable — trust boundary documented
+      in `docs/research-findings.md`). Korea exclusion unaffected (read-only).
 
 ## Desktop distribution — code signing
 > Per-OS Electron packaging runs in `.github/workflows/desktop-build.yml`

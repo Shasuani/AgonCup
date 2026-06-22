@@ -46,6 +46,13 @@ and baked into images in CI — one distribution model, no drift.
 - `make test` / `make lint` / `make format` / `make typecheck` — across all Python packages.
 - `make gen-clients` — regenerate `lol-clients-ts` from the backend OpenAPI (placeholder until wired).
 
+**Host dev (no Docker; Postgres/Redis on localhost)** — each service reads its own
+`services/<svc>/.env` (localhost DSNs); the targets `source` it so vars read from
+`os.environ` (e.g. `LIFECYCLE_SERVICE_TOKEN`) are present too:
+- `make dev` — backend (`:8000`) + frontend (`:5173`) together (Ctrl-C stops both).
+- `make dev-backend` / `make dev-frontend` / `make dev-bot` — run one service on the host.
+  The Discord bot needs the backend up (it calls `/api/v1/integrations/discord/*`).
+
 **Running tests directly** (each package is standalone; `uv` provides Python 3.12):
 ```bash
 cd services/backend && PYTHONPATH=src python -m pytest -q   # or `uv run pytest`
@@ -105,6 +112,22 @@ non-existent `false()` function and breaks `alembic upgrade head`).
   live-DB tests therefore run in CI, not on a typical dev box. To run them
   locally: start Postgres, `alembic upgrade head`, then `LOL_DB_TESTS=1` + the
   OWNER/APP DSNs (see the test file headers).
+- **Two `.env`s, on purpose — host vs Docker.** The **repo-root `.env`** uses
+  **docker-compose hostnames** (`postgres`/`redis`, incl.
+  `APP_DATABASE_URL=...@postgres`); each **`services/<svc>/.env`** uses
+  **localhost** for host runs. VS Code's Python extension auto-loads the repo-root
+  `.env` (`python.envFile` default), so a host-run debug config MUST set
+  `"envFile": "${workspaceFolder}/services/<svc>/.env"` (and leave
+  `APP_DATABASE_URL` empty) — otherwise the request path connects to `postgres:5432`
+  and every DB hit dies with `socket.gaierror`. `make dev-*` avoid this by sourcing
+  the per-service `.env`.
+- **SPA "dev-login failed (500)"** ≈ the backend isn't listening on `:8000`: the
+  Vite `/api` proxy manufactures the 500 (now a clearer 502 `backend_unreachable`).
+  Start the backend (`make dev-backend`); it is **not** a backend bug.
+- **Discord bot**: needs a real `DISCORD_BOT_TOKEN` + a shared `BOT_SERVICE_TOKEN`
+  (and `LIFECYCLE_SERVICE_TOKEN`) matching the backend's `.env`. Guilds onboard via
+  the bot's `on_guild_join` **and** an `on_ready` reconcile sweep (servers added
+  while the bot was offline), both idempotent. Run with `make dev-bot`.
 - **lol-lcu is community-reverse-engineered/unsupported** and drifts per League
   patch — it is the single audited fix-point; every **write** (create lobby,
   invite, auto-accept, start) is gated behind opt-in + kill-switch + presence +

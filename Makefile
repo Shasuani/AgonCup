@@ -41,7 +41,7 @@ PY_SERVICE_DIRS := \
 PY_PKG_DIRS := $(PY_LIB_DIRS) $(PY_SERVICE_DIRS)
 
 .PHONY: help up down build-bases test test-db lint format typecheck gen-clients fixtures \
-	dev dev-backend dev-frontend
+	dev dev-backend dev-frontend dev-bot
 
 # --- DB / RLS integration test config ----------------------------------------
 # Local equivalent of the CI `db-rls` job. Assumes a REACHABLE Postgres (e.g.
@@ -74,18 +74,22 @@ down: ## Stop the stack and remove containers/networks (keeps named volumes).
 # dev server on :5173 (which proxies /api -> :8000). A "(500)" on dev-login means
 # the proxy could not reach the backend, i.e. `dev-backend` is not running.
 # Run these in two terminals, or `make dev` to run both together.
-dev-backend: ## Run the FastAPI backend on :8000 (host; reads services/backend/.env).
-	PYTHONPATH=src $(UV) run --directory services/backend \
-		uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+dev-backend: ## Run the FastAPI backend on :8000 (host; sources services/backend/.env).
+	cd services/backend && set -a && . ./.env && set +a && \
+		PYTHONPATH=src $(UV) run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 dev-frontend: ## Run the Vite admin SPA on :5173 (proxies /api -> :8000).
 	cd services/frontend && npm run dev
 
+dev-bot: ## Run the Discord bot (host; sources services/bot/.env). Needs the backend up.
+	cd services/bot && set -a && . ./.env && set +a && \
+		PYTHONPATH=src $(UV) run python -m app.main
+
 dev: ## Run backend (:8000) AND frontend (:5173) together; Ctrl-C stops both.
 	@echo "==> backend :8000  +  frontend :5173  (Ctrl-C stops both)"
 	@trap 'kill 0' EXIT INT TERM; \
-		( PYTHONPATH=src $(UV) run --directory services/backend \
-			uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload ) & \
+		( cd services/backend && set -a && . ./.env && set +a && \
+			PYTHONPATH=src $(UV) run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload ) & \
 		( cd services/frontend && npm run dev ) & \
 		wait
 

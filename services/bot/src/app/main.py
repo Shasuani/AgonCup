@@ -128,8 +128,12 @@ def build_bot() -> commands.AutoShardedBot:
 
     @bot.event
     async def on_ready() -> None:  # pragma: no cover - needs gateway
-        # Per-guild sync for fast command propagation (PLAN.md §3.2 sync strategy).
+        # Reconcile guilds present at startup: a server added while the bot was
+        # offline arrives as an existing guild (no on_guild_join), so onboard each
+        # here too (idempotent upsert). Then sync commands per-guild for fast
+        # propagation (PLAN.md §3.2 sync strategy).
         for guild in bot.guilds:
+            await onboard_guild(bot, guild)
             bot.tree.copy_global_to(guild=guild)
             await bot.tree.sync(guild=guild)
 

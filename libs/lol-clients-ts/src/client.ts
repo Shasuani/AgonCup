@@ -34,6 +34,7 @@ import type {
   RecordWinnerRequest,
   RefreshRequest,
   RegistrationResponse,
+  RosterEntryResponse,
   ShareRequest,
   StartResponse,
   TeamMemberResponse,
@@ -88,6 +89,8 @@ export interface TeamsApi {
 }
 
 export interface AccountsApi {
+  /** ADMIN: list everyone who has linked a Riot account (player roster). */
+  list(): Promise<RosterEntryResponse[]>;
   /** Link a Riot account + open an ownership challenge (camelCase body). */
   link(body: LinkAccountRequest): Promise<LinkAccountResponse>;
   /** Poll a verification attempt's status. */
@@ -200,6 +203,8 @@ export function createClient(config: ClientConfig): ApiClient {
 
   const accounts: AccountsApi = {
     // Global (not guild-scoped) per the router — omit the tenant header.
+    list: () =>
+      request<RosterEntryResponse[]>({ method: 'GET', path: '/accounts', tenant: false }),
     link: (body) =>
       request<LinkAccountResponse>({ method: 'POST', path: '/accounts/link', body, tenant: false }),
     verifyStatus: (attemptId) =>

@@ -24,10 +24,11 @@ from typing import Annotated, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from lol_riot import RiotAccountClient
+from lol_schemas.enums import UserGuildRoleName
 from pydantic import BaseModel, Field
 
 from app.accounts import service
-from app.auth.deps import Principal, get_current_principal
+from app.auth.deps import Principal, get_current_principal, require_role
 from app.config import Settings, get_settings
 from app.db import SessionLocal
 from app.logging import get_logger
@@ -76,6 +77,25 @@ class AttemptStatusResponse(BaseModel):
     target_icon_id: int | None
     expires_at: datetime
     verified: bool
+
+
+class RosterEntryResponse(BaseModel):
+    """One linked player in the admin roster (PLAN.md §3.4).
+
+    Maps :class:`app.accounts.service.LinkedAccountSummary` — the canonical Riot
+    ID, region, verification state, and the owner's Discord display name.
+    """
+
+    account_id: str
+    user_id: str
+    discord_name: str
+    game_name: str | None = None
+    tag_line: str | None = None
+    region: str | None = None
+    verified: bool
+    verified_at: datetime | None = None
+    origin_guild_id: str | None = None
+    origin_guild_name: str | None = None
 
 
 class DesktopVerifyRequest(BaseModel):
@@ -196,6 +216,42 @@ def get_notification_publisher() -> NotificationPublisher:
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+@router.get(
+    "",
+    response_model=list[RosterEntryResponse],
+    summary="ADMIN: list everyone who has linked a Riot account",
+)
+async def list_accounts(
+    _principal: Annotated[
+        Principal,
+        Depends(require_role(UserGuildRoleName.GUILD_ADMIN, UserGuildRoleName.PLATFORM_OPERATOR)),
+    ],
+) -> list[RosterEntryResponse]:
+    """Return the platform-wide player roster (staff only).
+
+    ``RiotAccount`` is a GLOBAL table (not guild-RLS), so this runs on a plain
+    ``SessionLocal`` and returns every linked account; the ``require_role`` guard
+    restricts it to guild admins / platform operators (PLAN.md §3.4).
+    """
+    async with SessionLocal() as session:
+        rows = await service.list_linked_accounts(session)
+    return [
+        RosterEntryResponse(
+            account_id=r.account_id,
+            user_id=r.user_id,
+            discord_name=r.discord_name,
+            game_name=r.game_name,
+            tag_line=r.tag_line,
+            region=r.region,
+            verified=r.verified,
+            verified_at=r.verified_at,
+            origin_guild_id=r.origin_guild_id,
+            origin_guild_name=r.origin_guild_name,
+        )
+        for r in rows
+    ]
+
+
 @router.post(
     "/link",
     response_model=LinkResponse,

@@ -33,7 +33,7 @@ describe("screen stubs render", () => {
   it.each([
     // Teams + Accounts now talk to the API client (no longer stubs).
     ["Teams", <TeamsScreen key="te" />],
-    ["Accounts", <AccountsScreen key="a" />],
+    ["Linked accounts", <AccountsScreen key="a" />],
     ["Dispute / Override queue", <DisputeQueueScreen key="d" />],
     ["Audit log", <AuditLogScreen key="au" />],
   ])("renders %s", (heading, element) => {

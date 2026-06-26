@@ -1,196 +1,88 @@
-// Riot account linking / verification (PLAN.md §3.4).
+// Admin player roster (PLAN.md §3.4).
+//
+// Lists everyone who has linked a Riot account: Discord display name, canonical
+// Riot ID (game name + tag), region/server, and verification state. Linking
+// itself happens out-of-band via the desktop client + Discord /register flow
+// (server-side Account-V1 resolution), so this screen is read-only.
 //
 // Accounts routes are GLOBAL (no acting-guild header) — the client omits
-// X-Guild-Id for these calls. Flow: submit gameName/tagLine/region -> the
-// backend opens an ownership challenge and returns an attempt_id + the
-// target_icon_id the user must set on their Riot profile. We render those
-// verification instructions and poll verifyStatus until verified/expired.
-//
-// All server-provided strings render as React children (escaped). No raw HTML.
+// X-Guild-Id. All server-provided strings render as React children (escaped).
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useApi } from "../../api/ApiProvider";
-import { useAsyncAction } from "../../api/useAsync";
 import { toError } from "../../api/useAsync";
-import { Button, ErrorBanner, Spinner, TextInput } from "../../components";
-import type {
-  AttemptStatusResponse,
-  LinkAccountResponse,
-} from "@lol/clients-ts";
-
-const POLL_INTERVAL_MS = 4000;
+import { ErrorBanner, Spinner } from "../../components";
+import type { RosterEntryResponse } from "@lol/clients-ts";
 
 export default function AccountsScreen(): JSX.Element {
   const api = useApi();
+  const [rows, setRows] = useState<RosterEntryResponse[] | null>(null);
+  const [error, setError] = useState<Error | null>(null);
 
-  const [gameName, setGameName] = useState("");
-  const [tagLine, setTagLine] = useState("");
-  const [region, setRegion] = useState("");
+  const load = useCallback(async (): Promise<void> => {
+    try {
+      const data = await api.accounts.list();
+      setRows(data);
+      setError(null);
+    } catch (err: unknown) {
+      setError(toError(err));
+    }
+  }, [api]);
 
-  const link = useAsyncAction(
-    useCallback(
-      (body: { gameName: string; tagLine: string; region: string }) =>
-        api.accounts.link(body),
-      [api],
-    ),
-  );
-
-  const linked = link.data;
-
-  const onSubmit = useCallback(
-    async (e: FormEvent) => {
-      e.preventDefault();
-      await link.run({
-        gameName: gameName.trim(),
-        tagLine: tagLine.trim(),
-        region: region.trim(),
-      });
-    },
-    [link, gameName, tagLine, region],
-  );
-
-  const valid =
-    gameName.trim().length > 0 &&
-    tagLine.trim().length > 0 &&
-    region.trim().length > 0;
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   return (
     <section aria-labelledby="accounts-heading">
-      <h1 id="accounts-heading">Accounts</h1>
-      <p>
-        Link your Riot account by proving ownership: set the requested profile
-        icon, then we verify it.
-      </p>
+      <h1 id="accounts-heading">Linked accounts</h1>
+      <p>Players who have linked a Riot account via the desktop client.</p>
 
-      <form onSubmit={onSubmit} aria-label="Link Riot account">
-        <ErrorBanner error={link.error} />
-        <TextInput
-          label="Game name"
-          hint="The part before the # in your Riot ID."
-          required
-          value={gameName}
-          onChange={(e) => setGameName(e.target.value)}
-        />
-        <TextInput
-          label="Tag line"
-          hint="The part after the # (without the #)."
-          required
-          value={tagLine}
-          onChange={(e) => setTagLine(e.target.value)}
-        />
-        <TextInput
-          label="Region"
-          hint="e.g. euw1, na1, kr."
-          required
-          value={region}
-          onChange={(e) => setRegion(e.target.value)}
-        />
-        <Button
-          variant="primary"
-          type="submit"
-          busy={link.loading}
-          disabled={!valid}
-        >
-          Link account
-        </Button>
-      </form>
+      <ErrorBanner error={error} />
 
-      {linked ? <VerificationPanel linked={linked} /> : null}
+      {rows === null && error === null ? (
+        <p data-roster-loading>
+          <Spinner label="Loading accounts" /> Loading…
+        </p>
+      ) : null}
+
+      {rows !== null ? (
+        rows.length === 0 ? (
+          <p data-roster-empty>No accounts have been linked yet.</p>
+        ) : (
+          <table data-roster-table>
+            <thead>
+              <tr>
+                <th scope="col">Discord</th>
+                <th scope="col">Riot ID</th>
+                <th scope="col">Region</th>
+                <th scope="col">Joined from</th>
+                <th scope="col">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.account_id} data-roster-row>
+                  <td>{r.discord_name}</td>
+                  <td data-riot-id>
+                    {r.game_name ?? "—"}
+                    {r.tag_line ? <span data-riot-tag>#{r.tag_line}</span> : null}
+                  </td>
+                  <td>{r.region ? r.region.toUpperCase() : "—"}</td>
+                  <td data-origin-guild>{r.origin_guild_name ?? "—"}</td>
+                  <td>
+                    {r.verified ? (
+                      <span data-verified="true">✅ Verified</span>
+                    ) : (
+                      <span data-verified="false">⏳ Pending</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )
+      ) : null}
     </section>
   );
-}
-
-interface VerificationPanelProps {
-  linked: LinkAccountResponse;
-}
-
-function VerificationPanel({ linked }: VerificationPanelProps): JSX.Element {
-  const api = useApi();
-  const [status, setStatus] = useState<AttemptStatusResponse | null>(null);
-  const [pollError, setPollError] = useState<Error | null>(null);
-
-  const verified = status?.verified ?? linked.verified;
-  const iconId = status?.target_icon_id ?? linked.target_icon_id;
-  const expiresAt = status?.expires_at ?? linked.expires_at;
-  const expired = isExpired(expiresAt);
-  // Keep polling while not yet verified and the challenge has not expired.
-  const polling = !verified && !expired;
-
-  const attemptId = linked.attempt_id;
-
-  useEffect(() => {
-    if (!polling) return;
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-
-    const tick = async (): Promise<void> => {
-      try {
-        const next = await api.accounts.verifyStatus(attemptId);
-        if (cancelled) return;
-        setStatus(next);
-        setPollError(null);
-        if (!next.verified && !isExpired(next.expires_at)) {
-          timer = setTimeout(tick, POLL_INTERVAL_MS);
-        }
-      } catch (err: unknown) {
-        if (cancelled) return;
-        setPollError(toError(err));
-        timer = setTimeout(tick, POLL_INTERVAL_MS);
-      }
-    };
-
-    timer = setTimeout(tick, POLL_INTERVAL_MS);
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-    };
-  }, [api, attemptId, polling]);
-
-  return (
-    <section aria-labelledby="verify-heading" data-verification-panel>
-      <h2 id="verify-heading">Verify ownership</h2>
-      <dl>
-        <dt>Riot ID</dt>
-        <dd>
-          {linked.game_name}#{linked.tag_line}
-        </dd>
-        <dt>Attempt</dt>
-        <dd>{linked.attempt_id}</dd>
-      </dl>
-
-      {verified ? (
-        <p role="status" data-verify-status="verified">
-          ✅ Account verified. You can stop changing your icon.
-        </p>
-      ) : expired ? (
-        <p role="alert" data-verify-status="expired">
-          This verification attempt expired. Re-link your account to try again.
-        </p>
-      ) : (
-        <div data-verify-instructions>
-          <p>
-            Open the League of Legends client and set your profile icon to icon{" "}
-            <strong>#{iconId}</strong> (the verification nonce). Keep this page
-            open — we check automatically.
-          </p>
-          <p>
-            Challenge expires at <time dateTime={expiresAt}>{expiresAt}</time>.
-          </p>
-          <p data-polling>
-            <Spinner label="Waiting for verification" /> Checking your profile…
-          </p>
-        </div>
-      )}
-
-      <ErrorBanner error={pollError} />
-    </section>
-  );
-}
-
-/** True when an ISO-8601 expiry is in the past (invalid/empty -> not expired). */
-function isExpired(iso: string): boolean {
-  if (!iso) return false;
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return false;
-  return t <= Date.now();
 }

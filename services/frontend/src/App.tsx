@@ -76,9 +76,9 @@ export function AppRoutes(): JSX.Element {
         <Route element={<RequireAuth />}>
           <Route element={<AppLayout />}>
             <Route index element={<HomeScreen />} />
-            <Route path="accounts" element={<AccountsScreen />} />
 
             <Route element={<RequireRole anyOf={ADMIN_ROLES} />}>
+              <Route path="accounts" element={<AccountsScreen />} />
               <Route path="tournaments" element={<TournamentsScreen />} />
               <Route path="teams" element={<TeamsScreen />} />
               <Route path="disputes" element={<DisputeQueueScreen />} />

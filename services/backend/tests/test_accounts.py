@@ -770,3 +770,63 @@ async def test_verify_desktop_code_invalid_region_raises() -> None:
             region="middle-earth",
             account_client=client,  # type: ignore[arg-type]
         )
+
+
+# ---------------------------------------------------------------------------
+# Admin roster (list_linked_accounts) — PLAN.md §3.4
+# ---------------------------------------------------------------------------
+class _RosterSession:
+    """Minimal AsyncSession stand-in returning the join rows.
+
+    ``list_linked_accounts`` issues a single
+    ``select(RiotAccount, User.display_name, Guild.name)`` join; the shared
+    ``FakeSession`` only models single-entity selects, so this fake just hands back
+    the pre-built ``(account, display_name, origin_guild_name)`` tuples.
+    """
+
+    def __init__(self, rows: list[tuple[RiotAccount, str, str | None]]) -> None:
+        self._rows = rows
+
+    async def execute(self, statement: Any, params: Any = None) -> Any:
+        return _Result(list(self._rows))
+
+
+def _roster_account(
+    *, game: str, tag: str, region: str, verified: bool, origin_guild_id: uuid.UUID | None = None
+) -> RiotAccount:
+    return RiotAccount(
+        id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        puuid=f"puuid-{game}",
+        riot_id_game_name=game,
+        riot_id_tag_line=tag,
+        region=region,
+        verified=verified,
+        origin_guild_id=origin_guild_id,
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_linked_accounts_maps_join_rows() -> None:
+    gid = uuid.uuid4()
+    a1 = _roster_account(game="Faker", tag="KR1", region="kr", verified=True, origin_guild_id=gid)
+    a2 = _roster_account(game="Caps", tag="EUW", region="euw1", verified=False)
+    session = _RosterSession([(a1, "ShadowFox", "Faker Fan Club"), (a2, "BlueWizard", None)])
+
+    rows = await service.list_linked_accounts(session)  # type: ignore[arg-type]
+
+    assert [r.discord_name for r in rows] == ["ShadowFox", "BlueWizard"]
+    assert rows[0].account_id == str(a1.id)
+    assert rows[0].user_id == str(a1.user_id)
+    assert (rows[0].game_name, rows[0].tag_line, rows[0].region) == ("Faker", "KR1", "kr")
+    assert rows[0].verified is True
+    assert rows[0].origin_guild_id == str(gid)
+    assert rows[0].origin_guild_name == "Faker Fan Club"
+    assert rows[1].verified is False
+    assert rows[1].origin_guild_id is None
+    assert rows[1].origin_guild_name is None
+
+
+@pytest.mark.asyncio
+async def test_list_linked_accounts_empty() -> None:
+    assert await service.list_linked_accounts(_RosterSession([])) == []  # type: ignore[arg-type]

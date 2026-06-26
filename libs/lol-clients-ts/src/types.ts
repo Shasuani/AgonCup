@@ -162,6 +162,23 @@ export interface AttemptStatusResponse {
   verified: boolean;
 }
 
+/** One linked player in the admin roster (GET /accounts). */
+export interface RosterEntryResponse {
+  account_id: string;
+  user_id: string;
+  /** Owner's Discord display name. */
+  discord_name: string;
+  game_name: string | null;
+  tag_line: string | null;
+  region: string | null;
+  verified: boolean;
+  /** ISO-8601 datetime, or null if never verified. */
+  verified_at: string | null;
+  origin_guild_id: string | null;
+  /** Name of the Discord server the user ran /register from. */
+  origin_guild_name: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // results — services/backend/src/app/results/router.py
 // The dispute/override queue's decided-winner endpoint.

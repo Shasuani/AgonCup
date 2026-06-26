@@ -36,7 +36,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.logging import get_logger
-from app.models import RiotAccount, User, VerificationAttempt
+from app.models import Guild, RiotAccount, User, VerificationAttempt
 
 log = get_logger("app.accounts")
 
@@ -156,6 +156,29 @@ class LinkResult:
     expires_at: datetime
     game_name: str
     tag_line: str
+
+
+@dataclass(frozen=True, slots=True)
+class LinkedAccountSummary:
+    """One row of the admin player roster (PLAN.md §3.4).
+
+    Joins a ``RiotAccount`` to its owning ``User`` so the admin SPA can list who
+    has linked, with the canonical Riot ID, region, verification state, and the
+    owner's Discord display name. ``RiotAccount`` is global (not guild-scoped), so
+    the roster is platform-wide and gated to staff at the route.
+    """
+
+    account_id: str
+    user_id: str
+    discord_name: str
+    game_name: str | None
+    tag_line: str | None
+    region: str | None
+    verified: bool
+    verified_at: datetime | None
+    # The Discord server the user ran /register from (origin_guild_id → name).
+    origin_guild_id: str | None
+    origin_guild_name: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -607,9 +630,7 @@ async def verify_desktop_code(
 
         # The DM notification needs the user's Discord snowflake (global User row).
         discord_user_id = (
-            await session.execute(
-                select(User.discord_user_id).where(User.id == attempt.user_id)
-            )
+            await session.execute(select(User.discord_user_id).where(User.id == attempt.user_id))
         ).scalar_one_or_none()
 
         account_id = str(account.id)
@@ -699,9 +720,7 @@ async def _dedupe_upsert_account(
             if account is None:  # pragma: no cover - integrity error implies a row
                 raise
             if str(account.user_id) != str(attempt_user_id):
-                raise PuuidConflict(
-                    "this Riot account is already linked to another user"
-                ) from None
+                raise PuuidConflict("this Riot account is already linked to another user") from None
 
     # DEDUPE: update the existing row in place (incl. the old icon-flow row
     # carrying the SAME canonical PUUID) — never create a second row.
@@ -717,6 +736,41 @@ async def _dedupe_upsert_account(
     if lcu_puuid is not None:
         account.lcu_puuid = lcu_puuid
     return account
+
+
+async def list_linked_accounts(session: AsyncSession) -> list[LinkedAccountSummary]:
+    """Return every linked ``RiotAccount`` joined to its owner (admin roster).
+
+    Platform-wide: ``RiotAccount``/``User`` are global tables (not guild-RLS),
+    so this returns all linked accounts regardless of acting guild — the route
+    gates it to staff. Ordered by Discord display name then Riot ID for a stable,
+    human-scannable list (PLAN.md §3.4).
+    """
+    rows = (
+        await session.execute(
+            select(RiotAccount, User.display_name, Guild.name)
+            .join(User, RiotAccount.user_id == User.id)
+            # LEFT join: origin_guild_id is nullable (SET NULL on guild delete), so
+            # a linked account whose origin guild is gone still appears in the list.
+            .outerjoin(Guild, RiotAccount.origin_guild_id == Guild.id)
+            .order_by(User.display_name, RiotAccount.riot_id_game_name)
+        )
+    ).all()
+    return [
+        LinkedAccountSummary(
+            account_id=str(acct.id),
+            user_id=str(acct.user_id),
+            discord_name=discord_name,
+            game_name=acct.riot_id_game_name,
+            tag_line=acct.riot_id_tag_line,
+            region=acct.region,
+            verified=acct.verified,
+            verified_at=acct.verified_at,
+            origin_guild_id=str(acct.origin_guild_id) if acct.origin_guild_id else None,
+            origin_guild_name=origin_guild_name,
+        )
+        for acct, discord_name, origin_guild_name in rows
+    ]
 
 
 async def get_attempt(
@@ -753,6 +807,7 @@ __all__ = [
     "DesktopVerifyResult",
     "InvalidRegion",
     "LinkResult",
+    "LinkedAccountSummary",
     "PuuidConflict",
     "RiotUnavailable",
     "UnknownOrExpiredCode",
@@ -761,6 +816,7 @@ __all__ = [
     "format_rank",
     "get_attempt",
     "link_account",
+    "list_linked_accounts",
     "normalize_code",
     "parse_platform_region",
     "region_label_for",

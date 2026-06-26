@@ -6,10 +6,12 @@ No web framework imports. Depends on ``lol_schemas`` for canonical DTO types.
 from __future__ import annotations
 
 from .adjudication import (
+    ANOMALY_FLAGS,
     QUORUM_THRESHOLD,
     TOTAL_PARTICIPANTS,
     AdjudicationOutcome,
     AdjudicationResult,
+    KillStreamSummary,
     adjudicate_result,
 )
 from .bracket import (
@@ -56,6 +58,8 @@ __all__ = [
     "adjudicate_result",
     "AdjudicationOutcome",
     "AdjudicationResult",
+    "KillStreamSummary",
+    "ANOMALY_FLAGS",
     "QUORUM_THRESHOLD",
     "TOTAL_PARTICIPANTS",
     # autonomous-lobby orchestration state machine

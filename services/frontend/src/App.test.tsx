@@ -44,8 +44,17 @@ describe("App route table", () => {
     );
   });
 
-  it("lets any authenticated user reach the global accounts screen", async () => {
+  it("lets an admin reach the linked-accounts roster", async () => {
+    renderAt("/accounts", { roles: ["guild_admin"] });
+    expect(
+      await screen.findByRole("heading", { name: "Linked accounts" }),
+    ).toBeInTheDocument();
+  });
+
+  it("blocks a non-admin from the linked-accounts roster", async () => {
     renderAt("/accounts", { roles: ["player"] });
-    expect(await screen.findByRole("heading", { name: "Accounts" })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Not authorized" })).toBeInTheDocument(),
+    );
   });
 });

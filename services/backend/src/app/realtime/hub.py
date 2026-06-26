@@ -44,14 +44,15 @@ from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 from lol_core import LobbyEvent
-from lol_schemas.enums import LobbyPhase
+from lol_schemas.enums import LobbyPhase, ResultSource
 from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.deps import Principal
 from app.auth.jwt import InvalidAccessToken, verify_access_token
 from app.logging import get_logger
-from app.models import ClientSession
+from app.models import ClientSession, ResultReport
 from app.orchestration import service
 
 logger = get_logger(__name__)
@@ -312,10 +313,12 @@ async def _route_report(
     session: AsyncSession, *, subscription: Subscription, frame: dict[str, Any]
 ) -> None:
     body = frame.get("report") or {}
-    # A result report ends the game; ingest it as the GAME_ENDED transition
-    # (epoch-fenced in the service). The forgeable per-report corroboration row is
-    # persisted by the results pipeline (PLAN.md §3.6.6); here we only advance the
-    # lobby phase off the host's report.
+    # A result report does two things (PLAN.md §3.6.5 / §3.6.6):
+    #   1. advances the lobby phase to GAME_ENDED (epoch-fenced in the service), and
+    #   2. persists the forgeable per-reporter corroboration row that the quorum
+    #      adjudication (Phase 6) later reads.
+    # The two are independent: a stale-epoch report must NOT advance the phase, yet
+    # the row is still a valid corroboration input, so we persist it regardless.
     try:
         await service.ingest_lobby_state(
             session,
@@ -325,6 +328,99 @@ async def _route_report(
         )
     except (KeyError, ValueError, service.OrchestrationError) as exc:
         logger.warning("realtime.inbound.report_dropped", error=str(exc))
+    await _persist_result_report(session, subscription=subscription, body=body)
+
+
+def _kda_by_puuid(teams: list[Any]) -> dict[str, dict[str, int]]:
+    """Flatten the eog teams[].players[] scoreboard into ``{puuid: {k,d,a}}``.
+
+    Players with no PUUID (the LCU line omitted it) are skipped — the PUUID is the
+    corroboration join key, so a KDA we cannot attribute is not stored. Non-numeric
+    counts coerce to 0 rather than poisoning the row (the payload is forgeable).
+    """
+    out: dict[str, dict[str, int]] = {}
+    for team in teams:
+        if not isinstance(team, dict):
+            continue
+        for player in team.get("players") or []:
+            if not isinstance(player, dict):
+                continue
+            puuid = player.get("puuid")
+            if not puuid:
+                continue
+            out[str(puuid)] = {
+                "kills": _as_int(player.get("championsKilled")),
+                "deaths": _as_int(player.get("numDeaths")),
+                "assists": _as_int(player.get("assists")),
+            }
+    return out
+
+
+def _as_int(value: Any) -> int:
+    """Best-effort non-negative int coercion for a forgeable scoreboard count."""
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+async def _persist_result_report(
+    session: AsyncSession, *, subscription: Subscription, body: dict[str, Any]
+) -> None:
+    """Persist one client's end-of-game report as a ``result_reports`` row (§3.6.6).
+
+    The eog block is ``body["report"]`` (the desktop ``EogReport``); a phase-only
+    report (no eog block) is a no-op. Idempotent on
+    ``(lcu_game_id, reporter_puuid, source)`` — first-write-wins, since the
+    durable client queue may re-send the same final report across reconnects. The
+    row is tenant-stamped from the authorized ``subscription.guild_id`` (the RLS
+    GUC enforces it on INSERT); reporter identity is advisory/forgeable by design —
+    truth is established by cross-client corroboration, never one row.
+    """
+    eog = body.get("report")
+    if not isinstance(eog, dict):
+        return  # phase-only report (no eog-stats-block) — nothing to corroborate.
+    lcu_game_id = eog.get("lcuGameId")
+    reporter_puuid = eog.get("reporterPuuid")
+    if not lcu_game_id or not reporter_puuid:
+        logger.warning("realtime.inbound.report_unpersisted", reason="missing_join_keys")
+        return
+
+    existing = (
+        await session.execute(
+            select(ResultReport.id).where(
+                ResultReport.lcu_game_id == str(lcu_game_id),
+                ResultReport.reporter_puuid == str(reporter_puuid),
+                ResultReport.source == ResultSource.EOG_STATS_BLOCK,
+            )
+        )
+    ).first()
+    if existing is not None:
+        return  # already corroborated by an earlier (re)send — first-write-wins.
+
+    live_events = eog.get("liveClientEvents")
+    schema_version = eog.get("schemaVersion")
+    row = ResultReport(
+        match_id=subscription.match_id,
+        guild_id=subscription.guild_id,
+        lcu_game_id=str(lcu_game_id),
+        reporter_puuid=str(reporter_puuid),
+        source=ResultSource.EOG_STATS_BLOCK,
+        # claimed_winner_team stays NULL here: the eog winner is a player set, not
+        # our team UUID; mapping it is the adjudicator's job (Phase 6).
+        reported_kda=_kda_by_puuid(eog.get("teams") or []),
+        kill_stream=live_events if isinstance(live_events, dict) else None,
+        schema_version=str(schema_version) if schema_version else None,
+        raw_payload=eog,
+    )
+    # Insert under a SAVEPOINT so a unique-key race (a concurrent re-send won the
+    # row between our SELECT and INSERT) rolls back ONLY this insert — the outer
+    # transaction (and the GAME_ENDED phase advance) stays intact.
+    try:
+        async with session.begin_nested():
+            session.add(row)
+    except IntegrityError as exc:
+        logger.info("realtime.inbound.report_duplicate", error=str(exc))
 
 
 # ---------------------------------------------------------------------------

@@ -27,9 +27,14 @@ export default defineConfig({
     // Dev: forward API calls to the backend so the SPA stays same-origin (no
     // CORS) and config.apiBaseUrl can default to "". Override the target with
     // VITE_API_BASE_URL if the backend runs elsewhere.
+    // NB: target is 127.0.0.1, NOT localhost. Node 18+ resolves `localhost` to
+    // ::1 (IPv6) first, but the backend dev server (uvicorn --host 127.0.0.1 /
+    // the VS Code launch config) binds IPv4 only -> the proxy would get
+    // ECONNREFUSED on ::1 and report "backend_unreachable" while the backend is
+    // in fact up. Pinning IPv4 avoids that loopback-family mismatch.
     proxy: {
       "/api": {
-        target: process.env.VITE_API_BASE_URL || "http://localhost:8000",
+        target: process.env.VITE_API_BASE_URL || "http://127.0.0.1:8000",
         changeOrigin: true,
         // When the backend isn't listening, http-proxy emits ECONNREFUSED and
         // Vite would otherwise return an opaque empty-body 500. Reply with a

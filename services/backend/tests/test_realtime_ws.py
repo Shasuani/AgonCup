@@ -35,10 +35,10 @@ from lol_realtime import (
     Envelope,
     LobbySpec,
 )
-from lol_schemas.enums import LobbyPhase
+from lol_schemas.enums import LobbyPhase, ResultSource
 
 from app.auth.jwt import mint_access_token
-from app.models import ClientSession, MatchLobby
+from app.models import ClientSession, MatchLobby, ResultReport
 from app.realtime import hub
 
 _GUILD = uuid.uuid4()
@@ -114,6 +114,9 @@ class FakeSession:
         return _Result(rows)
 
     def begin(self) -> _Txn:
+        return _Txn()
+
+    def begin_nested(self) -> _Txn:
         return _Txn()
 
     async def __aenter__(self) -> FakeSession:
@@ -284,7 +287,7 @@ def _lobby(match_id: uuid.UUID, *, host_epoch: int, state: LobbyPhase) -> MatchL
 
 
 def _store(*objects: Any) -> dict[type, list[Any]]:
-    store: dict[type, list[Any]] = {ClientSession: [], MatchLobby: []}
+    store: dict[type, list[Any]] = {ClientSession: [], MatchLobby: [], ResultReport: []}
     for obj in objects:
         store[type(obj)].append(obj)
     return store
@@ -492,6 +495,101 @@ async def test_inbound_report_routes_to_ingest_lobby_state_game_ended() -> None:
         ws, session_factory=_session_factory(store), pubsub_factory=lambda: FakePubSub()
     )
     assert lobby.state == LobbyPhase.RESULT_PENDING
+    # A phase-only report (no eog block) persists nothing to corroborate.
+    assert store[ResultReport] == []
+
+
+def _eog_report(*, lcu_game_id: str = "game-123", reporter: str = "puuid-A") -> dict[str, Any]:
+    """A desktop ``EogReport`` JSON body (camelCase, as it arrives over the wire)."""
+    return {
+        "source": "eogStatsBlock",
+        "lcuGameId": lcu_game_id,
+        "reporterPuuid": reporter,
+        "teams": [
+            {
+                "isWinningTeam": True,
+                "players": [
+                    {"puuid": "puuid-A", "championsKilled": 7, "numDeaths": 2, "assists": 5}
+                ],
+            },
+            {
+                "isWinningTeam": False,
+                "players": [
+                    {"puuid": "puuid-B", "championsKilled": 3, "numDeaths": 6, "assists": 4},
+                    {"championsKilled": 1, "numDeaths": 1, "assists": 0},  # no puuid -> skipped
+                ],
+            },
+        ],
+        "liveClientEvents": {
+            "source": "liveClientData",
+            "events": [{"eventId": 1, "eventName": "ChampionKill", "eventTime": 12.3}],
+            "schemaVersion": "0.0.0-phase0",
+        },
+        "schemaVersion": "0.0.0-phase0",
+        "capturedAtMs": 1234567890,
+    }
+
+
+@pytest.mark.asyncio
+async def test_inbound_report_persists_result_report_row() -> None:
+    match_id = uuid.uuid4()
+    lobby = _lobby(match_id, host_epoch=0, state=LobbyPhase.IN_GAME)
+    store = _store(_participant(match_id), lobby)
+    ws = FakeWebSocket(
+        token=_token(),
+        inbound=[
+            json.dumps({"type": "subscribe", "matchId": str(match_id)}),
+            json.dumps(
+                {"type": "report", "report": {"hostEpoch": 0, "report": _eog_report()}}
+            ),
+        ],
+    )
+    await hub.serve(
+        ws, session_factory=_session_factory(store), pubsub_factory=lambda: FakePubSub()
+    )
+
+    # Phase advanced AND the forgeable corroboration row was persisted (§3.6.6).
+    assert lobby.state == LobbyPhase.RESULT_PENDING
+    assert len(store[ResultReport]) == 1
+    row = store[ResultReport][0]
+    assert row.match_id == match_id
+    assert row.guild_id == _GUILD  # tenant-stamped from the authorized subscription.
+    assert row.lcu_game_id == "game-123"
+    assert row.reporter_puuid == "puuid-A"
+    assert row.source == ResultSource.EOG_STATS_BLOCK
+    assert row.claimed_winner_team is None  # winner->team mapping is the adjudicator's job.
+    # KDA is flattened by PUUID; the player line without a PUUID is dropped.
+    assert row.reported_kda == {
+        "puuid-A": {"kills": 7, "deaths": 2, "assists": 5},
+        "puuid-B": {"kills": 3, "deaths": 6, "assists": 4},
+    }
+    assert row.kill_stream["events"][0]["eventName"] == "ChampionKill"
+    assert row.schema_version == "0.0.0-phase0"
+    assert row.raw_payload["lcuGameId"] == "game-123"
+
+
+@pytest.mark.asyncio
+async def test_inbound_report_persist_is_idempotent_first_write_wins() -> None:
+    match_id = uuid.uuid4()
+    lobby = _lobby(match_id, host_epoch=0, state=LobbyPhase.IN_GAME)
+    store = _store(_participant(match_id), lobby)
+    report_frame = json.dumps(
+        {"type": "report", "report": {"hostEpoch": 0, "report": _eog_report()}}
+    )
+    ws = FakeWebSocket(
+        token=_token(),
+        inbound=[
+            json.dumps({"type": "subscribe", "matchId": str(match_id)}),
+            report_frame,  # durable client queue re-sends the same final report.
+            report_frame,
+        ],
+    )
+    await hub.serve(
+        ws, session_factory=_session_factory(store), pubsub_factory=lambda: FakePubSub()
+    )
+
+    # Unique on (lcu_game_id, reporter_puuid, source) -> exactly one row, not two.
+    assert len(store[ResultReport]) == 1
 
 
 @pytest.mark.asyncio

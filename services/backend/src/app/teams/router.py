@@ -24,6 +24,7 @@ from app.auth.deps import (
     get_tenant_session,
     require_tenant_role,
 )
+from app.models.tables import Team, TeamMember
 from app.teams import service
 
 router = APIRouter(prefix="/teams", tags=["teams"])
@@ -65,7 +66,7 @@ def _enum_value(v: object) -> str:
     return v.value if hasattr(v, "value") else str(v)
 
 
-def _to_response(t) -> TeamResponse:
+def _to_response(t: Team) -> TeamResponse:
     return TeamResponse(
         id=str(t.id),
         name=t.name,
@@ -74,7 +75,7 @@ def _to_response(t) -> TeamResponse:
     )
 
 
-def _member_response(m) -> TeamMemberResponse:
+def _member_response(m: TeamMember) -> TeamMemberResponse:
     return TeamMemberResponse(
         team_id=str(m.team_id),
         user_id=str(m.user_id),

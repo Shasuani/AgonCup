@@ -10,7 +10,7 @@ header or the JWT claim (these routes key on ``tournament_id``, not a path guild
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from lol_schemas.enums import TournamentFormat, UserGuildRoleName
@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.deps import get_tenant_session, require_tenant_role
+from app.models.tables import Registration, Tournament
 from app.tournaments import service
 
 router = APIRouter(prefix="/tournaments", tags=["tournaments"])
@@ -33,7 +34,7 @@ class CreateTournamentRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     format: TournamentFormat = TournamentFormat.SINGLE_ELIMINATION
     max_teams: int = Field(default=16, ge=2, le=16)
-    ruleset: dict = Field(default_factory=dict)
+    ruleset: dict[str, Any] = Field(default_factory=dict)
 
 
 class TournamentResponse(BaseModel):
@@ -67,7 +68,7 @@ def _enum_value(v: object) -> str:
     return v.value if hasattr(v, "value") else str(v)
 
 
-def _to_response(t) -> TournamentResponse:
+def _to_response(t: Tournament) -> TournamentResponse:
     return TournamentResponse(
         id=str(t.id),
         name=t.name,
@@ -78,7 +79,7 @@ def _to_response(t) -> TournamentResponse:
     )
 
 
-def _reg_response(reg) -> RegistrationResponse:
+def _reg_response(reg: Registration) -> RegistrationResponse:
     return RegistrationResponse(
         id=str(reg.id),
         tournament_id=str(reg.tournament_id),

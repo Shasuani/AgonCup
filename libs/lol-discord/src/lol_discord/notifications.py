@@ -52,18 +52,19 @@ def _field(name: str, value: str, *, inline: bool = False) -> EmbedField:
 # Registration                                                                 #
 # --------------------------------------------------------------------------- #
 def registration_code(*, code: str, expires_minutes: int = 15) -> dict[str, Any]:
-    """Verification started: finish linking in the desktop app (PLAN.md §3.5).
+    """Sign-in code: paste it in the desktop app to sign in and link (PLAN.md §3.5).
 
     The player receives a one-time ``code`` (issued to their authenticated Discord
-    identity) which they enter in the LeagueOfLeagues desktop app. The desktop
-    reads the live League client (LCU) to obtain the player's PUUID and completes
-    the link — so there is no icon dance and no Riot ID required. The code is a
-    secret credential, so the embed is always sent ephemerally.
+    identity) which they paste into the LeagueOfLeagues desktop app to **sign in**.
+    The desktop then reads the live League client (LCU) to obtain the player's
+    PUUID and completes the account link — so there is no icon dance and no Riot ID
+    required. The code is a secret credential, so the embed is always sent
+    ephemerally.
     """
     return build_embed(
-        "Finish linking in the desktop app",
-        "Use the code below in the LeagueOfLeagues desktop app to link your "
-        "League account.",
+        "Paste this code in the LeagueOfLeagues desktop app to sign in",
+        "Use the code below to sign in to the LeagueOfLeagues desktop app, which "
+        "then links your League account.",
         color=EmbedColor.WARNING,
         fields=[
             _field("Your code", f"`{code}`", inline=True),
@@ -71,7 +72,7 @@ def registration_code(*, code: str, expires_minutes: int = 15) -> dict[str, Any]
                 "Steps",
                 "1. Open the LeagueOfLeagues desktop app.\n"
                 "2. Make sure League is running and you're signed in.\n"
-                "3. Enter this code to link your account.",
+                "3. Paste this code to sign in and link your account.",
             ),
             _field("Expires", f"in {expires_minutes} minutes", inline=True),
         ],

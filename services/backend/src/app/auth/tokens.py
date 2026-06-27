@@ -74,13 +74,18 @@ async def issue_refresh_token(
     user_id: str,
     family_id: str | None = None,
     rotated_from_id: str | None = None,
+    device_label: str | None = None,
+    device_id: str | None = None,
     settings: Settings | None = None,
     now: datetime | None = None,
 ) -> IssuedRefreshToken:
     """Create + persist a new refresh token; return the plaintext secret.
 
     Used both for the initial login (``family_id``/``rotated_from_id`` omitted →
-    new family root) and for rotation (caller threads the prior family + id).
+    new family root) and for rotation (caller threads the prior family + id). The
+    optional ``device_label``/``device_id`` tag the token with the desktop device
+    that paired (PLAN.md §3.1 desktop pairing); they are carried forward across
+    rotation by :func:`rotate_refresh_token` so a device label survives the family.
     """
     settings = settings or get_settings()
     issued = now or _now()
@@ -95,6 +100,8 @@ async def issue_refresh_token(
         expires_at=expires,
         revoked=False,
         rotated_from_id=rotated_from_id,
+        device_label=device_label,
+        device_id=device_id,
     )
     # A brand-new family uses the row's own id as the family id, so first flush to
     # obtain the server-generated id, then backfill family_id when not rotating.
@@ -152,7 +159,9 @@ async def rotate_refresh_token(
         row.revoked = True
         raise InvalidRefreshToken("refresh token expired")
 
-    # Rotate: revoke the current row, issue its successor in the same family.
+    # Rotate: revoke the current row, issue its successor in the same family. The
+    # predecessor's device metadata is CARRIED FORWARD so a paired device stays
+    # labelled across the whole token family (PLAN.md §3.1 desktop pairing).
     row.revoked = True
     await session.flush()
     return await issue_refresh_token(
@@ -160,6 +169,8 @@ async def rotate_refresh_token(
         user_id=str(row.user_id),
         family_id=str(row.family_id),
         rotated_from_id=str(row.id),
+        device_label=row.device_label,
+        device_id=row.device_id,
         settings=settings,
         now=moment,
     )
@@ -183,3 +194,16 @@ async def revoke_refresh_token(session: AsyncSession, *, token: str) -> bool:
 async def revoke_family(session: AsyncSession, *, family_id: str) -> None:
     """Revoke every token in a family (e.g. global sign-out / account deletion)."""
     await _revoke_family(session, family_id)
+
+
+async def revoke_all_for_user(session: AsyncSession, *, user_id: str) -> None:
+    """Revoke EVERY refresh token belonging to ``user_id`` (all families).
+
+    The global sign-out / right-to-be-forgotten path: when a user is deleted
+    (PLAN.md §7 Privacy/PII) we revoke their refresh tokens explicitly BEFORE the
+    cascading ``users.id`` DELETE removes the rows, so any token presented in the
+    narrow window between revocation and deletion fails closed.
+    """
+    await session.execute(
+        update(RefreshToken).where(RefreshToken.user_id == user_id).values(revoked=True)
+    )

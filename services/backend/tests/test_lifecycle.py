@@ -38,7 +38,7 @@ from app.lifecycle.service import (
     purge_guild,
     purge_guild_by_discord_id,
 )
-from app.models import Guild, User
+from app.models import Guild, RefreshToken, User
 from app.models.tables import Match, Team, Tournament, UserGuildRole
 
 
@@ -256,6 +256,51 @@ async def test_delete_user_missing_raises() -> None:
     session = FakeSession()
     with pytest.raises(UserNotFoundError):
         await delete_user(session, user_id=str(uuid.uuid4()))
+
+
+def _seed_refresh_token(session: FakeSession, *, user_id: Any) -> RefreshToken:
+    rt = RefreshToken(
+        user_id=user_id,
+        token_hash=f"hash-{uuid.uuid4()}",
+        family_id=uuid.uuid4(),
+        revoked=False,
+    )
+    rt.id = uuid.uuid4()
+    session.store.setdefault(RefreshToken.__tablename__, []).append(rt)
+    return rt
+
+
+@pytest.mark.asyncio
+async def test_delete_user_revokes_refresh_tokens() -> None:
+    # delete_user revokes the user's refresh tokens BEFORE the cascading DELETE,
+    # while leaving ANOTHER user's tokens untouched.
+    session = FakeSession()
+    user = User(discord_user_id=888, display_name="x")
+    user.id = uuid.uuid4()
+    session.seed(user)
+    mine = _seed_refresh_token(session, user_id=user.id)
+    others = _seed_refresh_token(session, user_id=uuid.uuid4())
+
+    result = await delete_user(session, user_id=str(user.id))
+
+    assert result.deleted is True
+    assert session.rows(User) == []
+    assert mine.revoked is True  # the deleted user's token is revoked
+    assert others.revoked is False  # an unrelated user's token is untouched
+
+
+@pytest.mark.asyncio
+async def test_purge_guild_leaves_refresh_tokens() -> None:
+    # A guild purge is global-PII-safe: refresh tokens are identity-scoped, so a
+    # user removed from one guild stays signed in elsewhere — tokens survive.
+    session = FakeSession()
+    gid = _seed_guild_with_data(session)
+    rt = _seed_refresh_token(session, user_id=uuid.uuid4())
+
+    await purge_guild(session, guild_id=gid)
+
+    assert rt.revoked is False
+    assert session.store.get(RefreshToken.__tablename__) == [rt]
 
 
 # ---------------------------------------------------------------------------

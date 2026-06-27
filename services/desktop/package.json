@@ -9,7 +9,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
-    "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "test": "node scripts/run-tests.mjs",
     "start": "electron .",
     "dist": "npm run build && electron-builder --config electron-builder.yml"
   },

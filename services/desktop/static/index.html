@@ -74,6 +74,14 @@
       .status.ok { color: var(--ok); }
       .status.err { color: var(--danger); }
       .status.info { color: var(--muted); }
+
+      /* --- LCU reachability badge (persistent) ----------------------------- */
+      .lcu-badge { display: inline-flex; align-items: center; gap: 8px; font-size: 13px;
+                   color: var(--muted); margin: 0 0 18px; padding: 7px 12px;
+                   background: var(--surface-alt); border: 1px solid var(--border); border-radius: 999px; }
+      .lcu-badge .dot { box-shadow: none; }
+      .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+      .hidden { display: none !important; }
     </style>
   </head>
   <body>
@@ -114,12 +122,13 @@
       </div>
     </div>
 
-    <section class="link-card" aria-labelledby="link-title">
-      <h2 id="link-title">Link your account</h2>
+    <!-- Step 1 — sign in with a one-time pairing code (shown when signed out). -->
+    <section id="pair-card" class="link-card hidden" aria-labelledby="pair-title">
+      <h2 id="pair-title">Sign in</h2>
       <p class="hint">
-        Run <code>/register</code> in Discord to get a one-time code. Make sure League is running and
-        you're signed in, then enter the code here. We read your local League client to confirm your
-        account — read-only, never any in-game automation.
+        Run <code>/register</code> (or <code>/link</code>) in Discord to get a one-time code, then
+        enter it here to sign in to the desktop app. No Discord permission screen — the code is the
+        credential. You stay signed in across restarts.
       </p>
 
       <div class="field">
@@ -128,8 +137,22 @@
                placeholder="XXXX-XXXX" maxlength="9" />
       </div>
 
-      <button id="verify-btn" class="btn" type="button">Verify</button>
-      <p id="status" class="status info" role="status" aria-live="polite"></p>
+      <button id="pair-btn" class="btn" type="button">Sign in</button>
+      <p id="pair-status" class="status info" role="status" aria-live="polite"></p>
+    </section>
+
+    <!-- Step 2 — link your League account (shown when signed in). -->
+    <section id="verify-card" class="link-card hidden" aria-labelledby="verify-title">
+      <h2 id="verify-title">Link your League account</h2>
+      <p class="hint">
+        Make sure League of Legends is running and you're fully signed in. We read your local League
+        client to confirm your Riot ID — read-only, never any in-game automation.
+      </p>
+
+      <p id="lcu-badge" class="lcu-badge"><span class="dot off"></span> <span id="lcu-label">Checking League client…</span></p>
+
+      <button id="verify-btn" class="btn" type="button" disabled>Verify with League</button>
+      <p id="verify-status" class="status info" role="status" aria-live="polite"></p>
     </section>
 
     <p class="note">

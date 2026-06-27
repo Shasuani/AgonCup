@@ -186,6 +186,11 @@ class RefreshToken(Base):
         ForeignKey("refresh_tokens.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # Desktop-pairing device metadata (migration 0006). NULL for OAuth-login /
+    # dev-login / refresh-rotation roots; set by ``/auth/desktop-pair`` and carried
+    # forward across rotation so a device label survives the token family.
+    device_label: Mapped[str | None] = mapped_column(Text, nullable=True)
+    device_id: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class OAuthCredential(Base):

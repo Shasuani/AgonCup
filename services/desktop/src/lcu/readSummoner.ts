@@ -17,6 +17,9 @@
  * Failures (League not running, lockfile missing, LCU drift/error) are mapped to
  * a typed `{ ok:false, reason }` result so the renderer can show a friendly
  * message rather than a stack trace.
+ *
+ * The Riot ID this returns feeds the authenticated `verify-lcu` endpoint (see
+ * lcu/verify.ts), which resolves the canonical PUUID via Account-V1.
  */
 
 import {

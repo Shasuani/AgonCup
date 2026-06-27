@@ -773,6 +773,162 @@ async def test_verify_desktop_code_invalid_region_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
+# verify_lcu_account (JWT-authed, no code) — PLAN.md §3.1
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_verify_lcu_resolves_canonical_and_links_to_principal() -> None:
+    session = FakeSession()
+    user_id = str(uuid.uuid4())
+    _seed_user(session, user_id, discord_user_id=777)
+    guild_id = str(uuid.uuid4())
+
+    client = FakeRiotClient(
+        dto=AccountDTO(puuid=_CANON, game_name="Chama", tag_line="Shasu"),
+        entries=[_GOLD],
+    )
+
+    result = await service.verify_lcu_account(
+        session,
+        user_id=user_id,
+        game_name="Chama",
+        tag_line="Shasu",
+        region="eun1",
+        account_client=client,  # type: ignore[arg-type]
+        lcu_puuid="ec15f3f7-785e-57e8-8931-590e59d62f9e",
+        summoner_id="55997829",
+        origin_guild_id=guild_id,
+    )
+
+    account = session.store[RiotAccount][0]
+    # The USER comes from the principal (no code/VerificationAttempt involved).
+    assert str(account.user_id) == user_id
+    assert account.puuid == _CANON  # canonical, not the LCU UUID
+    assert account.lcu_puuid == "ec15f3f7-785e-57e8-8931-590e59d62f9e"
+    assert account.verified is True
+    assert account.region == "eun1"
+    assert account.summoner_id == "55997829"
+    assert account.rank_tier == "GOLD"
+    # No VerificationAttempt is touched in this flow.
+    assert session.store[VerificationAttempt] == []
+
+    assert result.verified is True
+    assert result.puuid == _CANON
+    assert result.origin_guild_id == guild_id
+    assert result.rank_text == "Gold II, 45 LP"
+    assert result.discord_user_id == "777"
+
+
+@pytest.mark.asyncio
+async def test_verify_lcu_dedupes_existing_row_same_user() -> None:
+    # An existing row carrying the SAME canonical puuid is UPDATED in place.
+    session = FakeSession()
+    user_id = str(uuid.uuid4())
+    _seed_user(session, user_id)
+    existing = RiotAccount(
+        user_id=uuid.UUID(user_id),
+        puuid=_CANON,
+        riot_id_game_name="OldName",
+        verified=False,
+    )
+    existing.id = uuid.uuid4()
+    session.store[RiotAccount].append(existing)
+
+    client = FakeRiotClient(dto=AccountDTO(puuid=_CANON, game_name="Chama", tag_line="Shasu"))
+    result = await service.verify_lcu_account(
+        session,
+        user_id=user_id,
+        game_name="Chama",
+        tag_line="Shasu",
+        region="eun1",
+        account_client=client,  # type: ignore[arg-type]
+    )
+    assert len(session.store[RiotAccount]) == 1  # no duplicate row
+    assert existing.verified is True
+    assert existing.riot_id_game_name == "Chama"
+    assert result.account_id == str(existing.id)
+
+
+@pytest.mark.asyncio
+async def test_verify_lcu_puuid_owned_by_other_user_conflicts() -> None:
+    session = FakeSession()
+    user_id = str(uuid.uuid4())
+    _seed_user(session, user_id)
+    other = RiotAccount(user_id=uuid.uuid4(), puuid=_CANON, verified=True)
+    other.id = uuid.uuid4()
+    session.store[RiotAccount].append(other)
+
+    client = FakeRiotClient(dto=AccountDTO(puuid=_CANON, game_name="Chama", tag_line="Shasu"))
+    with pytest.raises(service.PuuidConflict):
+        await service.verify_lcu_account(
+            session,
+            user_id=user_id,
+            game_name="Chama",
+            tag_line="Shasu",
+            region="eun1",
+            account_client=client,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.asyncio
+async def test_verify_lcu_unknown_riot_id_rejects() -> None:
+    session = FakeSession()
+    user_id = str(uuid.uuid4())
+    client = FakeRiotClient(raises=NotFound("no such riot id"))
+    with pytest.raises(service.UnknownRiotId):
+        await service.verify_lcu_account(
+            session,
+            user_id=user_id,
+            game_name="Nobody",
+            tag_line="ZZZ",
+            region="eun1",
+            account_client=client,  # type: ignore[arg-type]
+        )
+    assert session.store[RiotAccount] == []
+
+
+@pytest.mark.asyncio
+async def test_verify_lcu_riot_unavailable_maps_to_unavailable() -> None:
+    session = FakeSession()
+    client = FakeRiotClient(raises=RiotApiError("boom", status_code=500))
+    with pytest.raises(service.RiotUnavailable):
+        await service.verify_lcu_account(
+            session,
+            user_id=str(uuid.uuid4()),
+            game_name="g",
+            tag_line="t",
+            region="eun1",
+            account_client=client,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.asyncio
+async def test_verify_lcu_invalid_region_rejected_before_riot_call() -> None:
+    session = FakeSession()
+    client = FakeRiotClient(dto=AccountDTO(puuid=_CANON, game_name="g", tag_line="t"))
+    with pytest.raises(service.InvalidRegion):
+        await service.verify_lcu_account(
+            session,
+            user_id=str(uuid.uuid4()),
+            game_name="g",
+            tag_line="t",
+            region="middle-earth",
+            account_client=client,  # type: ignore[arg-type]
+        )
+    assert client.calls == []
+
+
+def test_format_rank_fields_renders_snapshot() -> None:
+    assert (
+        service.format_rank_fields(tier="GOLD", division="II", league_points=45) == "Gold II, 45 LP"
+    )
+    # Apex tiers carry no division.
+    assert service.format_rank_fields(tier="MASTER", division=None, league_points=120) == (
+        "Master, 120 LP"
+    )
+    assert service.format_rank_fields(tier=None, division=None, league_points=None) == "Unranked"
+
+
+# ---------------------------------------------------------------------------
 # Admin roster (list_linked_accounts) — PLAN.md §3.4
 # ---------------------------------------------------------------------------
 class _RosterSession:

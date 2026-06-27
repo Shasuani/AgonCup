@@ -111,13 +111,33 @@ export interface WsTransportConfig {
   readonly url: string;
   /** Access JWT, passed as `?token=` (see header note on leakage). */
   readonly token: string;
+  /**
+   * Optional live access-token source. When set it OVERRIDES {@link token} at
+   * connect time, so a silent refresh (which rotates the access JWT) is picked
+   * up automatically on the next (re)connect without rebuilding the transport.
+   */
+  readonly tokenProvider?: () => string;
   /** Match this connection subscribes to. */
   readonly matchId: string;
+  /**
+   * Guild the match belongs to (per-match WS authorization). Carried in the
+   * subscribe frame so the backend sets the correct tenant GUC before the
+   * participant check — a player can be in matches across guilds from ONE
+   * identity-bearing session, so this is per-match, not baked into the token.
+   * A forged guild fails closed server-side (zero rows => error frame + 4401).
+   */
+  readonly guildId?: string;
   readonly reconnect?: ReconnectConfig;
   /** Max queued ack/report frames before the oldest is dropped. */
   readonly maxQueuedFrames?: number;
   /** Optional structured-warning sink (drops, parse errors, reconnects). */
   readonly onWarn?: (event: string, detail: Record<string, unknown>) => void;
+  /**
+   * Invoked on an auth-rejection close (4401): the access token is bad/expired
+   * and the transport has STOPPED retrying (a retry with the same token is
+   * pointless). The app should silently refresh and then call {@link reconnect}.
+   */
+  readonly onAuthRejected?: () => void;
 }
 
 // --- frame shapes (wire contract) ------------------------------------------- //
@@ -236,8 +256,14 @@ export class WsBackendTransport implements BackendTransport {
     this.#subscribed = false;
 
     socket.on("open", () => {
-      // First frame MUST be the subscribe per WS_CONTRACT.
-      this.#rawSend({ type: "subscribe", matchId: this.#config.matchId });
+      // First frame MUST be the subscribe per WS_CONTRACT. The match's guild is
+      // carried so the backend scopes the participant check to the right tenant.
+      const guildId = this.#config.guildId;
+      this.#rawSend({
+        type: "subscribe",
+        matchId: this.#config.matchId,
+        ...(guildId !== undefined && guildId !== "" ? { guildId } : {}),
+      });
     });
     socket.on("message", (data) => {
       this.#onMessage(data);
@@ -253,8 +279,10 @@ export class WsBackendTransport implements BackendTransport {
 
   /** Build the connect URL with the token query param (contract auth). */
   #connectUrl(): string {
+    // Prefer the live provider (picks up a silently-refreshed access token).
+    const token = this.#config.tokenProvider?.() ?? this.#config.token;
     const sep = this.#config.url.includes("?") ? "&" : "?";
-    return `${this.#config.url}${sep}token=${encodeURIComponent(this.#config.token)}`;
+    return `${this.#config.url}${sep}token=${encodeURIComponent(token)}`;
   }
 
   #onMessage(data: unknown): void {
@@ -299,11 +327,25 @@ export class WsBackendTransport implements BackendTransport {
     }
     if (code === WS_CLOSE_AUTH) {
       // Auth rejected: token is bad/expired. Retrying with the SAME token is
-      // pointless; surface it and stop the loop (the app must re-auth).
+      // pointless; surface it and stop the loop. The app silently refreshes via
+      // the hook and then calls reconnect() with the rotated token.
       this.#warn("auth_rejected", { code });
+      this.#config.onAuthRejected?.();
       return;
     }
     this.#scheduleReconnect();
+  }
+
+  /**
+   * Re-open after an auth-rejection close once the access token has been
+   * refreshed (the {@link tokenProvider} now returns the fresh token). No-op if
+   * the user closed the transport or a socket is already live / pending.
+   */
+  reconnect(): void {
+    this.#closedByUser = false;
+    if (this.#socket === null && this.#reconnectHandle === null) {
+      this.#open();
+    }
   }
 
   #scheduleReconnect(): void {

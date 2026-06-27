@@ -1,14 +1,20 @@
 /**
- * Desktop account-verification flow (main-process side).
+ * Desktop account-linking flow (main-process side) — step 2 of onboarding.
  *
- * Ties together the READ-ONLY LCU current-summoner read and the backend
- * verify-desktop POST: the renderer hands us a one-time code, we read the local
- * LCU Riot ID (gameName/tagLine) + region (proving the user is signed into that
- * account on this machine), and submit
- * `{ code, game_name, tag_line, region, lcu_puuid, summoner_id }` to the public
- * verify endpoint. The backend resolves the CANONICAL 78-char PUUID server-side
- * via Account-V1 by-riot-id — that resolve (a 404 => Riot ID does not exist) is
- * the "double verification"; we no longer send the LCU PUUID as the identity.
+ * Ties together the READ-ONLY LCU current-summoner read and the AUTHENTICATED
+ * backend `POST /api/v1/accounts/verify-lcu`: the user is already signed in (a
+ * pairing-code exchange minted the session — see auth/pairClient.ts), so this
+ * call carries the access JWT as `Authorization: Bearer <token>` and NO code.
+ * We read the local LCU Riot ID (gameName/tagLine) + region (proving the user is
+ * signed into that account on this machine) and submit
+ * `{ game_name, tag_line, region, lcu_puuid, summoner_id }`. The backend takes
+ * the USER from the principal and resolves the CANONICAL 78-char PUUID server-
+ * side via Account-V1 by-riot-id — that resolve (a 404 => Riot ID does not
+ * exist) is the "double verification"; we never send the LCU PUUID as identity.
+ *
+ * SESSION BOUNDARY: a `401` means the access token expired — the caller should
+ * silently refresh (see auth/pairClient.refreshSession) and retry once. The
+ * status is surfaced verbatim so the main process can drive that retry.
  *
  * TRUST BOUNDARY: the LCU read is a POSSESSION signal (you must be signed into
  * that client); the advisory `lcu_puuid` is a secondary signal only. Resolving
@@ -45,10 +51,12 @@ export interface VerifyErr {
 
 export type VerifyResult = VerifyOk | VerifyErr;
 
-/** Inputs from the renderer form. The Riot ID + region are NOT supplied by the
- * user — they are read from the local League client (LCU). */
+/** Inputs from the main process. The Riot ID + region are NOT supplied by the
+ * user — they are read from the local League client (LCU). The access token
+ * authenticates the call (the user is already paired); there is NO code. */
 export interface VerifyArgs {
-  readonly code: string;
+  /** Access JWT for the signed-in user (sent as `Authorization: Bearer …`). */
+  readonly accessToken: string;
 }
 
 /** Injectable seams so the flow is unit-testable without Electron / network. */
@@ -72,9 +80,11 @@ function resolveBackendUrl(explicit?: string): string {
 }
 
 /**
- * Read the LCU Riot ID + region then POST them (with the code) to the backend
- * verify-desktop endpoint. The backend resolves the canonical PUUID. Never
- * throws — maps every failure to a typed result.
+ * Read the LCU Riot ID + region then POST them (authenticated with the access
+ * token) to the backend `verify-lcu` endpoint. The backend takes the user from
+ * the JWT principal and resolves the canonical PUUID. Never throws — maps every
+ * failure to a typed result. A `401` is surfaced so the caller can refresh +
+ * retry.
  */
 export async function verifyDesktop(
   args: VerifyArgs,
@@ -106,7 +116,6 @@ export async function verifyDesktop(
   }
 
   const body = JSON.stringify({
-    code: args.code,
     game_name: summoner.gameName,
     tag_line: summoner.tagLine,
     region: summoner.region,
@@ -116,9 +125,12 @@ export async function verifyDesktop(
 
   let res: Response;
   try {
-    res = await doFetch(`${backendUrl}/api/v1/accounts/verify-desktop`, {
+    res = await doFetch(`${backendUrl}/api/v1/accounts/verify-lcu`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${args.accessToken}`,
+      },
       body,
     });
   } catch (err) {

@@ -22,16 +22,18 @@ from __future__ import annotations
 
 import secrets
 import time
+from datetime import UTC, datetime
 from typing import Annotated
 
 import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
 from lol_schemas.enums import UserGuildRoleName
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.accounts import service as accounts_service
 from app.auth import discord_oauth
 from app.auth.jwt import mint_access_token
 from app.auth.tokens import (
@@ -44,13 +46,21 @@ from app.auth.tokens import (
 from app.config import Settings, get_settings
 from app.db import SessionLocal
 from app.logging import get_logger
-from app.models import Guild, OAuthCredential, User, UserGuildRole
+from app.models import Guild, OAuthCredential, RiotAccount, User, UserGuildRole, VerificationAttempt
+from app.ratelimit import FixedWindowLimiter
 from app.security import encrypt
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 log = get_logger("app.auth")
 
 DISCORD_PROVIDER = "discord"
+
+#: Per-IP fixed window for the unauthenticated ``/auth/desktop-pair`` (code
+#: exchange) — a brute-force brake on code-guessing (10/60s on the socket peer).
+_pair_limiter = FixedWindowLimiter(max_hits=10, window_s=60.0)
+#: Per-IP fixed window for ``/auth/refresh`` (30/60s) — a brake on refresh-token
+#: guessing / replay floods. Legitimate clients rotate ~ once per access TTL.
+_refresh_limiter = FixedWindowLimiter(max_hits=30, window_s=60.0)
 
 # In-process anti-CSRF state store: state -> expiry epoch seconds. Single-instance
 # only; back with Redis for horizontal scale (PLAN.md §3.1 — auth-code + state).
@@ -97,6 +107,46 @@ class RefreshRequest(BaseModel):
 
 class LogoutRequest(BaseModel):
     refresh_token: str
+
+
+class DesktopPairRequest(BaseModel):
+    """Desktop pairing body. Mirrors ``lol_schemas.DesktopPairRequestDTO``."""
+
+    code: str = Field(min_length=8, max_length=12)
+    device_label: str | None = Field(default=None, max_length=64)
+
+
+class DesktopPairUser(BaseModel):
+    """Authenticated user summary. Mirrors ``lol_schemas.DesktopPairUserDTO``."""
+
+    user_id: str
+    discord_user_id: str
+    display_name: str
+
+
+class DesktopPairAccount(BaseModel):
+    """Linked-account summary. Mirrors ``lol_schemas.DesktopPairAccountDTO``."""
+
+    linked: bool
+    puuid: str | None = None
+    game_name: str | None = None
+    tag_line: str | None = None
+    region: str | None = None
+    verified: bool = False
+    rank_text: str = "Unranked"
+
+
+class DesktopPairResponse(BaseModel):
+    """Pairing session result. Mirrors ``lol_schemas.DesktopPairResponseDTO``.
+
+    The :class:`TokenPair` fields plus the user + (optional) linked-account summary.
+    """
+
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"  # noqa: S105 - scheme name, not a secret
+    user: DesktopPairUser
+    account: DesktopPairAccount | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +196,40 @@ async def _issue_pair(session: AsyncSession, user_id: str, settings: Settings) -
     return TokenPair(access_token=access, refresh_token=refresh.token)
 
 
+async def _account_summary(session: AsyncSession, user_id: str) -> DesktopPairAccount | None:
+    """Summarise the user's linked ``RiotAccount`` for the pairing response, or ``None``.
+
+    ``RiotAccount`` is a GLOBAL table (not guild-RLS), so ownership is scoped in the
+    query. A verified account is preferred; the stored Solo/Duo rank snapshot is
+    rendered to ``rank_text`` (no Riot call — desktop pairing is fast). Returns
+    ``None`` when the user has not linked a League account yet (they pair first,
+    then link via ``/accounts/verify-lcu``).
+    """
+    accounts = (
+        (await session.execute(select(RiotAccount).where(RiotAccount.user_id == user_id)))
+        .scalars()
+        .all()
+    )
+    if not accounts:
+        return None
+    # Prefer a verified account; otherwise the first linked row.
+    account = next((a for a in accounts if a.verified), accounts[0])
+    rank_text = accounts_service.format_rank_fields(
+        tier=account.rank_tier,
+        division=account.rank_division,
+        league_points=account.rank_lp,
+    )
+    return DesktopPairAccount(
+        linked=True,
+        puuid=account.puuid,
+        game_name=account.riot_id_game_name,
+        tag_line=account.riot_id_tag_line,
+        region=account.region,
+        verified=account.verified,
+        rank_text=rank_text,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -179,7 +263,7 @@ async def callback(
     # be a live, single-use value from the in-process store. Constant-time match.
     cookie_state = request.cookies.get(_STATE_COOKIE)
     response.delete_cookie(_STATE_COOKIE)
-    state_ok = bool(cookie_state) and secrets.compare_digest(cookie_state, state)
+    state_ok = bool(cookie_state) and secrets.compare_digest(cookie_state or "", state)
     if not state_ok or not _consume_state(state):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="invalid or expired state"
@@ -256,8 +340,17 @@ async def _upsert_oauth_credential(
 @router.post("/refresh", response_model=TokenPair, summary="Rotate a refresh token")
 async def refresh(
     body: Annotated[RefreshRequest, Body()],
+    request: Request,
     settings: Annotated[Settings, Depends(_get_settings_dep)],
 ) -> TokenPair:
+    # Per-IP brake on refresh-token guessing/replay floods (the secret is opaque +
+    # high-entropy, but a flood still costs a DB lookup per attempt).
+    client_ip = request.client.host if request.client else "unknown"
+    if not _refresh_limiter.allow(client_ip):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="too many attempts"
+        )
+
     # Manual transaction control (not session.begin()): on reuse we MUST commit
     # the family revocation before raising — raising inside an auto-rollback
     # transaction would undo the very theft mitigation reuse-detection performed.
@@ -294,6 +387,106 @@ async def logout(body: Annotated[LogoutRequest, Body()]) -> dict[str, str]:
     async with SessionLocal() as session, session.begin():
         await revoke_refresh_token(session, token=body.refresh_token)
     return {"status": "logged_out"}
+
+
+# ---------------------------------------------------------------------------
+# Desktop pairing: exchange a bot-minted one-time code for a session
+# ---------------------------------------------------------------------------
+@router.post(
+    "/desktop-pair",
+    response_model=DesktopPairResponse,
+    summary="Exchange a one-time desktop code for a session (anonymous)",
+)
+async def desktop_pair(
+    body: Annotated[DesktopPairRequest, Body()],
+    request: Request,
+    settings: Annotated[Settings, Depends(_get_settings_dep)],
+) -> DesktopPairResponse:
+    """Exchange a bot-minted desktop ``code`` for an access/refresh session (PLAN.md §3.1).
+
+    UNAUTHENTICATED by design: the one-time ``code`` (minted for an authenticated
+    Discord user via ``/register`` // the ``integrations/discord/accounts/link``
+    bridge — 15-min TTL, single-use, superseded on re-register) IS the credential.
+    This is the SAME code the deprecated ``/accounts/verify-desktop`` consumed, but
+    here it is a SESSION bootstrap ONLY — the Riot link moved to the authenticated
+    ``/accounts/verify-lcu``. A per-IP fixed-window rate limit guards against
+    code-guessing; a failed lookup returns a generic 401.
+
+    Flow: shape-gate the code (422) → rate-limit (429) → in one txn, ``FOR UPDATE``
+    select the live ``desktop_code`` attempt (pending, unexpired) — ``None`` → 401 —
+    CONSUME it single-use (``status='verified'``; ``puuid`` stays NULL: this flow
+    links no Riot account) → bake the identity access JWT (``_roles_for`` picks the
+    advisory acting guild) + issue a refresh token tagged with ``device_label`` →
+    attach the user + any linked-account summary → commit.
+    """
+    # Cheap shape validation before any state touch (also pre-rate-limit), mirroring
+    # ``/accounts/verify-desktop``: an obviously-malformed code 422s without a DB hit.
+    normalized = accounts_service.normalize_code(body.code)
+    if len(normalized) != accounts_service._CODE_LEN or not set(normalized) <= set(
+        accounts_service._CODE_ALPHABET
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="malformed code"
+        )
+
+    client_ip = request.client.host if request.client else "unknown"
+    if not _pair_limiter.allow(client_ip):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="too many attempts"
+        )
+
+    now = datetime.now(tz=UTC)
+    async with SessionLocal() as session, session.begin():
+        attempt = (
+            await session.execute(
+                select(VerificationAttempt)
+                .where(
+                    VerificationAttempt.code == normalized,
+                    VerificationAttempt.verify_kind == accounts_service.VERIFY_KIND_DESKTOP_CODE,
+                    VerificationAttempt.status == accounts_service.STATUS_PENDING,
+                    VerificationAttempt.expires_at > now,
+                )
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if attempt is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid or expired code"
+            )
+
+        # CONSUME single-use (semantic = consumed; no Riot link, so puuid stays NULL).
+        attempt.status = accounts_service.STATUS_VERIFIED
+        user_id = str(attempt.user_id)
+
+        user = (
+            await session.execute(select(User).where(User.id == attempt.user_id))
+        ).scalar_one_or_none()
+        if user is None:  # pragma: no cover - attempt.user_id FKs a live user
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid or expired code"
+            )
+
+        acting_guild, roles = await _roles_for(session, user_id)
+        access = mint_access_token(
+            user_id=user_id, guild_id=acting_guild, roles=roles, settings=settings
+        )
+        refresh = await issue_refresh_token(
+            session, user_id=user_id, device_label=body.device_label, settings=settings
+        )
+        account = await _account_summary(session, user_id)
+        user_summary = DesktopPairUser(
+            user_id=user_id,
+            discord_user_id=str(user.discord_user_id),
+            display_name=user.display_name,
+        )
+
+    log.info("desktop_pair_success", user_id=user_id, device_label=bool(body.device_label))
+    return DesktopPairResponse(
+        access_token=access,
+        refresh_token=refresh.token,
+        user=user_summary,
+        account=account,
+    )
 
 
 # ---------------------------------------------------------------------------

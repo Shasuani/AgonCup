@@ -17,6 +17,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from lol_core.bracket import generate_single_elimination
 from lol_schemas.enums import (
@@ -118,7 +119,7 @@ async def create_tournament(
     name: str,
     format: TournamentFormat = TournamentFormat.SINGLE_ELIMINATION,
     max_teams: int = MAX_TEAMS_HARD_CAP,
-    ruleset: dict | None = None,
+    ruleset: dict[str, Any] | None = None,
 ) -> Tournament:
     """Create a DRAFT tournament in the acting guild."""
     if not 2 <= max_teams <= MAX_TEAMS_HARD_CAP:

@@ -140,9 +140,83 @@ class DesktopVerifyResponseDTO(_Base):
     tier: str | None = None
     division: str | None = None
     league_points: int | None = None
-    rank_text: str = Field(
-        default="Unranked", description="Display string e.g. 'Gold II, 45 LP'."
+    rank_text: str = Field(default="Unranked", description="Display string e.g. 'Gold II, 45 LP'.")
+
+
+# --------------------------------------------------------------------------- #
+# Desktop pairing — code -> session bootstrap (PLAN.md §3.1)                   #
+# --------------------------------------------------------------------------- #
+class VerifyLcuRequestDTO(_Base):
+    """Authenticated desktop -> backend LCU verify body (``DesktopVerifyRequestDTO``
+    minus ``code``).
+
+    The session is established separately via ``/auth/desktop-pair``; the Riot link
+    then runs authenticated (JWT bearer), so the one-time code is no longer carried
+    here. The desktop reads the Riot ID (``game_name``/``tag_line``) + platform
+    ``region`` from the local LCU; the backend resolves the canonical PUUID
+    server-side via Account-V1 (the double verification). ``lcu_puuid`` (advisory
+    36-char LCU UUID, NOT canonical) and ``summoner_id`` (LCU invites) are optional.
+    """
+
+    game_name: str = Field(..., min_length=1, max_length=64)
+    tag_line: str = Field(..., min_length=1, max_length=16)
+    region: str = Field(..., min_length=2, max_length=8, description="Platform route e.g. 'eun1'.")
+    lcu_puuid: str | None = Field(
+        default=None, max_length=128, description="Advisory LCU UUID (not canonical)."
     )
+    summoner_id: str | None = Field(
+        default=None, max_length=64, description="LCU summonerId (for invites)."
+    )
+
+
+class DesktopPairRequestDTO(_Base):
+    """Desktop -> backend pairing body: exchange a one-time code for a session.
+
+    The ``code`` is the bot-minted ``desktop_code`` ``VerificationAttempt`` value
+    (the SAME code minted by ``/register`` // the Discord ``accounts/link`` bridge);
+    it is single-use, short-TTL, and is now a SESSION bootstrap only — the Riot link
+    moved to the authenticated ``/accounts/verify-lcu``. ``device_label`` is an
+    optional human label persisted on the issued refresh token (device management).
+    """
+
+    code: str = Field(..., min_length=8, max_length=12, description="Hyphenated or not.")
+    device_label: str | None = Field(
+        default=None, max_length=64, description='Human device label, e.g. "Kostas\' MacBook".'
+    )
+
+
+class DesktopPairUserDTO(_Base):
+    """The authenticated user summary returned by ``/auth/desktop-pair``."""
+
+    user_id: UUID
+    discord_user_id: str
+    display_name: str
+
+
+class DesktopPairAccountDTO(_Base):
+    """The linked-account summary returned alongside a pairing session.
+
+    ``None`` when the user has no ``RiotAccount`` yet (they pair first, then link
+    their League account from the desktop via ``/accounts/verify-lcu``).
+    """
+
+    linked: bool
+    puuid: str | None = None
+    game_name: str | None = None
+    tag_line: str | None = None
+    region: str | None = None
+    verified: bool = False
+    rank_text: str = "Unranked"
+
+
+class DesktopPairResponseDTO(_Base):
+    """Successful ``/auth/desktop-pair`` result: a session + user/account summary."""
+
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"  # noqa: S105 - scheme name, not a secret
+    user: DesktopPairUserDTO
+    account: DesktopPairAccountDTO | None = None
 
 
 # --------------------------------------------------------------------------- #

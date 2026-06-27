@@ -401,6 +401,84 @@ async def test_subscribe_participant_confirms_and_uses_match_channel() -> None:
 
 
 # ===========================================================================
+# SUBSCRIBE with an explicit (per-match) guildId — the WS guild-scope fix
+# ===========================================================================
+@pytest.mark.asyncio
+async def test_subscribe_with_matching_guild_id_succeeds() -> None:
+    # The subscribe frame carries the match's guildId; the RLS participant check is
+    # scoped to THAT guild and the user is a participant there -> subscribed.
+    match_id = uuid.uuid4()
+    store = _store(_participant(match_id))
+    pubsub = FakePubSub()
+    ws = FakeWebSocket(
+        token=_token(),
+        inbound=[
+            json.dumps({"type": "subscribe", "matchId": str(match_id), "guildId": str(_GUILD)})
+        ],
+    )
+    await hub.serve(ws, session_factory=_session_factory(store), pubsub_factory=lambda: pubsub)
+    assert json.loads(ws.sent[0]) == {"type": "subscribed", "matchId": str(match_id)}
+    assert pubsub.subscribed == [hub.command_channel(_GUILD, match_id)]
+
+
+@pytest.mark.asyncio
+async def test_subscribe_with_identity_only_token_uses_claimed_guild() -> None:
+    # An IDENTITY-only token (no gid) can still subscribe to a match in another
+    # guild by claiming that guild in the subscribe frame (the multi-guild session).
+    other_guild = uuid.uuid4()
+    match_id = uuid.uuid4()
+    store = _store(_participant(match_id, guild_id=other_guild))
+    pubsub = FakePubSub()
+    ws = FakeWebSocket(
+        token=_token(guild_id=None),
+        inbound=[
+            json.dumps({"type": "subscribe", "matchId": str(match_id), "guildId": str(other_guild)})
+        ],
+    )
+    await hub.serve(ws, session_factory=_session_factory(store), pubsub_factory=lambda: pubsub)
+    assert json.loads(ws.sent[0]) == {"type": "subscribed", "matchId": str(match_id)}
+    assert pubsub.subscribed == [hub.command_channel(other_guild, match_id)]
+
+
+@pytest.mark.asyncio
+async def test_subscribe_with_forged_guild_id_is_fail_closed() -> None:
+    # The participant's ClientSession is in _GUILD, but the frame claims a DIFFERENT
+    # guild. Under RLS scoped to the forged guild the roster row is invisible ->
+    # "not a participant" -> error + 4401 BEFORE any pubsub.subscribe (no leak).
+    match_id = uuid.uuid4()
+    forged = uuid.uuid4()
+    store = _store(_participant(match_id, guild_id=_GUILD))
+    pubsub = FakePubSub()
+    ws = FakeWebSocket(
+        token=_token(),
+        inbound=[
+            json.dumps({"type": "subscribe", "matchId": str(match_id), "guildId": str(forged)})
+        ],
+    )
+    await hub.serve(ws, session_factory=_session_factory(store), pubsub_factory=lambda: pubsub)
+    assert ws.closed_code == hub.WS_CLOSE_AUTH
+    assert json.loads(ws.sent[-1])["type"] == "error"
+    assert pubsub.subscribed == []  # never subscribed -> no command-channel leak
+
+
+@pytest.mark.asyncio
+async def test_subscribe_with_invalid_guild_id_is_rejected() -> None:
+    match_id = uuid.uuid4()
+    store = _store(_participant(match_id))
+    pubsub = FakePubSub()
+    ws = FakeWebSocket(
+        token=_token(),
+        inbound=[
+            json.dumps({"type": "subscribe", "matchId": str(match_id), "guildId": "not-a-uuid"})
+        ],
+    )
+    await hub.serve(ws, session_factory=_session_factory(store), pubsub_factory=lambda: pubsub)
+    assert ws.closed_code == hub.WS_CLOSE_AUTH
+    assert json.loads(ws.sent[-1])["detail"] == "invalid guildId"
+    assert pubsub.subscribed == []
+
+
+# ===========================================================================
 # SERVER -> CLIENT command relay
 # ===========================================================================
 @pytest.mark.asyncio
@@ -419,6 +497,9 @@ async def test_published_command_is_relayed_to_subscribed_client() -> None:
     relayed = command_frames[0]["command"]
     assert relayed["type"] == "create_lobby_command"
     assert relayed["match_id"] == str(match_id)
+    # The relayed frame surfaces the match's guildId (from the envelope) so the
+    # desktop can thread it back into its subscribe frame (the WS guild-scope fix).
+    assert command_frames[0]["guildId"] == str(_GUILD)
     assert relayed["host_epoch"] == 0
 
 
@@ -539,9 +620,7 @@ async def test_inbound_report_persists_result_report_row() -> None:
         token=_token(),
         inbound=[
             json.dumps({"type": "subscribe", "matchId": str(match_id)}),
-            json.dumps(
-                {"type": "report", "report": {"hostEpoch": 0, "report": _eog_report()}}
-            ),
+            json.dumps({"type": "report", "report": {"hostEpoch": 0, "report": _eog_report()}}),
         ],
     )
     await hub.serve(

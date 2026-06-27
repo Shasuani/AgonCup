@@ -10,14 +10,21 @@
  *   - captures live state (`:2999`) and end-of-game stats, and reports them to
  *     the backend, where they are corroborated across all 10 clients.
  *
+ * AUTH posture (docs/desktop-auth-plan.md): the trust anchor is the Discord bot,
+ * not OAuth. The user pastes a one-time pairing code (minted by `/register`),
+ * the desktop exchanges it for OUR OWN session (access JWT + rotating refresh
+ * token), the refresh token is persisted ENCRYPTED via {@link SecureStore}, and
+ * every reopen refreshes silently. Account-linking (step 2) is an AUTHENTICATED
+ * `verify-lcu` call gated on the LCU being online.
+ *
  * ToS posture (PLAN.md §3.3 / §9): every LCU **write** is gated behind a
  * per-session, default-OFF opt-in + presence gate + human-paced rate limits +
  * a recorded consent + a global kill-switch. Korea is excluded. No in-match
  * gameplay automation, ever.
  *
  * IMPORT-SAFETY (load-bearing for tests): importing this module performs NO IO.
- * It must not open a WebSocket, read the lockfile, or create an Electron window.
- * All of that lives behind `bootstrap()` / `runApp()`, invoked only from the
+ * It must not open a WebSocket, read the lockfile, persist a file, or create an
+ * Electron window. All of that lives behind `bootstrap()`, invoked only from the
  * real entrypoint guarded by `isMainEntry()`. Constructors are pure.
  */
 
@@ -30,18 +37,22 @@ import {
 } from "@lol/lcu";
 import {
   OrchestrationController,
-  type BackendTransport,
   type Clock,
   type Scheduler,
 } from "./orchestration/index.js";
-import {
-  WsBackendTransport,
-  createWsFactory,
-  type WebSocketFactory,
-} from "./transport/wsTransport.js";
+import { WsBackendTransport, createWsFactory, type WebSocketFactory } from "./transport/wsTransport.js";
 import { checkLcuIdentity, type IdentityCheckResult } from "./identity/identityCheck.js";
 import { readCurrentSummoner } from "./lcu/readSummoner.js";
-import { verifyDesktop } from "./lcu/verify.js";
+import { verifyDesktop, type VerifyResult } from "./lcu/verify.js";
+import {
+  pairDesktop,
+  refreshSession,
+  type PairedUser,
+  type PairResult,
+  type RefreshResult,
+} from "./auth/pairClient.js";
+import { SecureStore, type PersistedSession } from "./secureStore.js";
+import { LcuStatusPoller, type LcuStatus } from "./lcu/statusPoller.js";
 
 /** Default heartbeat cadence while pre-game/in-game (PLAN.md §3.6.1 ~2-3s). */
 const DEFAULT_HEARTBEAT_MS = 2_500;
@@ -80,17 +91,146 @@ const SYSTEM_SCHEDULER: Scheduler = {
   },
 };
 
+// --- session (token source of truth) ---------------------------------------- //
+
+/** The store surface {@link DesktopSession} needs to persist rotated tokens. */
+export interface SessionStore {
+  save(session: PersistedSession): Promise<void>;
+  clear(): Promise<void>;
+}
+
+/**
+ * The signed-in desktop session: holds the access + rotating refresh tokens and
+ * is the SINGLE source of truth for the access token used by both the realtime
+ * transports (via a token provider) and the authenticated `verify-lcu` call.
+ * {@link refresh} rotates both tokens and persists the new refresh token.
+ * Constructing it performs no IO.
+ */
+export class DesktopSession {
+  #accessToken: string;
+  #refreshToken: string;
+  #user: PairedUser | null;
+  readonly #store: SessionStore;
+  readonly #refresh: (refreshToken: string) => Promise<RefreshResult>;
+
+  constructor(args: {
+    accessToken: string;
+    refreshToken: string;
+    store: SessionStore;
+    refreshSession: (refreshToken: string) => Promise<RefreshResult>;
+    user?: PairedUser | null;
+  }) {
+    this.#accessToken = args.accessToken;
+    this.#refreshToken = args.refreshToken;
+    this.#store = args.store;
+    this.#refresh = args.refreshSession;
+    this.#user = args.user ?? null;
+  }
+
+  get accessToken(): string {
+    return this.#accessToken;
+  }
+
+  get user(): PairedUser | null {
+    return this.#user;
+  }
+
+  /**
+   * Silently rotate the session. On success updates the in-memory tokens and
+   * PERSISTS the rotated refresh token (every refresh persists). Returns false
+   * (without clearing) when the refresh token is expired/revoked/reused — the
+   * caller drops to the pairing screen.
+   */
+  async refresh(): Promise<boolean> {
+    const res = await this.#refresh(this.#refreshToken);
+    if (!res.ok) {
+      return false;
+    }
+    this.#accessToken = res.accessToken;
+    this.#refreshToken = res.refreshToken;
+    // Re-persist the cached user alongside the rotated token; otherwise a refresh
+    // would overwrite the stored blob and blank the paired name on the next boot.
+    await this.#store.save({ refreshToken: res.refreshToken, user: this.#user });
+    return true;
+  }
+}
+
+// --- boot decision ---------------------------------------------------------- //
+
+/** The store surface the boot decision needs. */
+export interface BootStore {
+  load(): Promise<PersistedSession | null>;
+  save(session: PersistedSession): Promise<void>;
+  clear(): Promise<void>;
+}
+
+/** Outcome of the boot decision: straight in, or show the pairing screen. */
+export type BootDecision =
+  | {
+      readonly kind: "signed-in";
+      readonly accessToken: string;
+      readonly refreshToken: string;
+      /** Advisory paired-user summary restored from the encrypted store (the
+       * refresh response carries none), so the UI can show the name pre-re-pair. */
+      readonly user: PairedUser | null;
+    }
+  | { readonly kind: "needs-pairing" };
+
+/**
+ * Boot decision (replaces the old dev-login stub): if there is a stored refresh
+ * token, refresh it silently and persist the ROTATED token; otherwise show the
+ * pairing screen. A failed refresh (expired/revoked) clears the stored token and
+ * also drops to pairing. Fully injectable — unit-tested without Electron.
+ */
+export async function decideBoot(deps: {
+  store: BootStore;
+  refreshSession: (refreshToken: string) => Promise<RefreshResult>;
+}): Promise<BootDecision> {
+  const stored = await deps.store.load();
+  if (stored === null) {
+    return { kind: "needs-pairing" };
+  }
+  const res = await deps.refreshSession(stored.refreshToken);
+  if (!res.ok) {
+    await deps.store.clear();
+    return { kind: "needs-pairing" };
+  }
+  // Persist the rotated refresh token on EVERY refresh (rotation invalidates the
+  // predecessor server-side; a stale stored token would fail the next boot). Carry
+  // the cached user forward — /refresh echoes no user, so dropping it here would
+  // blank the paired name until a re-pair.
+  const user = stored.user ?? null;
+  await deps.store.save({ refreshToken: res.refreshToken, user });
+  return {
+    kind: "signed-in",
+    accessToken: res.accessToken,
+    refreshToken: res.refreshToken,
+    user,
+  };
+}
+
 // --- app runtime (per-match controllers over one WS transport) -------------- //
 
 /** Connection + identity inputs the host app resolves from its session/login. */
 export interface DesktopRuntimeConfig {
   /** Backend realtime URL, e.g. `wss://host/api/v1/realtime/ws`. */
   readonly realtimeUrl: string;
-  /** Access JWT for the signed-in user. */
+  /** Access JWT for the signed-in user (static fallback; see tokenProvider). */
   readonly token: string;
+  /**
+   * Live access-token source — when set it OVERRIDES {@link token}, so a silent
+   * refresh is picked up on the next (re)connect without rebuilding transports.
+   */
+  readonly tokenProvider?: () => string;
   /** The backend's verified PUUID for this user (undefined => not verified). */
   readonly verifiedPuuid: Puuid | undefined;
   readonly heartbeatMs?: number;
+}
+
+/** A live match entry: its controller, transport, and the guild it belongs to. */
+interface MatchEntry {
+  readonly controller: OrchestrationController;
+  readonly transport: WsBackendTransport;
 }
 
 /**
@@ -99,6 +239,11 @@ export interface DesktopRuntimeConfig {
  * match-assigned / match-ended lifecycle. CONSTRUCTING it opens nothing — the
  * sockets open on {@link onMatchAssigned}. Injected `wsFactory` + `clock` /
  * `scheduler` keep it unit-testable with no real IO.
+ *
+ * A single IDENTITY-bearing session serves matches across MANY guilds, so the
+ * per-match guild is threaded through {@link onMatchAssigned} into the subscribe
+ * frame rather than baked into the token. On a WS auth-rejection (4401) the
+ * runtime silently refreshes once (coalesced) and reconnects every transport.
  */
 export class DesktopRuntime {
   readonly #adapter: LcuAdapter;
@@ -107,8 +252,15 @@ export class DesktopRuntime {
   readonly #scheduler: Scheduler;
   readonly #clock: Clock;
   readonly #onWarn: (event: string, detail: Record<string, unknown>) => void;
+  readonly #tokenProvider: () => string;
+  readonly #refreshAuth:
+    | (() => Promise<{ ok: true; token: string } | { ok: false }>)
+    | undefined;
+  readonly #onAuthLost: (() => void) | undefined;
   /** One controller + transport per live match, keyed by matchId. */
-  readonly #matches = new Map<string, { controller: OrchestrationController; transport: BackendTransport & { close(): void } }>();
+  readonly #matches = new Map<string, MatchEntry>();
+  /** Coalesces concurrent 4401-driven refreshes into one in-flight attempt. */
+  #authRefresh: Promise<boolean> | null = null;
 
   constructor(args: {
     adapter: LcuAdapter;
@@ -118,6 +270,10 @@ export class DesktopRuntime {
     scheduler?: Scheduler;
     clock?: Clock;
     onWarn?: (event: string, detail: Record<string, unknown>) => void;
+    /** Silent-refresh hook invoked on a WS 4401; returns the rotated token. */
+    refreshAuth?: () => Promise<{ ok: true; token: string } | { ok: false }>;
+    /** Invoked when a refresh fails (the app must show the pairing screen). */
+    onAuthLost?: () => void;
   }) {
     this.#adapter = args.adapter;
     this.#config = args.config;
@@ -125,6 +281,9 @@ export class DesktopRuntime {
     this.#scheduler = args.scheduler ?? SYSTEM_SCHEDULER;
     this.#clock = args.clock ?? SYSTEM_CLOCK;
     this.#onWarn = args.onWarn ?? (() => {});
+    this.#tokenProvider = args.config.tokenProvider ?? (() => args.config.token);
+    this.#refreshAuth = args.refreshAuth;
+    this.#onAuthLost = args.onAuthLost;
   }
 
   /** Run the advisory startup identity check (never blocks — PLAN.md §3.6/§2). */
@@ -140,17 +299,26 @@ export class DesktopRuntime {
     return result;
   }
 
-  /** Create + start a controller for a newly assigned match. Idempotent. */
-  onMatchAssigned(matchId: string): void {
+  /**
+   * Create + start a controller for a newly assigned match. Idempotent. The
+   * match's `guildId` (from the backend's match-assigned command) is threaded
+   * into the subscribe frame for per-match WS authorization.
+   */
+  onMatchAssigned(matchId: string, guildId?: string): void {
     if (this.#matches.has(matchId)) {
       return;
     }
     const transport = new WsBackendTransport(
       {
         url: this.#config.realtimeUrl,
-        token: this.#config.token,
+        token: this.#tokenProvider(),
+        tokenProvider: this.#tokenProvider,
         matchId,
+        ...(guildId !== undefined && guildId !== "" ? { guildId } : {}),
         onWarn: this.#onWarn,
+        onAuthRejected: () => {
+          void this.#handleAuthRejected();
+        },
       },
       this.#wsFactory,
     );
@@ -188,6 +356,38 @@ export class DesktopRuntime {
   get liveMatchCount(): number {
     return this.#matches.size;
   }
+
+  /**
+   * Handle a WS auth-rejection: silently refresh ONCE (coalesced across all
+   * transports that just got 4401'd) then reconnect every transport with the
+   * rotated token. If refresh fails, surface auth-lost so the app re-pairs.
+   */
+  async #handleAuthRejected(): Promise<void> {
+    if (this.#refreshAuth === undefined) {
+      this.#onAuthLost?.();
+      return;
+    }
+    if (this.#authRefresh === null) {
+      const refreshAuth = this.#refreshAuth;
+      this.#authRefresh = (async () => {
+        const res = await refreshAuth();
+        return res.ok;
+      })();
+    }
+    let ok = false;
+    try {
+      ok = await this.#authRefresh;
+    } finally {
+      this.#authRefresh = null;
+    }
+    if (ok) {
+      for (const entry of this.#matches.values()) {
+        entry.transport.reconnect();
+      }
+    } else {
+      this.#onAuthLost?.();
+    }
+  }
 }
 
 // --- Electron entrypoint (only runs as the real main process) --------------- //
@@ -201,63 +401,98 @@ function isMainEntry(): boolean {
   return typeof versions?.["electron"] === "string";
 }
 
-/**
- * Dev wiring: authenticate to the backend (dev-login mints an access JWT), build
- * the {@link DesktopRuntime}, and — if ``DESKTOP_MATCH_ID`` is set — join that
- * match's realtime channel. Connection events are logged to the terminal.
- * Overridable via ``BACKEND_URL`` / ``REALTIME_URL`` / ``DESKTOP_MATCH_ID``.
- * Real session/match-assigned wiring replaces this; kept behind bootstrap so the
- * module import stays IO-free (test import-safety).
- */
-async function connectBackend(
-  adapter: LcuAdapter,
-  log: (event: string, detail?: Record<string, unknown>) => void,
-): Promise<void> {
-  const backendUrl = process.env["BACKEND_URL"] ?? "http://localhost:8000";
-  const realtimeUrl = process.env["REALTIME_URL"] ?? "ws://localhost:8000/api/v1/realtime/ws";
-  const matchId = process.env["DESKTOP_MATCH_ID"];
-
-  let token: string;
-  try {
-    const res = await fetch(`${backendUrl}/api/v1/auth/dev-login`, { method: "POST" });
-    if (!res.ok) {
-      log("backend_auth_failed", { status: res.status });
-      return;
-    }
-    token = ((await res.json()) as { access_token: string }).access_token;
-    log("backend_authenticated", { backendUrl });
-  } catch (err) {
-    log("backend_unreachable", { backendUrl, detail: String(err) });
-    return;
-  }
-
-  const runtime = new DesktopRuntime({
-    adapter,
-    config: { realtimeUrl, token, verifiedPuuid: undefined },
-    onWarn: log,
-  });
-
-  if (matchId === undefined || matchId === "") {
-    log("realtime_idle", { hint: "set DESKTOP_MATCH_ID to join a match's realtime channel" });
-    return;
-  }
-  log("realtime_subscribing", { realtimeUrl, matchId });
-  runtime.onMatchAssigned(matchId);
+/** Resolve the backend base URL from env or the dev default. */
+function backendBaseUrl(): string {
+  return process.env["BACKEND_URL"] ?? "http://localhost:8000";
 }
 
 /**
- * Boot the Electron app: open a window and (in a later phase) wire the
- * {@link DesktopRuntime} to the authenticated session. Kept out of module scope
- * so importing this file never touches Electron (test import-safety).
+ * Boot the Electron app: open a window, run the boot decision (silent refresh or
+ * pairing), wire the IPC bridge, and start the LCU status poller. Kept out of
+ * module scope so importing this file never touches Electron / disk / network
+ * (test import-safety).
  */
 async function bootstrap(): Promise<void> {
   // Imported lazily so `electron` is never required during a unit-test import.
-  const { app, BrowserWindow, ipcMain } = await import("electron");
+  const { app, BrowserWindow, ipcMain, safeStorage } = await import("electron");
   const path = await import("node:path");
+  const fsp = await import("node:fs/promises");
 
-  // IPC bridge for the account-linking flow (preload exposes `window.lol.*`).
-  // The main process does BOTH the READ-ONLY LCU read and the backend POST so
-  // the sandboxed renderer never touches node/network.
+  const log = (event: string, detail: Record<string, unknown> = {}): void => {
+    console.log(`[desktop] ${event}`, detail);
+  };
+
+  const realtimeUrl =
+    process.env["REALTIME_URL"] ?? "ws://localhost:8000/api/v1/realtime/ws";
+
+  // Encrypted-at-rest refresh-token store under userData (never plaintext).
+  const userData = app.getPath("userData");
+  const store = new SecureStore({
+    safeStorage,
+    fs: {
+      readFile: (p) => fsp.readFile(p),
+      writeFile: (p, data) => fsp.writeFile(p, data),
+      mkdir: (p, opts) => fsp.mkdir(p, opts),
+      rm: (p, opts) => fsp.rm(p, opts),
+    },
+    filePath: path.join(userData, "session.bin"),
+    dirPath: userData,
+  });
+
+  const adapter = createLcuAdapter();
+
+  // --- mutable app state (signed-in session + per-process runtime) ---------- //
+  let session: DesktopSession | null = null;
+  let runtime: DesktopRuntime | null = null;
+  let mainWindow: import("electron").BrowserWindow | null = null;
+
+  const sendToRenderer = (channel: string, payload: unknown): void => {
+    mainWindow?.webContents.send(channel, payload);
+  };
+
+  /** Build the per-process runtime once a session exists. */
+  const startRuntime = (): void => {
+    if (session === null || runtime !== null) {
+      return;
+    }
+    const active = session;
+    runtime = new DesktopRuntime({
+      adapter,
+      config: {
+        realtimeUrl,
+        token: active.accessToken,
+        tokenProvider: () => active.accessToken,
+        verifiedPuuid: undefined,
+      },
+      onWarn: (e, d) => log(e, d),
+      refreshAuth: async () =>
+        (await active.refresh())
+          ? { ok: true, token: active.accessToken }
+          : { ok: false },
+      onAuthLost: () => {
+        session = null;
+        runtime?.shutdown();
+        runtime = null;
+        sendToRenderer("lol:auth-lost", {});
+        log("auth_lost", { hint: "refresh failed; show pairing screen" });
+      },
+    });
+
+    // Dev wiring: join a single match's realtime channel if configured. Real
+    // match-assigned wiring threads each match's guildId from the backend.
+    const matchId = process.env["DESKTOP_MATCH_ID"];
+    const guildId = process.env["DESKTOP_GUILD_ID"];
+    if (matchId !== undefined && matchId !== "") {
+      log("realtime_subscribing", { realtimeUrl, matchId, guildId });
+      runtime.onMatchAssigned(matchId, guildId);
+    } else {
+      log("realtime_idle", { hint: "set DESKTOP_MATCH_ID (+DESKTOP_GUILD_ID) to join a match" });
+    }
+  };
+
+  // --- IPC bridge (preload exposes window.lol.*) ---------------------------- //
+
+  // READ-ONLY LCU current-summoner read (used by the verify step + poller).
   ipcMain.handle("lol:read-summoner", async () => {
     const result = await readCurrentSummoner();
     if (result.ok) {
@@ -273,26 +508,99 @@ async function bootstrap(): Promise<void> {
     }
     return { ok: false, reason: result.reason, detail: result.detail };
   });
+
+  // Current session state so the renderer chooses pairing vs verify on load.
+  ipcMain.handle("lol:session-state", () => ({
+    signedIn: session !== null,
+    user: session?.user ?? null,
+  }));
+
+  // Exchange a pairing code for a session, persist the refresh token, and start.
   ipcMain.handle(
-    "lol:verify",
-    async (_event, args: { code: string }) => {
-      const result = await verifyDesktop({ code: args.code });
-      if (result.ok) {
-        return {
-          ok: true,
-          accountId: result.accountId,
-          puuid: result.puuid,
-          ...(result.tier !== undefined ? { tier: result.tier } : {}),
-          ...(result.division !== undefined ? { division: result.division } : {}),
-          ...(result.leaguePoints !== undefined ? { leaguePoints: result.leaguePoints } : {}),
-          ...(result.rankText !== undefined ? { rankText: result.rankText } : {}),
-        };
+    "lol:pair",
+    async (_event, args: { code: string; deviceLabel?: string }) => {
+      const result: PairResult = await pairDesktop(
+        { code: args.code, ...(args.deviceLabel ? { deviceLabel: args.deviceLabel } : {}) },
+        { backendUrl: backendBaseUrl() },
+      );
+      if (!result.ok) {
+        return { ok: false, status: result.status, detail: result.detail };
       }
-      return { ok: false, status: result.status, detail: result.detail };
+      if (store.isEncryptionAvailable()) {
+        await store.save({ refreshToken: result.refreshToken, user: result.user });
+      } else {
+        log("secure_store_unavailable", { hint: "refresh token not persisted (no OS keychain)" });
+      }
+      session = new DesktopSession({
+        accessToken: result.accessToken,
+        refreshToken: result.refreshToken,
+        store,
+        refreshSession: (rt) => refreshSession(rt, { backendUrl: backendBaseUrl() }),
+        user: result.user,
+      });
+      startRuntime();
+      return { ok: true, user: result.user, account: result.account };
     },
   );
 
-  const createWindow = (): unknown => {
+  // Explicit silent refresh (renderer-driven; boot/4401 paths refresh too).
+  ipcMain.handle("lol:refresh", async () => {
+    if (session === null) {
+      return { ok: false };
+    }
+    return { ok: await session.refresh() };
+  });
+
+  // Authenticated step-2 account link (no code). On 401 refresh once + retry.
+  ipcMain.handle("lol:verify", async () => {
+    if (session === null) {
+      return { ok: false, status: 401, detail: "Not signed in. Enter your code first." };
+    }
+    let result: VerifyResult = await verifyDesktop({ accessToken: session.accessToken });
+    if (!result.ok && result.status === 401) {
+      // Access token expired mid-flight: silent refresh + one retry.
+      if (await session.refresh()) {
+        result = await verifyDesktop({ accessToken: session.accessToken });
+      } else {
+        session = null;
+        sendToRenderer("lol:auth-lost", {});
+        return { ok: false, status: 401, detail: "Session expired. Enter a new code to sign in." };
+      }
+    }
+    if (result.ok) {
+      return {
+        ok: true,
+        accountId: result.accountId,
+        puuid: result.puuid,
+        ...(result.tier !== undefined ? { tier: result.tier } : {}),
+        ...(result.division !== undefined ? { division: result.division } : {}),
+        ...(result.leaguePoints !== undefined ? { leaguePoints: result.leaguePoints } : {}),
+        ...(result.rankText !== undefined ? { rankText: result.rankText } : {}),
+      };
+    }
+    return { ok: false, status: result.status, detail: result.detail };
+  });
+
+  // --- LCU reachability poller (3-5s) -> renderer badge --------------------- //
+  const poller = new LcuStatusPoller({
+    probeSummoner: async () => (await readCurrentSummoner()).ok,
+    probeLockfile: async () => {
+      // Reuse the adapter's platform lockfile-path resolution: a successful read
+      // means the client process is up (even if no summoner is signed in yet).
+      try {
+        await adapter.readLockfileAuth();
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    onStatus: (status: LcuStatus) => {
+      sendToRenderer("lol:lcu-status", status);
+      log("lcu_status", { status });
+    },
+  });
+
+  const createWindow = (): import("electron").BrowserWindow => {
     const win = new BrowserWindow({
       width: 1024,
       height: 720,
@@ -302,34 +610,47 @@ async function bootstrap(): Promise<void> {
         contextIsolation: true,
         nodeIntegration: false,
         // CommonJS preload (.cjs): the package is "type":"module", so a .js preload
-      // would be ESM, which Electron only loads from a .mjs file — loading it as a
-      // .js fails silently ("Unable to load preload script") and window.lol is
-      // undefined. A .cjs preload loads reliably under contextIsolation.
-      preload: path.join(app.getAppPath(), "dist", "preload.cjs"),
+        // would be ESM, which Electron only loads from a .mjs file — loading it as a
+        // .js fails silently ("Unable to load preload script") and window.lol is
+        // undefined. A .cjs preload loads reliably under contextIsolation.
+        preload: path.join(app.getAppPath(), "dist", "preload.cjs"),
       },
     });
-    // Branded status page (static/index.html). app.getAppPath() resolves to the
-    // desktop project dir under `electron .` and the asar root when packaged.
     void win.loadFile(path.join(app.getAppPath(), "static", "index.html"));
     return win;
   };
 
   await app.whenReady();
+  mainWindow = createWindow();
 
-  // The LCU adapter's lifecycle follows the app's.
-  const adapter = createLcuAdapter();
+  // Boot decision: silent refresh if we have a stored token, else pairing.
+  const decision = await decideBoot({
+    store,
+    refreshSession: (rt) => refreshSession(rt, { backendUrl: backendBaseUrl() }),
+  });
+  if (decision.kind === "signed-in") {
+    session = new DesktopSession({
+      accessToken: decision.accessToken,
+      refreshToken: decision.refreshToken,
+      store,
+      refreshSession: (rt) => refreshSession(rt, { backendUrl: backendBaseUrl() }),
+      user: decision.user,
+    });
+    startRuntime();
+    log("booted_signed_in", {});
+  } else {
+    log("booted_needs_pairing", {});
+  }
 
-  createWindow();
-
-  // Dev wiring: authenticate + (optionally) join a match's realtime channel.
-  // Events are logged to this terminal (watch `make dev-desktop` output).
-  void connectBackend(adapter, (event, detail) => console.log(`[desktop] ${event}`, detail ?? {}));
+  // Status poller runs regardless of sign-in (the badge is always visible).
+  poller.start();
 
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow();
   });
 
   app.on("window-all-closed", () => {
+    poller.stop();
     if (process.platform !== "darwin") app.quit();
   });
 }

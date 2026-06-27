@@ -85,7 +85,14 @@ function makeTimers() {
   };
 }
 
-function makeTransport(over: { onWarn?: (e: string, d: Record<string, unknown>) => void } = {}) {
+function makeTransport(
+  over: {
+    onWarn?: (e: string, d: Record<string, unknown>) => void;
+    guildId?: string;
+    onAuthRejected?: () => void;
+    tokenProvider?: () => string;
+  } = {},
+) {
   const sockets: FakeSocket[] = [];
   const { timers, fire, lastDelay, hasPending } = makeTimers();
   const transport = new WsBackendTransport(
@@ -95,6 +102,9 @@ function makeTransport(over: { onWarn?: (e: string, d: Record<string, unknown>) 
       matchId: "match-1",
       reconnect: { baseDelayMs: 500, maxDelayMs: 30_000, factor: 2, jitter: 0 },
       ...(over.onWarn ? { onWarn: over.onWarn } : {}),
+      ...(over.guildId ? { guildId: over.guildId } : {}),
+      ...(over.onAuthRejected ? { onAuthRejected: over.onAuthRejected } : {}),
+      ...(over.tokenProvider ? { tokenProvider: over.tokenProvider } : {}),
     },
     (url) => {
       const s = new FakeSocket(url);
@@ -248,4 +258,46 @@ test("user close() stops the reconnect loop", () => {
   // A subsequent transport-driven close event must not schedule a reconnect.
   sock.close(1006);
   assert.equal(hasPending(), false);
+});
+
+test("subscribe frame carries the match's guildId for per-match WS authorization", () => {
+  const { transport, sockets } = makeTransport({ guildId: "guild-xyz" });
+  transport.connect();
+  const sock = sockets[0]!;
+  sock.fireOpen();
+  assert.deepEqual(JSON.parse(sock.sent[0]!), {
+    type: "subscribe",
+    matchId: "match-1",
+    guildId: "guild-xyz",
+  });
+});
+
+test("4401 invokes onAuthRejected and does NOT auto-reconnect; reconnect() reopens", () => {
+  let rejected = 0;
+  let token = "stale-jwt";
+  const { transport, sockets, hasPending } = makeTransport({
+    onAuthRejected: () => {
+      rejected += 1;
+    },
+    tokenProvider: () => token,
+  });
+  transport.connect();
+  const first = sockets[0]!;
+  assert.match(first.url, /token=stale-jwt/);
+  first.fireOpen();
+  first.close(WS_CLOSE_AUTH);
+
+  assert.equal(rejected, 1);
+  assert.equal(hasPending(), false); // no auto-reconnect on auth failure
+  assert.equal(sockets.length, 1);
+
+  // Simulate the app refreshing the token then reconnecting.
+  token = "fresh-jwt";
+  transport.reconnect();
+  assert.equal(sockets.length, 2);
+  const second = sockets[1]!;
+  // The reconnect picks up the rotated token via the provider.
+  assert.match(second.url, /token=fresh-jwt/);
+  second.fireOpen();
+  assert.deepEqual(JSON.parse(second.sent[0]!), { type: "subscribe", matchId: "match-1" });
 });

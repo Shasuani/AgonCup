@@ -44,7 +44,7 @@ def _redis_client() -> Redis:
     """
     from app.realtime.redis_client import get_redis  # noqa: PLC0415
 
-    return get_redis()
+    return cast("Redis", get_redis())
 
 
 @router.websocket("/ws")

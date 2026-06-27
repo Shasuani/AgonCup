@@ -17,6 +17,7 @@ import discord
 from app.backend_client import BackendError, DiscordContext
 from app.cogs import setup_cogs
 from app.cogs._helpers import context_of, error_embed
+from app.cogs.register import RegisterCog
 from app.main import build_bot
 
 
@@ -29,7 +30,50 @@ def test_setup_cogs_registers_commands() -> None:
     asyncio.run(setup_cogs(bot, backend=AsyncMock()))
 
     names = _registered_names(bot)
-    assert {"register", "team", "tournament", "tournament-create"} <= names
+    assert {"register", "link", "team", "tournament", "tournament-create"} <= names
+
+
+def _make_register_interaction() -> Any:
+    interaction = AsyncMock(spec=discord.Interaction)
+    interaction.response = AsyncMock()
+    interaction.followup = AsyncMock()
+    member = _Member(7, admin=False, name="Player")
+    interaction.guild_id = 99
+    interaction.user = member
+    return interaction
+
+
+def _sent_embed(interaction: Any) -> discord.Embed:
+    interaction.followup.send.assert_awaited_once()
+    return interaction.followup.send.await_args.kwargs["embed"]
+
+
+def test_register_renders_minted_code() -> None:
+    backend = AsyncMock()
+    backend.start_registration.return_value = {"code": "WXYZ-2345"}
+    cog = RegisterCog(backend)
+    interaction = _make_register_interaction()
+
+    asyncio.run(cog.register.callback(cog, interaction))
+
+    backend.start_registration.assert_awaited_once()
+    embed = _sent_embed(interaction)
+    blob = " ".join(f.value or "" for f in embed.fields)
+    assert "WXYZ-2345" in blob
+    assert "sign in" in (embed.title or "").lower()
+
+
+def test_link_alias_renders_minted_code() -> None:
+    backend = AsyncMock()
+    backend.start_registration.return_value = {"code": "WXYZ-2345"}
+    cog = RegisterCog(backend)
+    interaction = _make_register_interaction()
+
+    asyncio.run(cog.link.callback(cog, interaction))
+
+    backend.start_registration.assert_awaited_once()
+    blob = " ".join(f.value or "" for f in _sent_embed(interaction).fields)
+    assert "WXYZ-2345" in blob
 
 
 def test_team_group_has_subcommands() -> None:

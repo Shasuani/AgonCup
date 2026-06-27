@@ -315,8 +315,8 @@ async def update_settings(body: SettingsUpdateRequest) -> GuildSettingsModel:
 # ---------------------------------------------------------------------------
 #: Short human instruction echoed back to the bot for the code embed.
 _REGISTER_INSTRUCTION = (
-    "Open the LeagueOfLeagues desktop app, make sure League is running and you're "
-    "signed in, then enter this code to link your account."
+    "Enter this code in the LeagueOfLeagues desktop app to sign in and link your "
+    "account."
 )
 
 

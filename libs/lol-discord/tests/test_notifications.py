@@ -37,11 +37,13 @@ def _field_values(embed: dict[str, object]) -> str:
 # --------------------------------------------------------------------------- #
 def test_registration_code() -> None:
     embed = registration_code(code="7K3M-QP9R")
-    assert embed["title"] == "Finish linking in the desktop app"
+    assert embed["title"] == "Paste this code in the LeagueOfLeagues desktop app to sign in"
+    assert "sign in" in embed["description"].lower()
     assert embed["color"] == int(EmbedColor.WARNING)
     blob = _field_values(embed)
     assert "7K3M-QP9R" in blob
     assert "desktop app" in blob.lower()
+    assert "sign in" in blob.lower()
     assert "15 minutes" in blob
     # No icon/thumbnail, no Riot ID leakage.
     assert "thumbnail" not in embed

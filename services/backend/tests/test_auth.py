@@ -18,6 +18,7 @@ real callback handler end-to-end.
 
 from __future__ import annotations
 
+import operator
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -28,6 +29,7 @@ import pytest
 from fastapi import HTTPException
 from lol_schemas.enums import UserGuildRoleName
 
+from app.accounts import service as accounts_service
 from app.auth import discord_oauth
 from app.auth import router as auth_router
 from app.auth.deps import Principal, require_role
@@ -43,7 +45,15 @@ from app.auth.tokens import (
     rotate_refresh_token,
 )
 from app.config import get_settings
-from app.models import OAuthCredential, RefreshToken, User, UserGuildRole
+from app.models import (
+    OAuthCredential,
+    RefreshToken,
+    RiotAccount,
+    User,
+    UserGuildRole,
+    VerificationAttempt,
+)
+from app.ratelimit import FixedWindowLimiter
 from app.security import decrypt
 
 
@@ -62,6 +72,9 @@ class _Result:
 
     def all(self) -> list[Any]:
         return self.rows
+
+    def scalars(self) -> _Result:
+        return self
 
 
 class _FakeRequest:
@@ -87,6 +100,8 @@ class FakeSession:
             RefreshToken: [],
             OAuthCredential: [],
             UserGuildRole: [],
+            VerificationAttempt: [],
+            RiotAccount: [],
         }
 
     # --- unit-of-work -----------------------------------------------------
@@ -137,6 +152,12 @@ class FakeSession:
     # --- transaction / context -------------------------------------------
     def begin(self) -> _FakeTxn:
         return _FakeTxn()
+
+    async def commit(self) -> None:
+        return None
+
+    async def rollback(self) -> None:
+        return None
 
     async def __aenter__(self) -> FakeSession:
         return self
@@ -195,6 +216,10 @@ def _equality_filters(statement: Any) -> dict[str, Any]:
     clauses = list(getattr(statement, "_where_criteria", ()) or ())
     for clause in clauses:
         for bool_expr in _flatten_and(clause):
+            # Only equality clauses constrain the fake store; inequalities (e.g.
+            # ``expires_at > now``) are ignored — the fake cannot model time.
+            if getattr(bool_expr, "operator", None) not in (operator.eq, None):
+                continue
             left = getattr(bool_expr, "left", None)
             right = getattr(bool_expr, "right", None)
             if left is not None and hasattr(left, "key"):
@@ -470,3 +495,235 @@ async def test_require_role_denies_non_holder() -> None:
     with pytest.raises(HTTPException) as exc_info:
         await guard(principal=principal)
     assert exc_info.value.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Desktop pairing — POST /auth/desktop-pair (PLAN.md §3.1)
+# ---------------------------------------------------------------------------
+class _FakeClient:
+    def __init__(self, host: str) -> None:
+        self.host = host
+
+
+class _FakePairRequest:
+    """Minimal Request stand-in: the pair/refresh handlers read ``client.host``."""
+
+    def __init__(self, host: str = "203.0.113.7") -> None:
+        self.client = _FakeClient(host)
+
+
+def _seed_pair_code(
+    session: FakeSession,
+    *,
+    code: str = "ABCD2345",
+    discord_user_id: int = 42424242,
+    display_name: str = "Chama",
+    status_value: str | None = None,
+) -> User:
+    """Seed a User + a live ``desktop_code`` VerificationAttempt for it."""
+    user = User(discord_user_id=discord_user_id, display_name=display_name)
+    user.id = uuid.uuid4()
+    session.store[User].append(user)
+    attempt = VerificationAttempt(
+        user_id=user.id,
+        code=code,
+        verify_kind=accounts_service.VERIFY_KIND_DESKTOP_CODE,
+        status=status_value or accounts_service.STATUS_PENDING,
+        expires_at=datetime.now(tz=UTC) + accounts_service.VERIFICATION_TTL,
+    )
+    attempt.id = uuid.uuid4()
+    session.store[VerificationAttempt].append(attempt)
+    return user
+
+
+@pytest.mark.asyncio
+async def test_desktop_pair_valid_code_mints_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    session = FakeSession()
+    user = _seed_pair_code(session, code="ABCD2345", display_name="Chama")
+    monkeypatch.setattr(auth_router, "SessionLocal", lambda: session)
+
+    resp = await auth_router.desktop_pair(
+        body=auth_router.DesktopPairRequest(code="abcd-2345", device_label="Kostas' MacBook"),
+        request=_FakePairRequest(),  # type: ignore[arg-type]
+        settings=get_settings(),
+    )
+
+    # A real session is minted; the access JWT verifies and carries the user id.
+    assert resp.token_type == "bearer"
+    claims = verify_access_token(resp.access_token)
+    assert claims.user_id == str(user.id)
+    assert resp.user.user_id == str(user.id)
+    assert resp.user.discord_user_id == str(user.discord_user_id)
+    assert resp.user.display_name == "Chama"
+    # No Riot account linked yet -> account summary is None (link via verify-lcu).
+    assert resp.account is None
+
+    # The code is CONSUMED single-use (status flipped; puuid stays NULL — no link).
+    attempt = session.store[VerificationAttempt][0]
+    assert attempt.status == accounts_service.STATUS_VERIFIED
+    assert attempt.puuid is None
+
+    # The refresh token persisted the device label.
+    refresh_row = session.store[RefreshToken][0]
+    assert refresh_row.device_label == "Kostas' MacBook"
+
+
+@pytest.mark.asyncio
+async def test_desktop_pair_includes_linked_account_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    user = _seed_pair_code(session, code="ABCD2345")
+    account = RiotAccount(
+        user_id=user.id,
+        puuid="CANON-PUUID",
+        riot_id_game_name="Chama",
+        riot_id_tag_line="Shasu",
+        region="eun1",
+        verified=True,
+    )
+    account.id = uuid.uuid4()
+    account.rank_tier = "GOLD"
+    account.rank_division = "II"
+    account.rank_lp = 45
+    session.store[RiotAccount].append(account)
+    monkeypatch.setattr(auth_router, "SessionLocal", lambda: session)
+
+    resp = await auth_router.desktop_pair(
+        body=auth_router.DesktopPairRequest(code="ABCD2345"),
+        request=_FakePairRequest(),  # type: ignore[arg-type]
+        settings=get_settings(),
+    )
+    assert resp.account is not None
+    assert resp.account.linked is True
+    assert resp.account.puuid == "CANON-PUUID"
+    assert resp.account.game_name == "Chama"
+    assert resp.account.verified is True
+    assert resp.account.rank_text == "Gold II, 45 LP"
+
+
+@pytest.mark.asyncio
+async def test_desktop_pair_device_label_carried_through_rotation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    _seed_pair_code(session, code="ABCD2345")
+    monkeypatch.setattr(auth_router, "SessionLocal", lambda: session)
+
+    resp = await auth_router.desktop_pair(
+        body=auth_router.DesktopPairRequest(code="ABCD2345", device_label="MacBook"),
+        request=_FakePairRequest(),  # type: ignore[arg-type]
+        settings=get_settings(),
+    )
+
+    # Rotating the issued refresh token CARRIES FORWARD the device label.
+    rotated = await rotate_refresh_token(session, token=resp.refresh_token)
+    successor = next(
+        r for r in session.store[RefreshToken] if r.token_hash == hash_token(rotated.token)
+    )
+    assert successor.device_label == "MacBook"
+
+
+@pytest.mark.asyncio
+async def test_desktop_pair_expired_or_consumed_code_is_401(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A non-pending (consumed/expired) attempt is filtered by the status predicate.
+    session = FakeSession()
+    _seed_pair_code(session, code="ABCD2345", status_value=accounts_service.STATUS_EXPIRED)
+    monkeypatch.setattr(auth_router, "SessionLocal", lambda: session)
+
+    with pytest.raises(HTTPException) as exc:
+        await auth_router.desktop_pair(
+            body=auth_router.DesktopPairRequest(code="ABCD2345"),
+            request=_FakePairRequest(),  # type: ignore[arg-type]
+            settings=get_settings(),
+        )
+    assert exc.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_desktop_pair_reused_code_is_401(monkeypatch: pytest.MonkeyPatch) -> None:
+    session = FakeSession()
+    _seed_pair_code(session, code="ABCD2345")
+    monkeypatch.setattr(auth_router, "SessionLocal", lambda: session)
+
+    # First exchange succeeds and consumes the code.
+    await auth_router.desktop_pair(
+        body=auth_router.DesktopPairRequest(code="ABCD2345"),
+        request=_FakePairRequest(),  # type: ignore[arg-type]
+        settings=get_settings(),
+    )
+    # Replaying the same code now finds no pending attempt -> 401.
+    with pytest.raises(HTTPException) as exc:
+        await auth_router.desktop_pair(
+            body=auth_router.DesktopPairRequest(code="ABCD2345"),
+            request=_FakePairRequest(),  # type: ignore[arg-type]
+            settings=get_settings(),
+        )
+    assert exc.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_desktop_pair_malformed_code_is_422() -> None:
+    # Valid length (8) but contains alphabet-excluded glyphs (I/L/O/0/1) -> 422
+    # from the shape gate, BEFORE any rate-limit or DB touch.
+    with pytest.raises(HTTPException) as exc:
+        await auth_router.desktop_pair(
+            body=auth_router.DesktopPairRequest(code="IIIIIIII"),
+            request=_FakePairRequest(),  # type: ignore[arg-type]
+            settings=get_settings(),
+        )
+    assert exc.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_desktop_pair_rate_limited_is_429(monkeypatch: pytest.MonkeyPatch) -> None:
+    session = FakeSession()
+    monkeypatch.setattr(auth_router, "SessionLocal", lambda: session)
+    # Tiny limiter so the 3rd attempt trips. A valid-shape but unknown code passes
+    # the shape gate, reaches the limiter, then 401s (calls 1-2) until the bucket
+    # is exhausted (call 3 -> 429, before the DB lookup).
+    monkeypatch.setattr(auth_router, "_pair_limiter", FixedWindowLimiter(max_hits=2, window_s=60.0))
+    req = _FakePairRequest(host="198.51.100.9")
+    for _ in range(2):
+        with pytest.raises(HTTPException) as exc:
+            await auth_router.desktop_pair(
+                body=auth_router.DesktopPairRequest(code="ABCD2345"),
+                request=req,  # type: ignore[arg-type]
+                settings=get_settings(),
+            )
+        assert exc.value.status_code == 401
+    with pytest.raises(HTTPException) as exc:
+        await auth_router.desktop_pair(
+            body=auth_router.DesktopPairRequest(code="ABCD2345"),
+            request=req,  # type: ignore[arg-type]
+            settings=get_settings(),
+        )
+    assert exc.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_refresh_rate_limited_is_429(monkeypatch: pytest.MonkeyPatch) -> None:
+    session = FakeSession()
+    monkeypatch.setattr(auth_router, "SessionLocal", lambda: session)
+    monkeypatch.setattr(
+        auth_router, "_refresh_limiter", FixedWindowLimiter(max_hits=1, window_s=60.0)
+    )
+    req = _FakePairRequest(host="198.51.100.10")
+    # Call 1 passes the limiter, then 401s on the unknown refresh token.
+    with pytest.raises(HTTPException) as exc:
+        await auth_router.refresh(
+            body=auth_router.RefreshRequest(refresh_token="bogus"),
+            request=req,  # type: ignore[arg-type]
+            settings=get_settings(),
+        )
+    assert exc.value.status_code == 401
+    # Call 2 trips the rate limit BEFORE the rotate.
+    with pytest.raises(HTTPException) as exc:
+        await auth_router.refresh(
+            body=auth_router.RefreshRequest(refresh_token="bogus"),
+            request=req,  # type: ignore[arg-type]
+            settings=get_settings(),
+        )
+    assert exc.value.status_code == 429

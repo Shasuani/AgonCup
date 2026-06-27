@@ -17,8 +17,6 @@ ownership to the authenticated principal in the query.
 
 from __future__ import annotations
 
-import time
-from collections import deque
 from datetime import datetime
 from typing import Annotated, Protocol
 
@@ -33,6 +31,7 @@ from app.config import Settings, get_settings
 from app.db import SessionLocal
 from app.logging import get_logger
 from app.notifications import NotificationPublisher, publish_registration_verified
+from app.ratelimit import FixedWindowLimiter
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
 log = get_logger("app.accounts.router")
@@ -132,46 +131,32 @@ class DesktopVerifyResponse(BaseModel):
     rank_text: str = "Unranked"
 
 
+class VerifyLcuRequest(BaseModel):
+    """JWT-authed LCU verify body. Mirrors ``lol_schemas.VerifyLcuRequestDTO``.
+
+    The session is already established (``/auth/desktop-pair``), so there is NO
+    ``code`` here — the bearer JWT identifies the user. The desktop reads the Riot
+    ID + region from the local LCU; the backend resolves the canonical PUUID via
+    Account-V1 (the double verification). ``lcu_puuid``/``summoner_id`` are advisory.
+    """
+
+    game_name: str = Field(min_length=1, max_length=64)
+    tag_line: str = Field(min_length=1, max_length=16)
+    region: str = Field(min_length=2, max_length=8)
+    lcu_puuid: str | None = Field(default=None, max_length=128)
+    summoner_id: str | None = Field(default=None, max_length=64)
+
+
 # ---------------------------------------------------------------------------
 # Unauthenticated-endpoint rate limit (code-guessing defence)
 # ---------------------------------------------------------------------------
-#: Per-IP fixed window: at most this many verify attempts per ``_RL_WINDOW_S``.
-#: TODO(scale): this is process-local; move to Redis when the backend runs >1
-#: replica so the window is shared (in-memory gives ZERO cross-replica
-#: protection). Adequate as a single-node guess-rate brake.
-#:
-#: PROXY STORY: the key is the socket peer (``request.client.host``). This is
-#: correct only single-hop (direct client connections). Behind a reverse proxy
-#: every request shares the proxy IP, collapsing all clients into one bucket
-#: (over-throttling). We deliberately DO NOT trust ``X-Forwarded-For`` here —
-#: it is client-spoofable and would let an attacker bypass the limiter by
-#: rotating a forged header. If a trusted proxy is deployed, switch to a
-#: proxy-set header validated against a known proxy allowlist before keying on
-#: it. Until then, keep socket-peer keying.
-_RL_MAX = 10
-_RL_WINDOW_S = 60.0
-_rl_hits: dict[str, deque[float]] = {}
-
-
-def _rate_limit_ok(key: str, *, now: float | None = None) -> bool:
-    """Fixed-window per-key limiter. Returns False when the window is exhausted.
-
-    Fully-decayed keys are pruned so an IP-rotating attacker cannot grow
-    ``_rl_hits`` without bound (slow memory leak): each call sweeps stale keys
-    opportunistically, and the requesting key is dropped if it ends up empty.
-    """
-    now = now if now is not None else time.monotonic()
-    # Opportunistic sweep of stale keys (bounds the dict under IP rotation).
-    stale = [k for k, h in _rl_hits.items() if not h or now - h[-1] > _RL_WINDOW_S]
-    for k in stale:
-        del _rl_hits[k]
-    hits = _rl_hits.setdefault(key, deque())
-    while hits and now - hits[0] > _RL_WINDOW_S:
-        hits.popleft()
-    if len(hits) >= _RL_MAX:
-        return False
-    hits.append(now)
-    return True
+#: Per-IP fixed window for ``/accounts/verify-desktop`` (10/60s on the socket
+#: peer). Factored into :mod:`app.ratelimit` and SHARED in spirit with the auth
+#: router's pairing/refresh limiters; see that module for the scale/proxy caveats.
+_verify_limiter = FixedWindowLimiter(max_hits=10, window_s=60.0)
+#: Per-PRINCIPAL fixed window for the JWT-authed ``/accounts/verify-lcu`` (6/60s on
+#: ``principal.user_id``) — a gentle brake on retry storms / Riot-budget abuse.
+_verify_lcu_limiter = FixedWindowLimiter(max_hits=6, window_s=60.0)
 
 
 # ---------------------------------------------------------------------------
@@ -351,7 +336,8 @@ _CODE_CHARSET = set(service._CODE_ALPHABET)
 @router.post(
     "/verify-desktop",
     response_model=DesktopVerifyResponse,
-    summary="Complete account linking from the desktop app using a one-time code",
+    summary="DEPRECATED: complete account linking from the desktop using a one-time code",
+    deprecated=True,
 )
 async def verify_desktop(
     body: DesktopVerifyRequest,
@@ -359,7 +345,16 @@ async def verify_desktop(
     settings: Annotated[Settings, Depends(get_settings)],
     publisher: Annotated[NotificationPublisher, Depends(get_notification_publisher)],
 ) -> DesktopVerifyResponse:
-    """Resolve the canonical PUUID for the code's user, dedupe-link it, DM the user.
+    """DEPRECATED — superseded by ``/auth/desktop-pair`` + ``/accounts/verify-lcu``.
+
+    The desktop now (1) exchanges its one-time code for a SESSION via
+    ``POST /auth/desktop-pair`` then (2) links its League account authenticated via
+    ``POST /accounts/verify-lcu`` (JWT bearer, no code). This combined code+link
+    endpoint is retained UNCHANGED for ONE release after the new desktop ships, then
+    deleted along with :class:`DesktopVerifyRequest` and
+    :func:`app.accounts.service.verify_desktop_code`.
+
+    Resolve the canonical PUUID for the code's user, dedupe-link it, DM the user.
 
     UNAUTHENTICATED by design: the one-time ``code`` (issued to an authenticated
     Discord user inside ``/register``, 15-min TTL, single-use, superseded on
@@ -381,7 +376,7 @@ async def verify_desktop(
         )
 
     client_ip = request.client.host if request.client else "unknown"
-    if not _rate_limit_ok(client_ip):
+    if not _verify_limiter.allow(client_ip):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="too many attempts"
         )
@@ -447,6 +442,119 @@ async def verify_desktop(
         # link is durable; the DM is advisory. ``rank_text`` carries only the
         # snapshot ("Gold II, 45 LP" / "Unranked"); the embed's "Solo/Duo" field
         # name supplies the label, so we must NOT prefix it here (double-label).
+        try:
+            await publish_registration_verified(
+                publisher,
+                origin_guild_id=result.origin_guild_id,
+                discord_user_id=result.discord_user_id,
+                riot_id=f"{result.game_name}#{result.tag_line}",
+                region=service.region_label_for(platform),
+                rank_text=result.rank_text,
+            )
+        except Exception as exc:  # noqa: BLE001 - notifications are best-effort
+            log.warning(
+                "registration_verified_publish_failed",
+                error=str(exc),
+                origin_guild_id=result.origin_guild_id,
+            )
+    else:
+        log.info(
+            "registration_verified_notify_skipped",
+            has_guild=bool(result.origin_guild_id),
+            has_user=bool(result.discord_user_id),
+        )
+
+    return DesktopVerifyResponse(
+        account_id=result.account_id,
+        puuid=result.puuid,
+        verified=result.verified,
+        origin_guild_id=result.origin_guild_id,
+        game_name=result.game_name,
+        tag_line=result.tag_line,
+        region=result.region,
+        tier=result.tier,
+        division=result.division,
+        league_points=result.league_points,
+        rank_text=result.rank_text,
+    )
+
+
+@router.post(
+    "/verify-lcu",
+    response_model=DesktopVerifyResponse,
+    summary="Link a League account from the (already-paired) desktop app (JWT-authed)",
+)
+async def verify_lcu(
+    body: VerifyLcuRequest,
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    publisher: Annotated[NotificationPublisher, Depends(get_notification_publisher)],
+) -> DesktopVerifyResponse:
+    """Resolve the canonical PUUID for the BEARER user, dedupe-link it, DM the user.
+
+    The JWT-authed replacement for ``/accounts/verify-desktop`` (PLAN.md §3.1): the
+    desktop has already paired (``/auth/desktop-pair``) into a session, so the USER
+    is the authenticated principal and there is NO one-time code. The desktop reads
+    the Riot ID + region from the local LCU; the backend resolves the canonical
+    78-char PUUID server-side via Account-V1 by-riot-id (the double verification —
+    a 404 rejects), dedupes the ``RiotAccount`` on that PUUID (409 if it belongs to
+    another user), snapshots a best-effort Solo/Duo rank, and DMs the user.
+    """
+    try:
+        platform = service.parse_platform_region(body.region)
+    except service.InvalidRegion as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+
+    if not _verify_lcu_limiter.allow(principal.user_id):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="too many attempts"
+        )
+
+    account_client = RiotAccountClient(settings.riot_api_key, service.continent_for(platform))
+    try:
+        # The service OWNS its own short transaction (it must not hold a Postgres
+        # row lock across the Riot HTTP calls), so the router does NOT open
+        # ``session.begin()`` here — it just provides the session.
+        async with SessionLocal() as session:
+            result = await service.verify_lcu_account(
+                session,
+                user_id=principal.user_id,
+                game_name=body.game_name,
+                tag_line=body.tag_line,
+                region=body.region,
+                account_client=account_client,
+                lcu_puuid=body.lcu_puuid,
+                summoner_id=body.summoner_id,
+                origin_guild_id=principal.guild_id,
+            )
+    except service.UnknownRiotId as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Riot ID not found"
+        ) from exc
+    except service.InvalidRegion as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    except service.PuuidConflict as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="this Riot account is already linked to another user",
+        ) from exc
+    except service.RiotUnavailable as exc:
+        log.warning("account_v1_unavailable", error=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Riot Account-V1 unavailable; try again",
+        ) from exc
+    finally:
+        await account_client.aclose()
+
+    # Best-effort DM the verifying user AFTER commit (mirrors verify-desktop). Only
+    # when the principal carries an acting guild + we resolved the snowflake; a
+    # notification-transport error must NEVER fail an already-committed link.
+    if result.origin_guild_id and result.discord_user_id:
         try:
             await publish_registration_verified(
                 publisher,

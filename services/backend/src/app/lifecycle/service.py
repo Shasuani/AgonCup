@@ -43,6 +43,7 @@ from typing import TYPE_CHECKING, Any, cast
 from lol_schemas.enums import GuildStatus
 from sqlalchemy import CursorResult, Delete, Update, delete, update
 
+from app.auth import tokens
 from app.logging import get_logger
 from app.models import (
     GUILD_ISOLATED_TABLES,
@@ -227,9 +228,20 @@ async def delete_user(
     ``ON DELETE CASCADE`` FKs to ``users.id`` and are removed by the database. This
     is the user "right to be forgotten" path (PLAN.md §7 Privacy/PII).
 
+    Refresh tokens are revoked EXPLICITLY first (``revoke_all_for_user``) so any
+    token presented in the narrow window before the cascading DELETE removes the
+    rows fails closed — the ``users.id`` CASCADE would remove them anyway, but a
+    leaked session must not survive a deletion that has begun. (Contrast
+    :func:`purge_guild`, which does NOT revoke refresh tokens: they are global /
+    identity-scoped, so a user removed from one guild stays signed in elsewhere;
+    stale access JWTs for the removed guild fail closed at RLS.)
+
     Raises:
         UserNotFoundError: no user row matches ``user_id``.
     """
+    # Revoke the user's refresh tokens BEFORE the cascading DELETE (defense in depth).
+    await tokens.revoke_all_for_user(session, user_id=user_id)
+
     result = await _dml(session, delete(User).where(User.id == user_id))
     if (result.rowcount or 0) == 0:
         raise UserNotFoundError(user_id)

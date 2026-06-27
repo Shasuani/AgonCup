@@ -241,6 +241,24 @@ def region_label_for(region: PlatformRoute) -> str:
     return _PLATFORM_TO_LABEL.get(region, region.value.upper())
 
 
+def format_rank_fields(*, tier: str | None, division: str | None, league_points: int | None) -> str:
+    """Render a Solo/Duo rank from its discrete fields as a display string.
+
+    The field-level counterpart of :func:`format_rank` (which takes a live
+    :class:`LeagueEntryDTO`); used to render a STORED rank snapshot
+    (``RiotAccount.rank_*``) without reconstructing a DTO. ``None``/empty tier ->
+    ``"Unranked"``. Apex tiers (MASTER and above) carry an empty division, so the
+    division is omitted there. Riot stores the tier upper-cased (``"GOLD"``); we
+    title-case it (``"Gold"``).
+    """
+    if not tier:
+        return "Unranked"
+    label = tier.title()
+    if division:
+        return f"{label} {division}, {league_points} LP"
+    return f"{label}, {league_points} LP"
+
+
 def format_rank(solo: LeagueEntryDTO | None) -> str:
     """Render a Solo/Duo :class:`LeagueEntryDTO` as a display string (PLAN.md §3.5).
 
@@ -250,10 +268,9 @@ def format_rank(solo: LeagueEntryDTO | None) -> str:
     """
     if solo is None:
         return "Unranked"
-    tier = solo.tier.title()
-    if solo.rank:
-        return f"{tier} {solo.rank}, {solo.league_points} LP"
-    return f"{tier}, {solo.league_points} LP"
+    return format_rank_fields(
+        tier=solo.tier, division=solo.rank or None, league_points=solo.league_points
+    )
 
 
 def _random_target_icon_id() -> int:
@@ -659,6 +676,103 @@ async def verify_desktop_code(
     )
 
 
+async def verify_lcu_account(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    game_name: str,
+    tag_line: str,
+    region: str,
+    account_client: RiotAccountClient,
+    lcu_puuid: str | None = None,
+    summoner_id: str | None = None,
+    origin_guild_id: str | None = None,
+    now: datetime | None = None,
+) -> DesktopVerifyResult:
+    """JWT-authed LCU verify: resolve the CANONICAL PUUID + dedupe-link it to ``user_id``.
+
+    The authenticated replacement for :func:`verify_desktop_code` (PLAN.md §3.1):
+    the session is already established via ``/auth/desktop-pair``, so the USER comes
+    from the bearer principal — there is NO one-time code and NONE of the
+    ``VerificationAttempt`` FOR-UPDATE lock phases. Otherwise the body is identical:
+
+    1. Validate the region (:class:`InvalidRegion` -> 422).
+    2. NO LOCK HELD: resolve the canonical PUUID via Account-V1 (the double
+       verification — 404 -> :class:`UnknownRiotId`, other upstream error ->
+       :class:`RiotUnavailable`) and fetch the best-effort Solo/Duo rank snapshot
+       (League-V4; failure NEVER fails the link).
+    3. ONE short txn: DEDUPE-upsert the :class:`RiotAccount` keyed on the canonical
+       PUUID via :func:`_dedupe_upsert_account` (``attempt_user_id=user_id``) — the
+       SAME SAVEPOINT + :class:`PuuidConflict` (409) race guard. ``verified=True``.
+
+    Residual gap (acceptable, PLAN §3.1 advisory model): resolving by Riot ID proves
+    it exists, not that the bearer owns it; true ownership is backstopped by the LCU
+    read + cross-client corroboration + admin override, never this endpoint alone.
+
+    The caller must NOT wrap this in a transaction (no Postgres lock / open txn is
+    held across the Riot HTTP calls — the service owns its own ``session.begin()``).
+    """
+    now = now or datetime.now(tz=UTC)
+    platform = parse_platform_region(region)
+    guild_uuid = uuid.UUID(origin_guild_id) if origin_guild_id else None
+    user_uuid = uuid.UUID(user_id)
+
+    # NO LOCK / NO OPEN TXN across these (potentially slow, 429-retrying) Riot calls.
+    dto = await resolve_account(account_client, game_name=game_name, tag_line=tag_line)
+    canonical_puuid = dto.puuid
+    solo = await _fetch_solo_rank(account_client, canonical_puuid, platform)
+    rank_text = format_rank(solo)
+
+    async with session.begin():
+        account = await _dedupe_upsert_account(
+            session,
+            canonical_puuid=canonical_puuid,
+            attempt_user_id=user_uuid,
+            dto=dto,
+            platform=platform,
+            origin_guild_id=guild_uuid,
+            summoner_id=summoner_id,
+            lcu_puuid=lcu_puuid,
+            now=now,
+        )
+
+        if solo is not None:
+            account.rank_tier = solo.tier
+            account.rank_division = solo.rank or None
+            account.rank_lp = solo.league_points
+            account.rank_queue = solo.queue_type
+            account.rank_checked_at = now
+
+        # The DM notification needs the user's Discord snowflake (global User row).
+        discord_user_id = (
+            await session.execute(select(User.discord_user_id).where(User.id == user_uuid))
+        ).scalar_one_or_none()
+
+        account_id = str(account.id)
+        log.info(
+            "lcu_account_verified",
+            user_id=user_id,
+            account_id=account_id,
+            origin_guild_id=origin_guild_id,
+            ranked=solo is not None,
+        )
+
+    return DesktopVerifyResult(
+        account_id=account_id,
+        puuid=canonical_puuid,
+        verified=True,
+        origin_guild_id=str(guild_uuid) if guild_uuid else None,
+        game_name=dto.game_name,
+        tag_line=dto.tag_line,
+        region=platform.value,
+        tier=(solo.tier if solo is not None else None),
+        division=(solo.rank or None) if solo is not None else None,
+        league_points=(solo.league_points if solo is not None else None),
+        rank_text=rank_text,
+        discord_user_id=str(discord_user_id) if discord_user_id is not None else "",
+    )
+
+
 async def _dedupe_upsert_account(
     session: AsyncSession,
     *,
@@ -814,6 +928,7 @@ __all__ = [
     "UnknownRiotId",
     "continent_for",
     "format_rank",
+    "format_rank_fields",
     "get_attempt",
     "link_account",
     "list_linked_accounts",
@@ -823,4 +938,5 @@ __all__ = [
     "resolve_account",
     "start_desktop_registration",
     "verify_desktop_code",
+    "verify_lcu_account",
 ]

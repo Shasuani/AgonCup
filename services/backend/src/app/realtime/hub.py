@@ -203,24 +203,38 @@ def authenticate(websocket: WebSocketLike) -> Principal:
 
 
 async def authorize_subscription(
-    session: AsyncSession, *, principal: Principal, match_id: uuid.UUID
+    session: AsyncSession,
+    *,
+    principal: Principal,
+    match_id: uuid.UUID,
+    claimed_guild_id: uuid.UUID | None = None,
 ) -> Subscription:
     """Set the tenant GUC and validate the principal participates in ``match_id``.
 
-    The acting guild comes from the JWT claim (the WS has no path/header guild).
-    We set ``app.current_guild`` so RLS scopes the participant lookup to that
-    tenant, then require a ``ClientSession`` roster row for this user bound to the
-    match. A platform operator is exempt (cross-tenant staff). Because the lookup
-    runs under RLS, a foreign-guild match is invisible and surfaces as "not a
-    participant" — a client can never subscribe outside its own guild.
+    A desktop session is IDENTITY-only (its JWT bakes the FIRST role guild as an
+    advisory ``gid``), yet a player can be in matches across MANY guilds from one
+    session. So the subscribe frame carries the match's ``guildId``
+    (``claimed_guild_id``), supplied by the backend in the match-assigned command;
+    we scope the RLS participant lookup to THAT guild, falling back to the token's
+    advisory ``gid`` when the frame omits it. We set ``app.current_guild`` so RLS
+    scopes the lookup, then require a ``ClientSession`` roster row for this user
+    bound to the match. A platform operator is exempt (cross-tenant staff).
+
+    A forged ``claimed_guild_id`` is FAIL-CLOSED: the user only owns a
+    ``ClientSession`` in the guild the backend assigned, so a wrong guild yields
+    zero rows under RLS -> "not a participant" -> :class:`SubscriptionError` (the
+    caller closes 4401 BEFORE any ``pubsub.subscribe``, so no command channel leaks).
+    Because a match belongs to exactly one guild (the ``(id, guild_id)`` composite
+    key) and ``ClientSession.guild_id`` is server-set at assignment, at most one
+    ``(user_id, match_id)`` -> guild can validate.
 
     Raises:
-        SubscriptionError: no acting guild on the token, or the principal is not a
-            participant of the match (foreign guild / non-roster).
+        SubscriptionError: no acting guild (no claim + no token gid), or the
+            principal is not a participant of the match (foreign guild / non-roster).
     """
-    if not principal.guild_id:
+    guild_id = claimed_guild_id or (uuid.UUID(principal.guild_id) if principal.guild_id else None)
+    if guild_id is None:
         raise SubscriptionError("no acting guild on token")
-    guild_id = uuid.UUID(principal.guild_id)
 
     await session.execute(
         text("SELECT set_config('app.current_guild', :gid, true)"),
@@ -442,9 +456,11 @@ def _command_frame(raw: str | bytes) -> str | None:
 
     The Redis payload is a serialized :class:`lol_realtime.Envelope`; the wire
     contract delivers the inner command payload as
-    ``{"type":"command","command": <command JSON>}``. A malformed Redis payload is
-    skipped (returns ``None``) so a poisoned channel message never crashes the
-    relay.
+    ``{"type":"command","guildId": <origin_guild_id>, "command": <command JSON>}``.
+    The ``guildId`` surfaces the match's guild from the envelope so the desktop's
+    ``onMatchAssigned`` can thread it back into its subscribe frame (the WS
+    guild-scope fix). A malformed Redis payload is skipped (returns ``None``) so a
+    poisoned channel message never crashes the relay.
     """
     if isinstance(raw, bytes | bytearray):
         raw = raw.decode("utf-8", errors="replace")
@@ -455,7 +471,11 @@ def _command_frame(raw: str | bytes) -> str | None:
     payload = envelope.get("payload") if isinstance(envelope, dict) else None
     if not isinstance(payload, dict):
         return None
-    return json.dumps({"type": "command", "command": payload})
+    frame: dict[str, Any] = {"type": "command", "command": payload}
+    guild_id = envelope.get("origin_guild_id")
+    if guild_id is not None:
+        frame["guildId"] = str(guild_id)
+    return json.dumps(frame)
 
 
 async def relay_commands(
@@ -525,10 +545,27 @@ async def serve(
         await websocket.close(code=WS_CLOSE_AUTH)
         return
 
+    # The match's guild rides on the subscribe frame (the backend delivered it in
+    # the match-assigned command). It scopes the RLS participant check to the right
+    # tenant — letting one identity-only session subscribe to matches across guilds.
+    # Optional: a missing guildId falls back to the token's advisory gid.
+    claimed_guild_id: uuid.UUID | None = None
+    raw_guild = frame.get("guildId")
+    if raw_guild is not None:
+        try:
+            claimed_guild_id = uuid.UUID(str(raw_guild))
+        except ValueError:
+            await websocket.send_text(json.dumps({"type": "error", "detail": "invalid guildId"}))
+            await websocket.close(code=WS_CLOSE_AUTH)
+            return
+
     try:
         async with session_factory() as session, session.begin():
             subscription = await authorize_subscription(
-                session, principal=principal, match_id=match_id
+                session,
+                principal=principal,
+                match_id=match_id,
+                claimed_guild_id=claimed_guild_id,
             )
     except SubscriptionError as exc:
         logger.info("realtime.subscribe.reject", error=str(exc))

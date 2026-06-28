@@ -29,6 +29,7 @@ const TournamentsScreen = lazy(() => import("./screens/tournaments/TournamentsSc
 const TeamsScreen = lazy(() => import("./screens/teams/TeamsScreen"));
 const AccountsScreen = lazy(() => import("./screens/accounts/AccountsScreen"));
 const DisputeQueueScreen = lazy(() => import("./screens/results/DisputeQueueScreen"));
+const MatchHistoryScreen = lazy(() => import("./screens/results/MatchHistoryScreen"));
 const AuditLogScreen = lazy(() => import("./screens/audit/AuditLogScreen"));
 const GuildsScreen = lazy(() => import("./screens/guilds/GuildsScreen"));
 const NotFound = lazy(() => import("./screens/NotFound"));
@@ -81,6 +82,7 @@ export function AppRoutes(): JSX.Element {
               <Route path="accounts" element={<AccountsScreen />} />
               <Route path="tournaments" element={<TournamentsScreen />} />
               <Route path="teams" element={<TeamsScreen />} />
+              <Route path="history" element={<MatchHistoryScreen />} />
               <Route path="disputes" element={<DisputeQueueScreen />} />
             </Route>
 

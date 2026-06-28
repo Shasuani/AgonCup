@@ -15,7 +15,7 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from lol_schemas.enums import ResultDecidedBy, UserGuildRoleName
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -123,3 +123,79 @@ async def record_match_winner(
     except (service.MatchNotReadyError, service.TeamNotInMatchError) as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     return _to_response(result)
+
+
+# ---------------------------------------------------------------------------
+# Match history (read model) — per-game scoreboards for the SPA
+# ---------------------------------------------------------------------------
+class HistoryPlayerResponse(BaseModel):
+    puuid: str
+    display_name: str | None = None
+    riot_id: str | None = None
+    champion_id: int
+    kills: int
+    deaths: int
+    assists: int
+
+
+class HistoryTeamResponse(BaseModel):
+    is_winner: bool
+    players: list[HistoryPlayerResponse]
+
+
+class HistoryGameResponse(BaseModel):
+    match_id: str
+    tournament_id: str
+    tournament_name: str | None = None
+    round: int | None = None
+    lcu_game_id: str
+    played_at: str
+    teams: list[HistoryTeamResponse]
+
+
+def _history_response(game: service.HistoryGame) -> HistoryGameResponse:
+    return HistoryGameResponse(
+        match_id=game.match_id,
+        tournament_id=game.tournament_id,
+        tournament_name=game.tournament_name,
+        round=game.round,
+        lcu_game_id=game.lcu_game_id,
+        played_at=game.played_at.isoformat(),
+        teams=[
+            HistoryTeamResponse(
+                is_winner=t.is_winner,
+                players=[
+                    HistoryPlayerResponse(
+                        puuid=p.puuid,
+                        display_name=p.display_name,
+                        riot_id=p.riot_id,
+                        champion_id=p.champion_id,
+                        kills=p.kills,
+                        deaths=p.deaths,
+                        assists=p.assists,
+                    )
+                    for p in t.players
+                ],
+            )
+            for t in game.teams
+        ],
+    )
+
+
+@router.get(
+    "/history",
+    response_model=list[HistoryGameResponse],
+    summary="Per-game match-history scoreboards for the acting guild (guild_admin)",
+)
+async def list_match_history(
+    session: Annotated[AsyncSession, Depends(_ADMIN)],
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> list[HistoryGameResponse]:
+    """Return recent per-game scoreboards (champion + KDA) for the acting guild.
+
+    Display-only and uncorroborated (PLAN.md §3.6.5): reconstructed from the
+    forgeable ``result_reports``; the official winner still comes from adjudication
+    / admin override. RLS-scoped to the acting guild via the tenant session.
+    """
+    games = await service.list_match_history(session, limit=limit)
+    return [_history_response(g) for g in games]

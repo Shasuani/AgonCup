@@ -298,6 +298,8 @@ export interface LiveClientEventCapture {
 export interface EogPlayerStats {
   readonly puuid?: Puuid;
   readonly summonerId?: SummonerId;
+  /** `championId` — numeric champion id (0 if absent); icon resolved downstream. */
+  readonly championId: number;
   /** `CHAMPIONS_KILLED`. */
   readonly championsKilled: number;
   /** `NUM_DEATHS`. */
@@ -962,6 +964,7 @@ export class LcuAdapterImpl implements LcuAdapter {
         return {
           ...(puuid !== undefined ? { puuid } : {}),
           ...(summonerId !== undefined ? { summonerId } : {}),
+          championId: asNumber(pr['championId']),
           championsKilled: asNumber(pr['CHAMPIONS_KILLED']),
           numDeaths: asNumber(pr['NUM_DEATHS']),
           assists: asNumber(pr['ASSISTS']),

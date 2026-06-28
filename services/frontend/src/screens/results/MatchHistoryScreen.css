@@ -1,0 +1,110 @@
+/* Match history — per-game scoreboard cards (PLAN.md §3.4). */
+
+[data-history-list] {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+[data-history-card] {
+  border: 1px solid var(--color-border, #2a2f3a);
+  border-radius: 8px;
+  background: var(--color-surface, #161a22);
+  overflow: hidden;
+}
+
+[data-history-card-head] {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.6rem 0.9rem;
+  border-bottom: 1px solid var(--color-border, #2a2f3a);
+  font-size: 0.9rem;
+}
+
+[data-history-tournament] {
+  font-weight: 600;
+}
+
+[data-history-round] {
+  color: var(--color-text-muted, #9aa3b2);
+}
+
+[data-history-when] {
+  margin-left: auto;
+  color: var(--color-text-muted, #9aa3b2);
+  font-variant-numeric: tabular-nums;
+}
+
+[data-history-teams] {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background: var(--color-border, #2a2f3a);
+}
+
+@media (max-width: 640px) {
+  [data-history-teams] {
+    grid-template-columns: 1fr;
+  }
+}
+
+[data-history-team] {
+  background: var(--color-surface, #161a22);
+  padding: 0.6rem 0.9rem;
+}
+
+[data-history-team][data-winner="true"] {
+  background: var(--color-success-surface, rgba(46, 160, 67, 0.12));
+}
+
+[data-history-team-head] {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+}
+
+[data-history-badge] {
+  margin-left: auto;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-success, #3fb950);
+}
+
+[data-history-players] {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+[data-history-player] {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+[data-history-champ] {
+  border-radius: 4px;
+  flex: 0 0 auto;
+  background: var(--color-border, #2a2f3a);
+}
+
+[data-history-name] {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[data-history-kda] {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-muted, #9aa3b2);
+}

@@ -392,3 +392,96 @@ async def test_quorum_decision_clears_override_fields() -> None:
     assert res.decided_by == ResultDecidedBy.QUORUM
     assert res.admin_override_by is None
     assert res.admin_override_reason is None
+
+
+# ---------------------------------------------------------------------------
+# Match history (read model) — reconstruct per-game scoreboards from reports
+# ---------------------------------------------------------------------------
+class _HistResult:
+    """A result that answers both ``.scalars().all()`` and ``.all()``."""
+
+    def __init__(self, rows: list[Any]) -> None:
+        self._rows = rows
+
+    def scalars(self) -> _HistResult:
+        return self
+
+    def all(self) -> list[Any]:
+        return self._rows
+
+
+class _QueuedSession:
+    """Returns pre-baked results in execute() call order (reports, names, meta)."""
+
+    def __init__(self, *results: _HistResult) -> None:
+        self._q = list(results)
+
+    async def execute(self, statement: Any, params: Any = None) -> Any:
+        return self._q.pop(0)
+
+
+def _report(match_id: uuid.UUID, game_id: str, received_at: Any, teams: list[Any]) -> Any:
+    from app.models import ResultReport
+
+    return ResultReport(
+        match_id=match_id,
+        lcu_game_id=game_id,
+        reporter_puuid="p1",
+        raw_payload={"teams": teams},
+        received_at=received_at,
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_match_history_dedupes_and_resolves() -> None:
+    from datetime import UTC, datetime
+
+    match_id = uuid.uuid4()
+    tid = uuid.uuid4()
+    teams = [
+        {
+            "isWinningTeam": True,
+            "players": [
+                {"puuid": "p1", "championId": 1, "championsKilled": 7, "numDeaths": 2, "assists": 9}
+            ],
+        },
+        {
+            "isWinningTeam": False,
+            "players": [
+                {"puuid": "p2", "championId": 5, "championsKilled": 1, "numDeaths": 8, "assists": 3}
+            ],
+        },
+    ]
+    newest = _report(match_id, "100", datetime(2026, 6, 3, tzinfo=UTC), teams)
+    older_dup = _report(match_id, "100", datetime(2026, 6, 1, tzinfo=UTC), teams)
+    other_game = _report(match_id, "200", datetime(2026, 6, 2, tzinfo=UTC), teams)
+
+    session = _QueuedSession(
+        _HistResult([newest, other_game, older_dup]),  # reports, newest-first
+        _HistResult([("p1", "Chama", "ChamaIGN", "EUNE")]),  # name resolution (p2 unlinked)
+        _HistResult([(match_id, 2, tid, "Summer Cup")]),  # match -> tournament meta
+    )
+
+    games = await service.list_match_history(session, limit=50)  # type: ignore[arg-type]
+
+    # Two distinct games (the older duplicate of game 100 is dropped).
+    assert [g.lcu_game_id for g in games] == ["100", "200"]
+    g = games[0]
+    assert g.match_id == str(match_id)
+    assert g.tournament_name == "Summer Cup"
+    assert g.round == 2
+    assert g.teams[0].is_winner is True
+    win = g.teams[0].players[0]
+    assert win.champion_id == 1
+    assert (win.kills, win.deaths, win.assists) == (7, 2, 9)
+    assert win.display_name == "Chama"
+    assert win.riot_id == "ChamaIGN#EUNE"
+    # Unlinked player resolves to no name.
+    assert g.teams[1].players[0].display_name is None
+    assert g.teams[1].players[0].riot_id is None
+
+
+@pytest.mark.asyncio
+async def test_list_match_history_empty_when_no_reports() -> None:
+    session = _QueuedSession(_HistResult([]))
+    assert await service.list_match_history(session, limit=50) == []  # type: ignore[arg-type]

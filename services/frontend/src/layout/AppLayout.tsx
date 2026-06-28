@@ -51,6 +51,7 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
   { to: "/tournaments", label: "Tournaments", icon: "tournaments", anyOf: [GUILD_ADMIN, PLATFORM_OPERATOR] },
   { to: "/teams", label: "Teams", icon: "teams", anyOf: [GUILD_ADMIN, PLATFORM_OPERATOR] },
   { to: "/accounts", label: "Accounts", icon: "accounts", anyOf: [GUILD_ADMIN, PLATFORM_OPERATOR] },
+  { to: "/history", label: "Match history", icon: "tournaments", anyOf: [GUILD_ADMIN, PLATFORM_OPERATOR] },
   { to: "/disputes", label: "Disputes", icon: "disputes", anyOf: [GUILD_ADMIN, PLATFORM_OPERATOR] },
   { to: "/audit", label: "Audit log", icon: "audit", anyOf: [PLATFORM_OPERATOR] },
   { to: "/guilds", label: "Guilds", icon: "teams", anyOf: [PLATFORM_OPERATOR] },

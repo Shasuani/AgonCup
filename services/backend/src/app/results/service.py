@@ -38,6 +38,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 from lol_schemas.enums import (
     MatchResultState,
@@ -48,7 +49,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.logging import get_logger
-from app.models import Match, MatchResult
+from app.models import Match, MatchResult, ResultReport, RiotAccount, Tournament, User
 
 logger = get_logger(__name__)
 
@@ -294,3 +295,172 @@ async def record_winner(
         decided_by=decided_by.value,
     )
     return result
+
+
+# ---------------------------------------------------------------------------
+# Match history (read model) — per-game scoreboard for the SPA (PLAN.md §3.6.5)
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True, slots=True)
+class HistoryPlayer:
+    """One scoreboard line: the player's champion + KDA, name resolved if linked.
+
+    ``puuid`` is from the (forgeable) eog block; ``display_name``/``riot_id`` are
+    resolved from our ``RiotAccount`` -> ``User`` join and are ``None`` for an
+    unlinked participant (we only know their PUUID).
+    """
+
+    puuid: str
+    display_name: str | None
+    riot_id: str | None
+    champion_id: int
+    kills: int
+    deaths: int
+    assists: int
+
+
+@dataclass(frozen=True, slots=True)
+class HistoryTeam:
+    is_winner: bool
+    players: list[HistoryPlayer]
+
+
+@dataclass(frozen=True, slots=True)
+class HistoryGame:
+    """One played game, reconstructed from a representative ``ResultReport`` row."""
+
+    match_id: str
+    tournament_id: str
+    tournament_name: str | None
+    round: int | None
+    lcu_game_id: str
+    played_at: datetime
+    teams: list[HistoryTeam]
+
+
+def _history_players(
+    team_raw: dict[str, Any], names: dict[str, tuple[str | None, str | None]]
+) -> list[HistoryPlayer]:
+    """Map one eog team's ``players`` block into resolved :class:`HistoryPlayer`s."""
+    out: list[HistoryPlayer] = []
+    players = team_raw.get("players")
+    if not isinstance(players, list):
+        return out
+    for p in players:
+        if not isinstance(p, dict):
+            continue
+        puuid = str(p.get("puuid") or "")
+        display_name, riot_id = names.get(puuid, (None, None))
+        out.append(
+            HistoryPlayer(
+                puuid=puuid,
+                display_name=display_name,
+                riot_id=riot_id,
+                champion_id=int(p.get("championId") or 0),
+                kills=int(p.get("championsKilled") or 0),
+                deaths=int(p.get("numDeaths") or 0),
+                assists=int(p.get("assists") or 0),
+            )
+        )
+    return out
+
+
+async def list_match_history(session: AsyncSession, *, limit: int = 50) -> list[HistoryGame]:
+    """Reconstruct recent per-game scoreboards from persisted ``result_reports``.
+
+    For display only (PLAN.md §3.6.5): each client posts the FULL eog scoreboard,
+    so a single ``ResultReport`` row already holds every player's champion + KDA.
+    We pick ONE representative report per ``(match_id, lcu_game_id)`` (the most
+    recent received), read its ``raw_payload.teams``, and resolve participant
+    PUUIDs to Discord/Riot names via the global ``RiotAccount`` join. This is the
+    forgeable, uncorroborated view — the official winner still comes from the
+    adjudicator / admin override, never this read.
+
+    RLS-scoped: only the acting guild's reports are visible (the GUC is set by the
+    tenant session). ``RiotAccount``/``User`` are global, so name resolution spans
+    every linked player.
+    """
+    rows = (
+        (await session.execute(select(ResultReport).order_by(ResultReport.received_at.desc())))
+        .scalars()
+        .all()
+    )
+
+    # Dedupe to one representative report per game, newest first, capped at limit.
+    representative: dict[tuple[str, str], ResultReport] = {}
+    order: list[tuple[str, str]] = []
+    for r in rows:
+        key = (str(r.match_id), r.lcu_game_id)
+        if key in representative:
+            continue
+        if not isinstance(r.raw_payload, dict):
+            continue
+        teams_raw = r.raw_payload.get("teams")
+        if not isinstance(teams_raw, list) or not teams_raw:
+            continue
+        representative[key] = r
+        order.append(key)
+        if len(order) >= limit:
+            break
+    if not order:
+        return []
+
+    # Batch-resolve PUUID -> (discord display name, riot id) across all games.
+    puuids: set[str] = set()
+    for key in order:
+        for team in representative[key].raw_payload["teams"]:  # type: ignore[index]
+            for p in team.get("players") or []:
+                if isinstance(p, dict) and p.get("puuid"):
+                    puuids.add(str(p["puuid"]))
+    names: dict[str, tuple[str | None, str | None]] = {}
+    if puuids:
+        for puuid, dname, gname, tline in (
+            await session.execute(
+                select(
+                    RiotAccount.puuid,
+                    User.display_name,
+                    RiotAccount.riot_id_game_name,
+                    RiotAccount.riot_id_tag_line,
+                )
+                .join(User, RiotAccount.user_id == User.id)
+                .where(RiotAccount.puuid.in_(puuids))
+            )
+        ).all():
+            riot_id = f"{gname}#{tline}" if gname and tline else None
+            names[str(puuid)] = (dname, riot_id)
+
+    # Batch-resolve match -> (round, tournament id, tournament name).
+    match_ids = {uuid.UUID(key[0]) for key in order}
+    meta: dict[str, tuple[int | None, str, str | None]] = {}
+    for mid, rnd, tid, tname in (
+        await session.execute(
+            select(Match.id, Match.round, Match.tournament_id, Tournament.name)
+            .join(Tournament, Match.tournament_id == Tournament.id)
+            .where(Match.id.in_(match_ids))
+        )
+    ).all():
+        meta[str(mid)] = (rnd, str(tid), tname)
+
+    games: list[HistoryGame] = []
+    for key in order:
+        r = representative[key]
+        rnd, tid, tname = meta.get(key[0], (None, "", None))
+        teams = [
+            HistoryTeam(
+                is_winner=bool(team.get("isWinningTeam")),
+                players=_history_players(team, names),
+            )
+            for team in r.raw_payload["teams"]  # type: ignore[index]
+            if isinstance(team, dict)
+        ]
+        games.append(
+            HistoryGame(
+                match_id=key[0],
+                tournament_id=tid,
+                tournament_name=tname,
+                round=rnd,
+                lcu_game_id=key[1],
+                played_at=r.received_at,
+                teams=teams,
+            )
+        )
+    return games

@@ -108,6 +108,11 @@ class FakeSession:
     async def rollback(self) -> None:
         self.rolled_back = True
 
+    async def delete(self, obj: Any) -> None:
+        rows = self.store.get(type(obj))
+        if rows is not None and obj in rows:
+            rows.remove(obj)
+
     def begin_nested(self) -> _FakeNested:
         """SAVEPOINT stand-in: the code-mint loop wraps each INSERT in one."""
         return _FakeNested()
@@ -751,6 +756,104 @@ async def test_verify_desktop_code_dedupes_existing_icon_row_same_user() -> None
     assert existing.verified is True
     assert existing.riot_id_game_name == "Chama"
     assert result.account_id == str(existing.id)
+
+
+# ---------------------------------------------------------------------------
+# Self-service: list / unlink the acting user's OWN accounts (/accounts, /unlink)
+# ---------------------------------------------------------------------------
+def _seed_account(
+    session: FakeSession,
+    user_id: str,
+    *,
+    game_name: str,
+    tag_line: str,
+    verified: bool = True,
+    tier: str | None = None,
+    division: str | None = None,
+    lp: int | None = None,
+) -> RiotAccount:
+    acct = RiotAccount(
+        user_id=uuid.UUID(user_id),
+        puuid=f"{game_name}-{tag_line}-puuid",
+        riot_id_game_name=game_name,
+        riot_id_tag_line=tag_line,
+        region="eun1",
+        verified=verified,
+        rank_tier=tier,
+        rank_division=division,
+        rank_lp=lp,
+    )
+    acct.id = uuid.uuid4()
+    session.store[RiotAccount].append(acct)
+    return acct
+
+
+@pytest.mark.asyncio
+async def test_list_user_accounts_returns_only_owned_with_rank() -> None:
+    session = FakeSession()
+    me = str(uuid.uuid4())
+    other = str(uuid.uuid4())
+    _seed_account(
+        session, me, game_name="Chama", tag_line="Shasu", tier="GOLD", division="II", lp=45
+    )
+    _seed_account(session, me, game_name="Smurf", tag_line="EUNE", verified=False)
+    _seed_account(session, other, game_name="NotMine", tag_line="X")
+
+    rows = await service.list_user_accounts(session, user_id=me)
+
+    assert {(r.game_name, r.tag_line) for r in rows} == {("Chama", "Shasu"), ("Smurf", "EUNE")}
+    by_name = {r.game_name: r for r in rows}
+    assert by_name["Chama"].rank_text == "Gold II, 45 LP"
+    assert by_name["Smurf"].rank_text == "Unranked"
+    assert by_name["Smurf"].verified is False
+
+
+@pytest.mark.asyncio
+async def test_list_user_accounts_empty_when_none_linked() -> None:
+    session = FakeSession()
+    assert await service.list_user_accounts(session, user_id=str(uuid.uuid4())) == []
+
+
+@pytest.mark.asyncio
+async def test_unlink_user_account_removes_matching_case_insensitive() -> None:
+    session = FakeSession()
+    me = str(uuid.uuid4())
+    keep = _seed_account(session, me, game_name="Keep", tag_line="EUW")
+    _seed_account(session, me, game_name="Chama", tag_line="Shasu")
+
+    removed = await service.unlink_user_account(
+        session, user_id=me, game_name="chama", tag_line="#shasu"
+    )
+
+    assert removed.game_name == "Chama"
+    remaining = session.store[RiotAccount]
+    assert len(remaining) == 1
+    assert remaining[0] is keep
+
+
+@pytest.mark.asyncio
+async def test_unlink_user_account_unknown_riot_id_raises() -> None:
+    session = FakeSession()
+    me = str(uuid.uuid4())
+    _seed_account(session, me, game_name="Chama", tag_line="Shasu")
+
+    with pytest.raises(service.AccountNotLinked):
+        await service.unlink_user_account(session, user_id=me, game_name="Ghost", tag_line="X")
+    # Nothing removed.
+    assert len(session.store[RiotAccount]) == 1
+
+
+@pytest.mark.asyncio
+async def test_unlink_user_account_scoped_to_owner() -> None:
+    # Another user's account with the SAME Riot ID must never be unlinked.
+    session = FakeSession()
+    me = str(uuid.uuid4())
+    other = str(uuid.uuid4())
+    theirs = _seed_account(session, other, game_name="Chama", tag_line="Shasu")
+
+    with pytest.raises(service.AccountNotLinked):
+        await service.unlink_user_account(session, user_id=me, game_name="Chama", tag_line="Shasu")
+    assert theirs in session.store[RiotAccount]
 
 
 @pytest.mark.asyncio

@@ -139,6 +139,10 @@ class PuuidConflict(AccountLinkError):
     """The claimed PUUID is already linked to a DIFFERENT user (409)."""
 
 
+class AccountNotLinked(AccountLinkError):
+    """The acting user has no linked Riot account matching the request (404)."""
+
+
 @dataclass(frozen=True, slots=True)
 class LinkResult:
     """Outcome of a link request returned to the caller (PLAN.md §3.1).
@@ -179,6 +183,26 @@ class LinkedAccountSummary:
     # The Discord server the user ran /register from (origin_guild_id → name).
     origin_guild_id: str | None
     origin_guild_name: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class MyAccountSummary:
+    """One of the acting user's OWN linked Riot accounts (self-service ``/accounts``).
+
+    The player-facing counterpart of :class:`LinkedAccountSummary`: scoped to a
+    single owner (no Discord name / cross-user join), it carries the canonical
+    Riot ID, region, verification state and the STORED Solo/Duo rank snapshot
+    rendered for display. A user may hold several (one per canonical PUUID), so
+    this is always returned as a list (PLAN.md §3.1 dedupe is per-PUUID).
+    """
+
+    account_id: str
+    game_name: str | None
+    tag_line: str | None
+    region: str | None
+    verified: bool
+    verified_at: datetime | None
+    rank_text: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -887,6 +911,86 @@ async def list_linked_accounts(session: AsyncSession) -> list[LinkedAccountSumma
     ]
 
 
+async def list_user_accounts(session: AsyncSession, *, user_id: str) -> list[MyAccountSummary]:
+    """Return the acting user's OWN linked Riot accounts (self-service ``/accounts``).
+
+    Scoped to one owner: ``RiotAccount`` is global (not guild-RLS), so ownership is
+    enforced in the query (a user only ever sees their own rows). A user may hold
+    several accounts (dedupe is per canonical PUUID, not per user — PLAN.md §3.1),
+    so this always returns a list. Verified accounts sort first, then by Riot ID,
+    for a stable, human-scannable order. The rank is the STORED snapshot taken at
+    verify time (``RiotAccount.rank_*``), rendered via :func:`format_rank_fields`.
+    """
+    rows = (
+        (
+            await session.execute(
+                select(RiotAccount)
+                .where(RiotAccount.user_id == user_id)
+                .order_by(RiotAccount.verified.desc(), RiotAccount.riot_id_game_name)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        MyAccountSummary(
+            account_id=str(acct.id),
+            game_name=acct.riot_id_game_name,
+            tag_line=acct.riot_id_tag_line,
+            region=acct.region,
+            verified=acct.verified,
+            verified_at=acct.verified_at,
+            rank_text=format_rank_fields(
+                tier=acct.rank_tier, division=acct.rank_division, league_points=acct.rank_lp
+            ),
+        )
+        for acct in rows
+    ]
+
+
+async def unlink_user_account(
+    session: AsyncSession, *, user_id: str, game_name: str, tag_line: str
+) -> MyAccountSummary:
+    """Remove one of the acting user's OWN linked accounts by Riot ID (``/unlink``).
+
+    Matches case-insensitively on the stored Riot ID and is scoped to the acting
+    user, so a principal can only ever delete their own account (never another
+    user's, even with the same Riot ID — the PUUID is unique per owner). Deleting
+    the ``RiotAccount`` row is referentially safe: result reports and client
+    sessions carry the PUUID as a plain string (no FK), so history is untouched;
+    the player simply re-links the account later to use it again.
+
+    Raises:
+        AccountNotLinked: the user has no linked account with that Riot ID (404).
+    """
+    want_name = game_name.strip().casefold()
+    want_tag = tag_line.strip().lstrip("#").casefold()
+    rows = (
+        (await session.execute(select(RiotAccount).where(RiotAccount.user_id == user_id)))
+        .scalars()
+        .all()
+    )
+    for acct in rows:
+        name = (acct.riot_id_game_name or "").casefold()
+        tag = (acct.riot_id_tag_line or "").casefold()
+        if name == want_name and tag == want_tag:
+            summary = MyAccountSummary(
+                account_id=str(acct.id),
+                game_name=acct.riot_id_game_name,
+                tag_line=acct.riot_id_tag_line,
+                region=acct.region,
+                verified=acct.verified,
+                verified_at=acct.verified_at,
+                rank_text=format_rank_fields(
+                    tier=acct.rank_tier, division=acct.rank_division, league_points=acct.rank_lp
+                ),
+            )
+            await session.delete(acct)
+            log.info("account_unlinked", user_id=user_id, account_id=summary.account_id)
+            return summary
+    raise AccountNotLinked(f"no linked account matching {game_name}#{tag_line.lstrip('#')}")
+
+
 async def get_attempt(
     session: AsyncSession, *, attempt_id: str, user_id: str
 ) -> VerificationAttempt | None:
@@ -916,12 +1020,14 @@ __all__ = [
     "VERIFY_KIND_DESKTOP_CODE",
     "VERIFY_KIND_ICON",
     "AccountLinkError",
+    "AccountNotLinked",
     "CodeMintError",
     "DesktopRegistrationResult",
     "DesktopVerifyResult",
     "InvalidRegion",
     "LinkResult",
     "LinkedAccountSummary",
+    "MyAccountSummary",
     "PuuidConflict",
     "RiotUnavailable",
     "UnknownOrExpiredCode",
@@ -932,11 +1038,13 @@ __all__ = [
     "get_attempt",
     "link_account",
     "list_linked_accounts",
+    "list_user_accounts",
     "normalize_code",
     "parse_platform_region",
     "region_label_for",
     "resolve_account",
     "start_desktop_registration",
+    "unlink_user_account",
     "verify_desktop_code",
     "verify_lcu_account",
 ]

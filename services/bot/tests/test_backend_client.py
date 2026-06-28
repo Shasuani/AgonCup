@@ -121,6 +121,36 @@ def test_link_account_is_alias_of_start_registration() -> None:
     assert BackendClient.link_account is BackendClient.start_registration
 
 
+def test_list_my_accounts_returns_list(monkeypatch: Any) -> None:
+    client = _client(
+        monkeypatch,
+        _MockResponse(
+            200,
+            [
+                {"account_id": "a1", "game_name": "Chama", "tag_line": "Shasu", "verified": True},
+                {"account_id": "a2", "game_name": "Smurf", "tag_line": "EUNE", "verified": False},
+            ],
+        ),
+    )
+    rows = asyncio.run(client.list_my_accounts(CTX))
+    assert _MockAsyncClient.last_post["url"].endswith("/integrations/discord/accounts/list")
+    assert [r["game_name"] for r in rows] == ["Chama", "Smurf"]
+
+
+def test_unlink_account_payload(monkeypatch: Any) -> None:
+    client = _client(
+        monkeypatch,
+        _MockResponse(200, {"removed": True, "game_name": "Chama", "tag_line": "Shasu"}),
+    )
+    out = asyncio.run(client.unlink_account(CTX, game_name="Chama", tag_line="Shasu"))
+
+    sent = _MockAsyncClient.last_post
+    assert sent["url"].endswith("/integrations/discord/accounts/unlink")
+    assert sent["json"]["game_name"] == "Chama"
+    assert sent["json"]["tag_line"] == "Shasu"
+    assert out["removed"] is True
+
+
 def test_create_tournament_payload(monkeypatch: Any) -> None:
     client = _client(
         monkeypatch, _MockResponse(200, {"id": "t1", "name": "Cup", "format": "single_elim"})

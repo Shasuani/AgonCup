@@ -130,6 +130,38 @@ class RegisterCodeResponse(BaseModel):
     instruction: str
 
 
+class MyAccountResponse(BaseModel):
+    """One of the acting user's own linked Riot accounts (``/accounts`` list).
+
+    Mirrors :class:`app.accounts.service.MyAccountSummary`. The bot renders these
+    as an ephemeral list so a player can see every account they've linked and its
+    stored rank snapshot.
+    """
+
+    account_id: str
+    game_name: str | None = None
+    tag_line: str | None = None
+    region: str | None = None
+    verified: bool
+    rank_text: str
+
+
+class AccountUnlinkRequest(BaseModel):
+    """Remove one of the acting user's own linked accounts by Riot ID (``/unlink``)."""
+
+    ctx: DiscordContextIn
+    game_name: str = Field(min_length=1, max_length=64, description="Riot ID game name.")
+    tag_line: str = Field(min_length=1, max_length=16, description="Riot ID tag line.")
+
+
+class AccountUnlinkResponse(BaseModel):
+    """Confirmation that a linked account was removed."""
+
+    removed: bool
+    game_name: str | None = None
+    tag_line: str | None = None
+
+
 class TeamCreateRequest(BaseModel):
     ctx: DiscordContextIn
     name: str = Field(min_length=1, max_length=120)
@@ -315,8 +347,7 @@ async def update_settings(body: SettingsUpdateRequest) -> GuildSettingsModel:
 # ---------------------------------------------------------------------------
 #: Short human instruction echoed back to the bot for the code embed.
 _REGISTER_INSTRUCTION = (
-    "Enter this code in the LeagueOfLeagues desktop app to sign in and link your "
-    "account."
+    "Enter this code in the LeagueOfLeagues desktop app to sign in and link your account."
 )
 
 
@@ -349,6 +380,62 @@ async def link_account(body: ContextRequest) -> RegisterCodeResponse:
         expires_at=result.expires_at,
         origin_guild_id=result.origin_guild_id,
         instruction=_REGISTER_INSTRUCTION,
+    )
+
+
+@router.post(
+    "/accounts/list",
+    response_model=list[MyAccountResponse],
+    summary="List the acting user's own linked Riot accounts (service-auth)",
+)
+async def list_my_accounts(body: ContextRequest) -> list[MyAccountResponse]:
+    """Return every Riot account the acting user has linked (self-service ``/accounts``).
+
+    GLOBAL like ``/accounts/link`` (``riot_accounts`` is not guild-scoped) — no
+    tenant GUC and onboarded-guild tolerance; the bridge resolves the user from the
+    asserted snowflake and returns only that user's own accounts.
+    """
+    async with SessionLocal() as session, session.begin():
+        rows = await bridge.list_my_accounts(session, ctx=body.ctx.to_ctx())
+    return [
+        MyAccountResponse(
+            account_id=a.account_id,
+            game_name=a.game_name,
+            tag_line=a.tag_line,
+            region=a.region,
+            verified=a.verified,
+            rank_text=a.rank_text,
+        )
+        for a in rows
+    ]
+
+
+@router.post(
+    "/accounts/unlink",
+    response_model=AccountUnlinkResponse,
+    summary="Remove one of the acting user's own linked accounts (service-auth)",
+)
+async def unlink_my_account(body: AccountUnlinkRequest) -> AccountUnlinkResponse:
+    """Remove a single linked account owned by the acting user, by Riot ID (``/unlink``).
+
+    Scoped to the resolved user, so a principal can only unlink their own account.
+    A Riot ID the user has not linked yields a clean 404.
+    """
+    async with SessionLocal() as session, session.begin():
+        try:
+            removed = await bridge.unlink_my_account(
+                session,
+                ctx=body.ctx.to_ctx(),
+                game_name=body.game_name,
+                tag_line=body.tag_line,
+            )
+        except accounts_service.AccountNotLinked as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="you have no linked account with that Riot ID",
+            ) from exc
+    return AccountUnlinkResponse(
+        removed=True, game_name=removed.game_name, tag_line=removed.tag_line
     )
 
 

@@ -262,3 +262,77 @@ async def test_start_registration_tolerates_unonboarded_guild() -> None:
     # Linking is global — a non-onboarded guild simply leaves origin_guild_id NULL.
     assert result.origin_guild_id is None
     assert session.store[VerificationAttempt][0].origin_guild_id is None
+
+
+# ---------------------------------------------------------------------------
+# Self-service account list / unlink (delegated to app.accounts.service)
+# ---------------------------------------------------------------------------
+def _seed_riot_account(
+    session: FakeSession, user_id: uuid.UUID, *, game_name: str, tag_line: str
+) -> None:
+    from app.models import RiotAccount
+
+    acct = RiotAccount(
+        user_id=user_id,
+        puuid=f"{game_name}-{tag_line}-puuid",
+        riot_id_game_name=game_name,
+        riot_id_tag_line=tag_line,
+        region="eun1",
+        verified=True,
+    )
+    acct.id = uuid.uuid4()
+    session.store[RiotAccount].append(acct)
+
+
+@pytest.mark.asyncio
+async def test_list_my_accounts_returns_only_owned() -> None:
+    from app.models import RiotAccount  # noqa: F401 (store key)
+
+    session = FakeSession()
+    me = User(id=uuid.uuid4(), discord_user_id=DISCORD_MEMBER, display_name="Me")
+    other = User(id=uuid.uuid4(), discord_user_id=DISCORD_MEMBER + 1, display_name="Other")
+    session.store[User].extend([me, other])
+    _seed_riot_account(session, me.id, game_name="Chama", tag_line="Shasu")
+    _seed_riot_account(session, other.id, game_name="NotMine", tag_line="X")
+
+    rows = await bridge.list_my_accounts(
+        session, ctx=_ctx(discord_user_id=DISCORD_MEMBER, is_admin=False)
+    )
+    assert {(r.game_name, r.tag_line) for r in rows} == {("Chama", "Shasu")}
+
+
+@pytest.mark.asyncio
+async def test_unlink_my_account_removes_owned() -> None:
+    from app.models import RiotAccount
+
+    session = FakeSession()
+    me = User(id=uuid.uuid4(), discord_user_id=DISCORD_MEMBER, display_name="Me")
+    session.store[User].append(me)
+    _seed_riot_account(session, me.id, game_name="Chama", tag_line="Shasu")
+
+    removed = await bridge.unlink_my_account(
+        session,
+        ctx=_ctx(discord_user_id=DISCORD_MEMBER, is_admin=False),
+        game_name="Chama",
+        tag_line="Shasu",
+    )
+    assert removed.game_name == "Chama"
+    assert session.store[RiotAccount] == []
+
+
+@pytest.mark.asyncio
+async def test_unlink_my_account_unknown_raises() -> None:
+    from app.accounts import service as accounts_service
+
+    session = FakeSession()
+    me = User(id=uuid.uuid4(), discord_user_id=DISCORD_MEMBER, display_name="Me")
+    session.store[User].append(me)
+    _seed_riot_account(session, me.id, game_name="Chama", tag_line="Shasu")
+
+    with pytest.raises(accounts_service.AccountNotLinked):
+        await bridge.unlink_my_account(
+            session,
+            ctx=_ctx(discord_user_id=DISCORD_MEMBER, is_admin=False),
+            game_name="Ghost",
+            tag_line="X",
+        )

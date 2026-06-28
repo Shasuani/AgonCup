@@ -171,6 +171,25 @@ class BackendClient:
     #: signature is the new parameter-less one (the icon/Riot-ID flow is gone).
     link_account = start_registration
 
+    async def list_my_accounts(self, ctx: DiscordContext) -> list[dict[str, Any]]:
+        """List the acting user's own linked Riot accounts (self-service ``/accounts``).
+
+        The backend bridge (``/accounts/list``) returns the user's own rows only —
+        each ``{account_id, game_name, tag_line, region, verified, rank_text}``.
+        """
+        return await self._post_list("/accounts/list", {"ctx": _ctx_payload(ctx)})
+
+    async def unlink_account(
+        self, ctx: DiscordContext, *, game_name: str, tag_line: str
+    ) -> dict[str, Any]:
+        """Remove one of the acting user's own linked accounts by Riot ID (``/unlink``).
+
+        Delegates to the bridge ``/accounts/unlink``; a Riot ID the user has not
+        linked surfaces a clean ``BackendError`` (404).
+        """
+        payload = {"ctx": _ctx_payload(ctx), "game_name": game_name, "tag_line": tag_line}
+        return await self._require(self._post("/accounts/unlink", payload))
+
     # -- teams --------------------------------------------------------------
     async def create_team(self, ctx: DiscordContext, *, name: str) -> dict[str, Any]:
         """Create a team owned by the acting user (PLAN.md §2 Team)."""

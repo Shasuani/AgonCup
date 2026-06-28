@@ -180,6 +180,41 @@ async def start_registration(
     )
 
 
+async def list_my_accounts(
+    session: AsyncSession, *, ctx: DiscordContext
+) -> list[accounts_service.MyAccountSummary]:
+    """List the acting user's OWN linked Riot accounts (self-service ``/accounts``).
+
+    GLOBAL like :func:`start_registration` (``riot_accounts`` is not guild-scoped):
+    resolve the user from the asserted snowflake and delegate; no tenant GUC and
+    no onboarded-guild requirement (a player can check their accounts anywhere).
+    """
+    user = await guilds_service.upsert_user_by_discord_id(
+        session,
+        discord_user_id=ctx.discord_user_id,
+        display_name=ctx.display_name,
+    )
+    return await accounts_service.list_user_accounts(session, user_id=str(user.id))
+
+
+async def unlink_my_account(
+    session: AsyncSession, *, ctx: DiscordContext, game_name: str, tag_line: str
+) -> accounts_service.MyAccountSummary:
+    """Remove one of the acting user's OWN linked accounts by Riot ID (``/unlink``).
+
+    GLOBAL, same as :func:`list_my_accounts`. The delete is scoped to the resolved
+    user, so a principal can only ever unlink their own account.
+    """
+    user = await guilds_service.upsert_user_by_discord_id(
+        session,
+        discord_user_id=ctx.discord_user_id,
+        display_name=ctx.display_name,
+    )
+    return await accounts_service.unlink_user_account(
+        session, user_id=str(user.id), game_name=game_name, tag_line=tag_line
+    )
+
+
 # ---------------------------------------------------------------------------
 # Teams (delegated to app.teams.service)
 # ---------------------------------------------------------------------------
@@ -284,9 +319,11 @@ __all__ = [
     "join_tournament",
     "leave_team",
     "leave_tournament",
+    "list_my_accounts",
     "list_tournaments",
     "onboard_guild",
     "start_registration",
     "tournament_status",
+    "unlink_my_account",
     "update_guild_settings",
 ]

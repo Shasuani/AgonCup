@@ -44,6 +44,7 @@ import { WsBackendTransport, createWsFactory, type WebSocketFactory } from "./tr
 import { checkLcuIdentity, type IdentityCheckResult } from "./identity/identityCheck.js";
 import { readCurrentSummoner } from "./lcu/readSummoner.js";
 import { verifyDesktop, type VerifyResult } from "./lcu/verify.js";
+import { listMyAccounts, type ListAccountsResult } from "./accounts/listAccounts.js";
 import {
   pairDesktop,
   refreshSession,
@@ -576,9 +577,36 @@ async function bootstrap(): Promise<void> {
         ...(result.division !== undefined ? { division: result.division } : {}),
         ...(result.leaguePoints !== undefined ? { leaguePoints: result.leaguePoints } : {}),
         ...(result.rankText !== undefined ? { rankText: result.rankText } : {}),
+        ...(result.gameName !== undefined ? { gameName: result.gameName } : {}),
+        ...(result.tagLine !== undefined ? { tagLine: result.tagLine } : {}),
       };
     }
     return { ok: false, status: result.status, detail: result.detail };
+  });
+
+  // The signed-in user's own linked accounts (renderer shows them + "link another").
+  // Refreshes the session once on a 401, mirroring lol:verify.
+  ipcMain.handle("lol:list-accounts", async () => {
+    if (session === null) {
+      return { ok: false, status: 401, detail: "Not signed in." };
+    }
+    let result: ListAccountsResult = await listMyAccounts(
+      { accessToken: session.accessToken },
+      { backendUrl: backendBaseUrl() },
+    );
+    if (!result.ok && result.status === 401) {
+      if (await session.refresh()) {
+        result = await listMyAccounts(
+          { accessToken: session.accessToken },
+          { backendUrl: backendBaseUrl() },
+        );
+      } else {
+        session = null;
+        sendToRenderer("lol:auth-lost", {});
+        return { ok: false, status: 401, detail: "Session expired." };
+      }
+    }
+    return result;
   });
 
   // --- LCU reachability poller (3-5s) -> renderer badge --------------------- //

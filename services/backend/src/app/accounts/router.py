@@ -198,9 +198,54 @@ def get_notification_publisher() -> NotificationPublisher:
     return RedisNotificationPublisher(get_redis())
 
 
+class MyAccountResponse(BaseModel):
+    """One of the authenticated user's OWN linked Riot accounts (``GET /accounts/me``).
+
+    The self-service counterpart of :class:`RosterEntryResponse` (which is the
+    admin, all-users roster): scoped to the bearer, no Discord/cross-user join.
+    Mirrors :class:`app.accounts.service.MyAccountSummary`.
+    """
+
+    account_id: str
+    game_name: str | None = None
+    tag_line: str | None = None
+    region: str | None = None
+    verified: bool
+    rank_text: str
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+@router.get(
+    "/me",
+    response_model=list[MyAccountResponse],
+    summary="List the authenticated user's own linked Riot accounts",
+)
+async def my_accounts(
+    principal: Annotated[Principal, Depends(get_current_principal)],
+) -> list[MyAccountResponse]:
+    """Return every Riot account the authenticated bearer has linked (self-service).
+
+    The JWT-authed read the desktop client and SPA use to show "your accounts" and
+    offer "link another". ``RiotAccount`` is GLOBAL (not guild-RLS), so this runs on
+    a plain ``SessionLocal`` and scopes ownership to the principal in the query.
+    """
+    async with SessionLocal() as session:
+        rows = await service.list_user_accounts(session, user_id=principal.user_id)
+    return [
+        MyAccountResponse(
+            account_id=a.account_id,
+            game_name=a.game_name,
+            tag_line=a.tag_line,
+            region=a.region,
+            verified=a.verified,
+            rank_text=a.rank_text,
+        )
+        for a in rows
+    ]
+
+
 @router.get(
     "",
     response_model=list[RosterEntryResponse],

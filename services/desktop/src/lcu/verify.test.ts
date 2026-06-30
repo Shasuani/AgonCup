@@ -41,6 +41,8 @@ test("ok: reads LCU Riot ID + region and POSTs the AUTHED verify-lcu request (Be
         division: "II",
         league_points: 45,
         rank_text: "Gold II, 45 LP",
+        game_name: "Chama",
+        tag_line: "Shasu",
       }),
       { status: 200, headers: { "Content-Type": "application/json" } },
     );
@@ -60,6 +62,8 @@ test("ok: reads LCU Riot ID + region and POSTs the AUTHED verify-lcu request (Be
     assert.equal(result.division, "II");
     assert.equal(result.leaguePoints, 45);
     assert.equal(result.rankText, "Gold II, 45 LP");
+    assert.equal(result.gameName, "Chama");
+    assert.equal(result.tagLine, "Shasu");
   }
   // Authenticated endpoint, not the deprecated verify-desktop.
   assert.equal(captured?.url, "http://x/api/v1/accounts/verify-lcu");

@@ -39,6 +39,10 @@ export interface VerifyOk {
   readonly leaguePoints?: number;
   /** Display string e.g. "Gold II, 45 LP" or "Unranked". */
   readonly rankText?: string;
+  /** Canonical Riot ID game name the backend resolved (for "linked X#Y" copy). */
+  readonly gameName?: string;
+  /** Canonical Riot ID tag line the backend resolved. */
+  readonly tagLine?: string;
 }
 
 /** Failed verification, with an HTTP-ish status for the renderer to map. */
@@ -152,6 +156,8 @@ export async function verifyDesktop(
       division?: unknown;
       league_points?: unknown;
       rank_text?: unknown;
+      game_name?: unknown;
+      tag_line?: unknown;
     };
     return {
       ok: true,
@@ -161,6 +167,8 @@ export async function verifyDesktop(
       ...(typeof rec.division === "string" ? { division: rec.division } : {}),
       ...(typeof rec.league_points === "number" ? { leaguePoints: rec.league_points } : {}),
       ...(typeof rec.rank_text === "string" ? { rankText: rec.rank_text } : {}),
+      ...(typeof rec.game_name === "string" ? { gameName: rec.game_name } : {}),
+      ...(typeof rec.tag_line === "string" ? { tagLine: rec.tag_line } : {}),
     };
   }
 

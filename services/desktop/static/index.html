@@ -6,166 +6,393 @@
     <title>LeagueOfLeagues — Desktop</title>
     <style>
       :root {
-        --bg: #0a0b0f; --surface: #111319; --surface-alt: #161922; --border: #272b36;
-        --text: #e8eaf0; --muted: #9ca2b2; --primary: #7e6ff8; --accent: #0ac8b9;
-        --ok: #34d399; --warn: #fbbf24; --danger: #f87171;
-        --radius: 12px; --font: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        --mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+        --bg: #05080c;
+        --bg-2: #0a1119;
+        --panel: #0b131c;
+        --panel-2: #0e1822;
+        --line: rgba(200, 170, 110, 0.22);
+        --line-soft: rgba(200, 170, 110, 0.12);
+        --gold: #c8aa6e;
+        --gold-bright: #f0e6d2;
+        --gold-dim: #7a5c2e;
+        --cyan: #2bd4e6;
+        --cyan-deep: #0a96aa;
+        --text: #e8e3d4;
+        --muted: #9b9484;
+        --faint: #6a6657;
+        --ok: #2bd47a;
+        --warn: #e8b54a;
+        --danger: #ff4655;
+        --cut: 14px;
+        --font: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+        --mono: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+        --chamfer: polygon(var(--cut) 0, 100% 0, 100% calc(100% - var(--cut)), calc(100% - var(--cut)) 100%, 0 100%, 0 var(--cut));
       }
-      * { box-sizing: border-box; }
-      body {
-        margin: 0; font-family: var(--font); color: var(--text);
-        background:
-          radial-gradient(900px 500px at 85% -10%, rgba(126,111,248,0.16), transparent 60%),
-          radial-gradient(700px 500px at 10% 110%, rgba(10,200,185,0.10), transparent 60%),
-          var(--bg);
-        min-height: 100vh; padding: 40px clamp(24px, 6vw, 72px);
-        -webkit-user-select: none; user-select: none;
-      }
-      header { display: flex; align-items: center; gap: 14px; margin-bottom: 6px; }
-      .mark {
-        width: 40px; height: 40px; border-radius: 11px;
-        background: linear-gradient(135deg, #6d5cf6, #8b7dff);
-        display: grid; place-items: center; color: #fff; font-weight: 800; font-size: 18px;
-        box-shadow: 0 6px 20px rgba(109,92,246,0.4);
-      }
-      h1 { font-size: 20px; margin: 0; letter-spacing: -0.3px; }
-      h1 span { color: var(--muted); font-weight: 500; }
-      .eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: 3px; color: var(--primary); text-transform: uppercase; margin: 0; }
-      .lead { color: var(--muted); max-width: 64ch; line-height: 1.55; margin: 18px 0 28px; }
-      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
-      .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; }
-      .card .label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; margin: 0 0 8px; }
-      .badge { display: inline-flex; align-items: center; gap: 7px; font-weight: 600; font-size: 14px; }
-      .dot { width: 9px; height: 9px; border-radius: 50%; }
-      .dot.ok { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
-      .dot.warn { background: var(--warn); }
-      .dot.idle { background: var(--muted); }
-      .dot.off { background: var(--danger); }
-      .card .sub { color: var(--muted); font-size: 12.5px; margin: 8px 0 0; line-height: 1.45; }
-      .note { margin-top: 26px; padding: 14px 16px; border-left: 3px solid var(--primary);
-              background: var(--surface-alt); border-radius: 0 var(--radius) var(--radius) 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
-      footer { margin-top: 30px; color: var(--muted); font-family: var(--mono); font-size: 11.5px; display: flex; gap: 18px; flex-wrap: wrap; }
-      code { font-family: var(--mono); color: var(--accent); }
 
-      /* --- Link-your-account card ------------------------------------------ */
-      .link-card { margin-top: 28px; background: var(--surface); border: 1px solid var(--border);
-                   border-radius: var(--radius); padding: 22px 24px; max-width: 560px; }
-      .link-card h2 { margin: 0 0 4px; font-size: 17px; letter-spacing: -0.2px; }
-      .link-card .hint { color: var(--muted); font-size: 13px; line-height: 1.5; margin: 0 0 18px; }
-      .field { margin-bottom: 16px; }
-      .field label { display: block; font-size: 12px; color: var(--muted); text-transform: uppercase;
-                     letter-spacing: 0.6px; margin-bottom: 7px; }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; }
+
+      /* ---------------- custom scrollbar (hextech HUD) ---------------- */
+      /* Firefox / standards */
+      html { scrollbar-width: thin; scrollbar-color: var(--gold-dim) transparent; }
+      /* WebKit / Chromium (Electron) */
+      ::-webkit-scrollbar { width: 9px; height: 9px; }
+      ::-webkit-scrollbar-track { background: transparent; }
+      ::-webkit-scrollbar-corner { background: transparent; }
+      ::-webkit-scrollbar-thumb {
+        background: linear-gradient(180deg, var(--gold), var(--gold-dim));
+        border: 2px solid transparent;       /* inset the thumb so it reads as thin */
+        background-clip: padding-box;
+        border-radius: 1px;                   /* near-sharp, matches the angular UI */
+        box-shadow: inset 0 0 6px rgba(200, 170, 110, 0.35);
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: linear-gradient(180deg, var(--gold-bright), var(--gold));
+        box-shadow: 0 0 8px rgba(200, 170, 110, 0.5);
+      }
+      ::-webkit-scrollbar-thumb:active { background: var(--cyan); }
+
+      body {
+        margin: 0;
+        font-family: var(--font);
+        color: var(--text);
+        background: var(--bg);
+        min-height: 100vh;
+        overflow-x: hidden;
+        position: relative;
+        -webkit-user-select: none; user-select: none;
+        padding: clamp(26px, 5vh, 54px) clamp(20px, 5vw, 52px);
+        display: flex; justify-content: center; align-items: flex-start;
+      }
+
+      /* ---------------- backdrop: hex field + energy + scanlines ------------- */
+      .bg { position: fixed; inset: 0; z-index: -3; background:
+              radial-gradient(1100px 700px at 50% -15%, #122130 0%, transparent 60%),
+              radial-gradient(800px 600px at 90% 110%, rgba(10,150,170,0.18), transparent 60%),
+              var(--bg); }
+      /* hexagon lattice (pure CSS) */
+      .bg-hex {
+        position: fixed; inset: -10%; z-index: -2; pointer-events: none; opacity: 0.5;
+        background-image:
+          repeating-linear-gradient(60deg,  rgba(200,170,110,0.06) 0 1px, transparent 1px 34px),
+          repeating-linear-gradient(-60deg, rgba(200,170,110,0.06) 0 1px, transparent 1px 34px),
+          repeating-linear-gradient(0deg,   rgba(200,170,110,0.05) 0 1px, transparent 1px 30px);
+        mask-image: radial-gradient(circle at 50% 28%, #000 0%, transparent 72%);
+        -webkit-mask-image: radial-gradient(circle at 50% 28%, #000 0%, transparent 72%);
+        animation: hexpan 40s linear infinite;
+      }
+      @keyframes hexpan { to { background-position: 340px 0, -340px 0, 0 300px; } }
+      /* CRT scanlines */
+      .bg-scan {
+        position: fixed; inset: 0; z-index: -1; pointer-events: none; opacity: 0.5;
+        background: repeating-linear-gradient(0deg, rgba(0,0,0,0.18) 0 1px, transparent 1px 3px);
+        mix-blend-mode: multiply;
+      }
+      /* HUD corner brackets framing the whole window */
+      .hud { position: fixed; inset: 14px; z-index: 1; pointer-events: none; }
+      .hud i { position: absolute; width: 26px; height: 26px; border: 2px solid var(--gold); opacity: 0.55; }
+      .hud .tl { top: 0; left: 0; border-right: 0; border-bottom: 0; }
+      .hud .tr { top: 0; right: 0; border-left: 0; border-bottom: 0; }
+      .hud .bl { bottom: 0; left: 0; border-right: 0; border-top: 0; }
+      .hud .br { bottom: 0; right: 0; border-left: 0; border-top: 0; }
+
+      /* ---------------- shell ---------------- */
+      .stage { width: 100%; max-width: 680px; position: relative; z-index: 2;
+               animation: rise 0.6s cubic-bezier(0.16,1,0.3,1) both; }
+      @keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+
+      /* ---------------- hero ---------------- */
+      header { display: flex; align-items: center; gap: 18px; margin-bottom: 8px; }
+      .emblem { position: relative; width: 60px; height: 60px; flex: 0 0 auto; display: grid; place-items: center; }
+      .emblem .rune {
+        position: absolute; inset: 0;
+        background: conic-gradient(from 0deg, transparent 0 8%, var(--gold) 12%, transparent 24%, transparent 50%, var(--cyan) 60%, transparent 74%, var(--gold) 86%, transparent 96%);
+        clip-path: polygon(50% 0, 93% 25%, 93% 75%, 50% 100%, 7% 75%, 7% 25%);
+        -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 4px));
+        mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 4px));
+        animation: spin 9s linear infinite;
+        filter: drop-shadow(0 0 6px rgba(200,170,110,0.5));
+      }
+      .emblem .core {
+        width: 42px; height: 42px;
+        clip-path: polygon(50% 0, 93% 25%, 93% 75%, 50% 100%, 7% 75%, 7% 25%);
+        background: linear-gradient(160deg, #16202c, #0a1019);
+        border: 1px solid var(--line);
+        display: grid; place-items: center;
+      }
+      .emblem .sigil { filter: drop-shadow(0 0 5px rgba(200, 170, 110, 0.55)); }
+      @keyframes spin { to { transform: rotate(360deg); } }
+
+      .eyebrow { font-family: var(--mono); font-size: 10px; letter-spacing: 4px; color: var(--cyan);
+                 text-transform: uppercase; margin: 0 0 6px; }
+      .titles h1 {
+        margin: 0; font-size: 23px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase;
+        color: var(--gold-bright);
+      }
+      .titles h1 b { color: var(--gold); font-weight: 800; }
+
+      /* gold divider with diamond node */
+      .divider { display: flex; align-items: center; gap: 10px; margin: 18px 0 22px; }
+      .divider::before, .divider::after { content: ""; height: 1px; flex: 1; background: linear-gradient(90deg, transparent, var(--line), transparent); }
+      .divider span { width: 7px; height: 7px; background: var(--gold); transform: rotate(45deg); box-shadow: 0 0 8px var(--gold); }
+
+      .lead { color: var(--muted); max-width: 60ch; line-height: 1.6; margin: 0 0 24px; font-size: 13px; }
+      .lead b { color: var(--gold-bright); font-weight: 600; }
+
+      /* ---------------- system status: HUD readout tiles ---------------- */
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 11px; }
+      .card {
+        background: linear-gradient(180deg, var(--panel-2), var(--panel));
+        border: 1px solid var(--line-soft);
+        border-left: 2px solid var(--gold-dim);
+        clip-path: var(--chamfer);
+        padding: 13px 15px; position: relative;
+        transition: border-left-color 0.25s ease, transform 0.25s ease;
+      }
+      .card:hover { border-left-color: var(--gold); transform: translateY(-2px); }
+      .card .label { font-family: var(--mono); font-size: 9.5px; color: var(--faint); text-transform: uppercase; letter-spacing: 1.5px; margin: 0 0 9px; }
+      .badge { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; font-size: 13px; text-transform: uppercase; letter-spacing: 0.4px; }
+      .dot { width: 8px; height: 8px; flex: 0 0 auto; transform: rotate(45deg); background: var(--faint); }
+      .dot.ok { background: var(--ok); box-shadow: 0 0 0 0 rgba(43,212,122,0.55); animation: pulse 2.2s infinite; }
+      .dot.warn { background: var(--warn); box-shadow: 0 0 9px var(--warn); }
+      .dot.idle { background: var(--faint); }
+      .dot.off { background: var(--danger); box-shadow: 0 0 9px rgba(255,70,85,0.55); }
+      @keyframes pulse {
+        0% { box-shadow: 0 0 0 0 rgba(43,212,122,0.5); }
+        70% { box-shadow: 0 0 0 6px rgba(43,212,122,0); }
+        100% { box-shadow: 0 0 0 0 rgba(43,212,122,0); }
+      }
+      .card .sub { color: var(--muted); font-size: 11.5px; margin: 8px 0 0; line-height: 1.5; }
+
+      /* ---------------- action panels (pair / verify) ---------------- */
+      .link-card {
+        margin-top: 24px; position: relative; padding: 2px; /* padding = gold frame thickness */
+        background: linear-gradient(135deg, var(--gold), var(--gold-dim) 45%, transparent 55%, var(--cyan-deep));
+        clip-path: var(--chamfer);
+        animation: rise 0.45s cubic-bezier(0.16,1,0.3,1) both;
+      }
+      .link-card > .inner {
+        background: linear-gradient(180deg, var(--panel-2), var(--panel));
+        clip-path: var(--chamfer);
+        padding: 24px 26px; position: relative;
+      }
+      /* HUD tick marks on the panel */
+      .link-card > .inner::before {
+        content: ""; position: absolute; top: 12px; right: 14px; width: 22px; height: 22px;
+        border-top: 2px solid var(--gold); border-right: 2px solid var(--gold); opacity: 0.5;
+      }
+      .step {
+        font-family: var(--mono); font-size: 10px; letter-spacing: 3px; color: var(--cyan);
+        text-transform: uppercase; margin: 0 0 8px; display: inline-flex; align-items: center; gap: 8px;
+      }
+      .step::before { content: ""; width: 14px; height: 1px; background: var(--cyan); }
+      .link-card h2 { margin: 0 0 8px; font-size: 18px; letter-spacing: 1px; text-transform: uppercase; color: var(--gold-bright); }
+      .link-card .hint { color: var(--muted); font-size: 12.5px; line-height: 1.6; margin: 0 0 20px; }
+      .link-card .hint b { color: var(--gold-bright); font-weight: 600; }
+
+      /* accounts linked this session */
+      .linked { list-style: none; margin: 0 0 18px; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+      .linked li {
+        display: flex; align-items: center; gap: 9px; font-family: var(--mono); font-size: 12px;
+        color: var(--text); padding: 9px 13px; clip-path: var(--chamfer);
+        background: rgba(43, 212, 122, 0.06); border: 1px solid rgba(43, 212, 122, 0.22); border-left: 2px solid var(--ok);
+      }
+      .linked li .rid { color: var(--gold-bright); font-weight: 700; }
+      .linked li .rank { color: var(--muted); margin-left: auto; }
+      .linked li .chk { color: var(--ok); font-weight: 700; }
+
+      .field { margin-bottom: 18px; }
+      .field label { display: block; font-family: var(--mono); font-size: 9.5px; color: var(--faint); text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 9px; }
       .field input, .field select {
-        width: 100%; background: var(--surface-alt); border: 1px solid var(--border);
-        border-radius: 9px; color: var(--text); font-family: var(--mono); font-size: 15px;
-        padding: 11px 13px; outline: none;
+        width: 100%; background: #05080c; color: var(--text);
+        border: 1px solid var(--line); border-left: 2px solid var(--gold-dim);
+        clip-path: var(--chamfer);
+        font-family: var(--mono); font-size: 15px; padding: 13px 15px; outline: none;
+        transition: border-color 0.2s ease, border-left-color 0.2s ease;
       }
-      .field input:focus, .field select:focus { border-color: var(--primary); }
-      #code { letter-spacing: 4px; text-transform: uppercase; }
+      .field input:focus, .field select:focus { border-color: var(--cyan); border-left-color: var(--cyan); }
+      #code {
+        letter-spacing: 12px; text-transform: uppercase; text-align: center;
+        font-size: 26px; font-weight: 700; color: var(--gold-bright);
+        padding: 16px 13px; caret-color: var(--cyan);
+        -webkit-user-select: text; user-select: text;
+        text-shadow: 0 0 12px rgba(200,170,110,0.35);
+      }
+      #code::placeholder { letter-spacing: 9px; color: var(--faint); opacity: 0.45; text-shadow: none; }
+
+      /* angular game button: gold outline, fills on hover */
       .btn {
-        appearance: none; border: 0; cursor: pointer; width: 100%;
-        background: linear-gradient(135deg, #6d5cf6, #8b7dff); color: #fff;
-        font-family: var(--font); font-weight: 700; font-size: 15px;
-        padding: 12px 16px; border-radius: 10px; box-shadow: 0 6px 20px rgba(109,92,246,0.35);
+        appearance: none; cursor: pointer; width: 100%; position: relative; overflow: hidden;
+        background: linear-gradient(180deg, rgba(200,170,110,0.14), rgba(200,170,110,0.04));
+        color: var(--gold-bright); border: 1px solid var(--gold);
+        clip-path: var(--chamfer);
+        font-family: var(--font); font-weight: 800; font-size: 14px;
+        text-transform: uppercase; letter-spacing: 2px;
+        padding: 15px 16px;
+        transition: color 0.2s ease, box-shadow 0.2s ease, transform 0.12s ease;
       }
-      .btn:disabled { opacity: 0.55; cursor: progress; }
-      .status { margin-top: 16px; font-size: 13.5px; line-height: 1.5; min-height: 20px; }
+      .btn::before {
+        content: ""; position: absolute; inset: 0; z-index: -1;
+        background: linear-gradient(135deg, var(--gold), var(--gold-bright));
+        transform: translateY(101%); transition: transform 0.28s cubic-bezier(0.16,1,0.3,1);
+      }
+      .btn::after {
+        content: ""; position: absolute; top: 0; left: -130%; width: 55%; height: 100%;
+        background: linear-gradient(100deg, transparent, rgba(255,255,255,0.5), transparent);
+        transform: skewX(-20deg); transition: left 0.6s ease;
+      }
+      .btn:hover:not(:disabled) { color: #0a0d12; box-shadow: 0 0 24px rgba(200,170,110,0.45); }
+      .btn:hover:not(:disabled)::before { transform: translateY(0); }
+      .btn:hover:not(:disabled)::after { left: 150%; }
+      .btn:active:not(:disabled) { transform: translateY(1px); }
+      .btn:disabled { opacity: 0.4; cursor: not-allowed; color: var(--muted); border-color: var(--line); }
+
+      .status { margin-top: 16px; font-family: var(--mono); font-size: 12px; line-height: 1.5; min-height: 18px;
+                display: flex; align-items: flex-start; gap: 8px; }
+      .status::before { content: ">"; color: var(--cyan); font-weight: 700; }
+      .status:empty::before { content: none; }
       .status.ok { color: var(--ok); }
+      .status.ok::before { content: "✓"; color: var(--ok); }
       .status.err { color: var(--danger); }
+      .status.err::before { content: "!"; color: var(--danger); }
       .status.info { color: var(--muted); }
 
-      /* --- LCU reachability badge (persistent) ----------------------------- */
-      .lcu-badge { display: inline-flex; align-items: center; gap: 8px; font-size: 13px;
-                   color: var(--muted); margin: 0 0 18px; padding: 7px 12px;
-                   background: var(--surface-alt); border: 1px solid var(--border); border-radius: 999px; }
-      .lcu-badge .dot { box-shadow: none; }
-      .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+      /* ---------------- LCU badge ---------------- */
+      .lcu-badge {
+        display: inline-flex; align-items: center; gap: 9px; font-family: var(--mono); font-size: 11.5px;
+        color: var(--muted); margin: 0 0 20px; padding: 9px 14px; text-transform: uppercase; letter-spacing: 0.5px;
+        background: #05080c; border: 1px solid var(--line); clip-path: var(--chamfer);
+      }
+
+      /* ---------------- note + footer ---------------- */
+      .note {
+        margin-top: 24px; padding: 14px 17px; clip-path: var(--chamfer);
+        background: rgba(255, 70, 85, 0.05); border: 1px solid rgba(255,70,85,0.2); border-left: 2px solid var(--danger);
+        color: var(--muted); font-size: 12px; line-height: 1.6;
+      }
+      .note b { color: var(--danger); font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+      footer { margin-top: 24px; color: var(--faint); font-family: var(--mono); font-size: 10.5px;
+               display: flex; gap: 9px; flex-wrap: wrap; text-transform: uppercase; letter-spacing: 1px; }
+      footer span { padding: 5px 11px; background: rgba(200,170,110,0.04); border: 1px solid var(--line-soft); }
+      code { font-family: var(--mono); color: var(--cyan); }
+
       .hidden { display: none !important; }
+
+      @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; } }
     </style>
   </head>
   <body>
-    <header>
-      <div class="mark">LL</div>
-      <div>
-        <p class="eyebrow">Desktop Client</p>
-        <h1>LeagueOfLeagues <span>— Match Runner</span></h1>
-      </div>
-    </header>
+    <div class="bg" aria-hidden="true"></div>
+    <div class="bg-hex" aria-hidden="true"></div>
+    <div class="bg-scan" aria-hidden="true"></div>
+    <div class="hud" aria-hidden="true"><i class="tl"></i><i class="tr"></i><i class="bl"></i><i class="br"></i></div>
 
-    <p class="lead">
-      This client autonomously runs each custom match via your local League client (LCU). It connects to
-      the backend per assigned match, drives the lobby (host: create &amp; invite by PUUID; guest: auto-accept),
-      and reports live + end-of-game stats for cross-client corroboration. It never automates in-match gameplay.
-    </p>
+    <main class="stage">
+      <header>
+        <div class="emblem" aria-hidden="true">
+          <div class="rune"></div>
+          <div class="core">
+            <svg class="sigil" viewBox="8 7 16 18" width="27" height="30" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <defs>
+                <linearGradient id="llg" x1="8" y1="7" x2="24" y2="25" gradientUnits="userSpaceOnUse">
+                  <stop stop-color="#c8aa6e"/>
+                  <stop offset="1" stop-color="#f0e6d2"/>
+                </linearGradient>
+              </defs>
+              <path d="M11.5 10v12h4.5" stroke="url(#llg)" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M20.5 10v12" stroke="#2bd4e6" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" opacity="0.75"/>
+              <path d="M16 16h4.5" stroke="url(#llg)" stroke-width="2.1" stroke-linecap="round"/>
+            </svg>
+          </div>
+        </div>
+        <div class="titles">
+          <p class="eyebrow">// Match Runner Protocol</p>
+          <h1>League<b>Of</b>Leagues</h1>
+        </div>
+      </header>
 
-    <div class="grid">
-      <div class="card">
-        <p class="label">Backend realtime</p>
-        <span class="badge"><span class="dot idle"></span> Idle</span>
-        <p class="sub">Opens a WebSocket per assigned match. No match active.</p>
-      </div>
-      <div class="card">
-        <p class="label">LCU writes</p>
-        <span class="badge"><span class="dot off"></span> Off — opt-in required</span>
-        <p class="sub">Disabled by default each session. You explicitly consent before any lobby write.</p>
-      </div>
-      <div class="card">
-        <p class="label">Kill switch</p>
-        <span class="badge"><span class="dot ok"></span> Armed</span>
-        <p class="sub">Instantly halts all LCU writes. Presence-gated &amp; human-paced.</p>
-      </div>
-      <div class="card">
-        <p class="label">Identity</p>
-        <span class="badge"><span class="dot warn"></span> Link required</span>
-        <p class="sub">Enter your /register code below to link this League account to your Discord.</p>
-      </div>
-    </div>
+      <div class="divider" aria-hidden="true"><span></span></div>
 
-    <!-- Step 1 — sign in with a one-time pairing code (shown when signed out). -->
-    <section id="pair-card" class="link-card hidden" aria-labelledby="pair-title">
-      <h2 id="pair-title">Sign in</h2>
-      <p class="hint">
-        Run <code>/register</code> (or <code>/link</code>) in Discord to get a one-time code, then
-        enter it here to sign in to the desktop app. No Discord permission screen — the code is the
-        credential. You stay signed in across restarts.
+      <p class="lead">
+        Autonomous <b>match runner</b>. Connects per assigned match, drives the custom lobby through your
+        local League client, and reports stats for cross-client corroboration. <b>Zero</b> in-game automation.
       </p>
 
-      <div class="field">
-        <label for="code">Your code</label>
-        <input id="code" type="text" inputmode="latin" autocomplete="off" spellcheck="false"
-               placeholder="XXXX-XXXX" maxlength="9" />
+      <div class="grid">
+        <div class="card">
+          <p class="label">Backend Link</p>
+          <span class="badge"><span class="dot idle"></span> Standby</span>
+          <p class="sub">Socket opens per assigned match. None active.</p>
+        </div>
+        <div class="card">
+          <p class="label">LCU Writes</p>
+          <span class="badge"><span class="dot off"></span> Locked</span>
+          <p class="sub">Disabled each session. Consent before any write.</p>
+        </div>
+        <div class="card">
+          <p class="label">Kill Switch</p>
+          <span class="badge"><span class="dot ok"></span> Armed</span>
+          <p class="sub">Halts every LCU write instantly. Human-paced.</p>
+        </div>
+        <div class="card">
+          <p class="label">Identity</p>
+          <span class="badge"><span class="dot warn"></span> Unlinked</span>
+          <p class="sub">Sign in &amp; link your account to deploy.</p>
+        </div>
       </div>
 
-      <button id="pair-btn" class="btn" type="button">Sign in</button>
-      <p id="pair-status" class="status info" role="status" aria-live="polite"></p>
-    </section>
+      <!-- Step 1 — sign in with a one-time pairing code (shown when signed out). -->
+      <section id="pair-card" class="link-card hidden" aria-labelledby="pair-title">
+        <div class="inner">
+          <p class="step">Step 01 — Authenticate</p>
+          <h2 id="pair-title">Enter Pairing Code</h2>
+          <p class="hint">
+            Run <code>/register</code> in Discord for a one-time code, then enter it here. The code is the
+            credential — no permission screen, and you stay signed in across restarts.
+          </p>
 
-    <!-- Step 2 — link your League account (shown when signed in). -->
-    <section id="verify-card" class="link-card hidden" aria-labelledby="verify-title">
-      <h2 id="verify-title">Link your League account</h2>
-      <p class="hint">
-        Make sure League of Legends is running and you're fully signed in. We read your local League
-        client to confirm your Riot ID — read-only, never any in-game automation.
+          <div class="field">
+            <label for="code">Access Code</label>
+            <input id="code" type="text" inputmode="latin" autocomplete="off" spellcheck="false"
+                   placeholder="XXXX-XXXX" maxlength="9" aria-describedby="pair-status" />
+          </div>
+
+          <button id="pair-btn" class="btn" type="button">Sign in</button>
+          <p id="pair-status" class="status info" role="status" aria-live="polite"></p>
+        </div>
+      </section>
+
+      <!-- Step 2 — link your League account (shown when signed in). -->
+      <section id="verify-card" class="link-card hidden" aria-labelledby="verify-title">
+        <div class="inner">
+          <p class="step">Step 02 — Link Account</p>
+          <h2 id="verify-title">Link League Account</h2>
+          <p class="hint">
+            Make sure League of Legends is open and you're fully signed in. We read your local client to
+            confirm your Riot ID — read-only, never any in-game automation. <b>Got more than one account?</b>
+            Switch your League client to it and verify again — each is linked separately.
+          </p>
+
+          <ul id="linked-list" class="linked hidden" aria-label="Accounts linked this session"></ul>
+
+          <p id="lcu-badge" class="lcu-badge"><span class="dot off"></span> <span id="lcu-label">Scanning League client…</span></p>
+
+          <button id="verify-btn" class="btn" type="button" disabled>Verify with League</button>
+          <p id="verify-status" class="status info" role="status" aria-live="polite"></p>
+        </div>
+      </section>
+
+      <p class="note">
+        <b>Safety-first</b> — LCU automation is community-reverse-engineered and gated behind a ToS spike.
+        Korea is excluded. Every lobby write is opt-in, presence-gated, and human-paced.
       </p>
 
-      <p id="lcu-badge" class="lcu-badge"><span class="dot off"></span> <span id="lcu-label">Checking League client…</span></p>
-
-      <button id="verify-btn" class="btn" type="button" disabled>Verify with League</button>
-      <p id="verify-status" class="status info" role="status" aria-live="polite"></p>
-    </section>
-
-    <p class="note">
-      <strong>Phase 4 — skeleton.</strong> The orchestration runtime (per-match WebSocket + LCU controller)
-      is built and unit-tested; wiring it to your signed-in session and the live LCU is the next step.
-      Korea is excluded. LCU automation is community-reverse-engineered and gated behind the ToS spike.
-    </p>
-
-    <footer>
-      <span>build: <code>dev</code></span>
-      <span>lcu schema: <code>0.0.0-phase0</code></span>
-      <span>writes: <code>OFF</code></span>
-    </footer>
+      <footer>
+        <span>build <code>dev</code></span>
+        <span>lcu schema <code>0.0.0-phase0</code></span>
+        <span>writes <code>OFF</code></span>
+      </footer>
+    </main>
 
     <script src="verify.js"></script>
   </body>

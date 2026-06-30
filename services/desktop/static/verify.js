@@ -23,6 +23,7 @@
   var verifyCard = document.getElementById("verify-card");
   var verifyBtn = document.getElementById("verify-btn");
   var verifyStatus = document.getElementById("verify-status");
+  var linkedList = document.getElementById("linked-list");
 
   var lcuDot = document.querySelector("#lcu-badge .dot");
   var lcuLabel = document.getElementById("lcu-label");
@@ -44,6 +45,47 @@
     }
   }
 
+  // --- linked-accounts list (this session) ---------------------------------- //
+
+  // Tracks Riot IDs already shown so re-verifying the same account (the backend
+  // dedupes on PUUID) doesn't add a duplicate row.
+  var linkedSeen = {};
+
+  // Append one linked account to the list. Accepts either the pair `account`
+  // summary or a verify result — both expose gameName / tagLine / rankText.
+  function addLinkedAccount(acc) {
+    if (!acc || !linkedList) return;
+    var rid = acc.gameName && acc.tagLine ? acc.gameName + "#" + acc.tagLine : null;
+    var key = rid || acc.puuid || "acct";
+    if (linkedSeen[key]) return;
+    linkedSeen[key] = true;
+
+    var li = document.createElement("li");
+    var chk = document.createElement("span");
+    chk.className = "chk";
+    chk.textContent = "✓";
+    li.appendChild(chk);
+
+    var name = document.createElement("span");
+    name.className = "rid";
+    name.textContent = rid || "Account linked";
+    li.appendChild(name);
+
+    if (acc.rankText) {
+      var rank = document.createElement("span");
+      rank.className = "rank";
+      rank.textContent = acc.rankText;
+      li.appendChild(rank);
+    }
+    linkedList.appendChild(li);
+    show(linkedList, true);
+  }
+
+  // Once at least one account is linked, the verify button becomes "Link another".
+  function markHasLinked() {
+    verifyBtn.textContent = "Link another account";
+  }
+
   // --- view switching ------------------------------------------------------- //
 
   function showPairing() {
@@ -57,6 +99,25 @@
     show(pairCard, false);
     show(verifyCard, true);
     applyLcuStatus(lcuStatus);
+    loadLinkedAccounts();
+  }
+
+  // Pull the signed-in user's already-linked accounts from the backend so the
+  // list + "Link another account" affordance show on a cold reopen (not just
+  // after a fresh verify this session). Non-fatal on any failure.
+  function loadLinkedAccounts() {
+    if (!window.lol || !window.lol.listAccounts) return;
+    window.lol
+      .listAccounts()
+      .then(function (res) {
+        if (res && res.ok && res.accounts && res.accounts.length) {
+          res.accounts.forEach(addLinkedAccount);
+          markHasLinked();
+        }
+      })
+      .catch(function () {
+        /* best-effort — the verify flow still works without the prefilled list */
+      });
   }
 
   // --- LCU badge ------------------------------------------------------------ //
@@ -141,12 +202,12 @@
         setStatus(pairStatus, "ok", "Signed in! Now link your League account.");
         showVerify();
         if (result.account && result.account.linked && result.account.verified) {
+          addLinkedAccount(result.account);
+          markHasLinked();
           setStatus(
             verifyStatus,
             "ok",
-            "Your League account is already linked" +
-              (result.account.rankText ? " — " + result.account.rankText : "") +
-              ".",
+            "Already linked. To add another account, switch your League client and verify again.",
           );
         }
       } else {
@@ -198,11 +259,18 @@
     try {
       var result = await window.lol.verify();
       if (result && result.ok) {
-        var linked = "Linked!";
-        if (result.rankText) {
-          linked = "Linked! " + result.rankText;
-        }
-        setStatus(verifyStatus, "ok", linked + " You can close this window and return to Discord.");
+        addLinkedAccount(result);
+        markHasLinked();
+        var who =
+          result.gameName && result.tagLine ? result.gameName + "#" + result.tagLine : "your account";
+        var rank = result.rankText ? " (" + result.rankText + ")" : "";
+        setStatus(
+          verifyStatus,
+          "ok",
+          "Linked " + who + rank + ". To add another, switch your League client and verify again.",
+        );
+        // Re-enable so the player can link a second account (gated on LCU online).
+        verifyBtn.disabled = lcuStatus !== "online";
       } else {
         var r = result || { status: 0 };
         setStatus(verifyStatus, "err", describeVerifyError(r));

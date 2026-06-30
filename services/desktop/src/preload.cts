@@ -82,7 +82,25 @@ export interface VerifyBridgeResult {
   division?: string;
   leaguePoints?: number;
   rankText?: string;
+  /** Canonical Riot ID of the linked account (for "linked X#Y" copy). */
+  gameName?: string;
+  tagLine?: string;
 }
+
+/** One linked account in `window.lol.listAccounts()`. */
+export interface LinkedAccountBridge {
+  accountId: string;
+  gameName: string | null;
+  tagLine: string | null;
+  region: string | null;
+  verified: boolean;
+  rankText: string;
+}
+
+/** Result of `window.lol.listAccounts()`. */
+export type ListAccountsBridgeResult =
+  | { ok: true; accounts: LinkedAccountBridge[] }
+  | { ok: false; status: number; detail: string };
 
 /** LCU reachability badge state pushed from the main-process poller. */
 export type LcuStatusBridge = "online" | "loading" | "offline";
@@ -93,6 +111,8 @@ export interface LolBridge {
   pair(code: string, deviceLabel?: string): Promise<PairBridgeResult>;
   refresh(): Promise<{ ok: boolean }>;
   verify(): Promise<VerifyBridgeResult>;
+  /** List the signed-in user's own linked Riot accounts. */
+  listAccounts(): Promise<ListAccountsBridgeResult>;
   readSummoner(): Promise<ReadSummonerBridgeResult>;
   /** Subscribe to LCU badge updates. Returns an unsubscribe function. */
   onLcuStatus(callback: (status: LcuStatusBridge) => void): () => void;
@@ -106,6 +126,8 @@ const bridge: LolBridge = {
     ipcRenderer.invoke("lol:pair", { code, deviceLabel }) as Promise<PairBridgeResult>,
   refresh: () => ipcRenderer.invoke("lol:refresh") as Promise<{ ok: boolean }>,
   verify: () => ipcRenderer.invoke("lol:verify") as Promise<VerifyBridgeResult>,
+  listAccounts: () =>
+    ipcRenderer.invoke("lol:list-accounts") as Promise<ListAccountsBridgeResult>,
   readSummoner: () => ipcRenderer.invoke("lol:read-summoner") as Promise<ReadSummonerBridgeResult>,
   onLcuStatus: (callback) => {
     const listener = (_event: unknown, status: LcuStatusBridge): void => callback(status);

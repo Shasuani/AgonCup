@@ -54,6 +54,7 @@ from app.auth.jwt import InvalidAccessToken, verify_access_token
 from app.logging import get_logger
 from app.models import ClientSession, ResultReport
 from app.orchestration import service
+from app.results import corroboration
 
 logger = get_logger(__name__)
 
@@ -343,6 +344,16 @@ async def _route_report(
     except (KeyError, ValueError, service.OrchestrationError) as exc:
         logger.warning("realtime.inbound.report_dropped", error=str(exc))
     await _persist_result_report(session, subscription=subscription, body=body)
+    # Re-run corroboration over the match's reports: once a >=6/10 quorum agrees,
+    # the winner is recorded and the bracket advances automatically (PLAN.md §3.6.6).
+    # Never let an adjudication error break the report relay — it is best-effort and
+    # idempotent (the next report re-runs it).
+    try:
+        await corroboration.adjudicate_match(
+            session, match_id=subscription.match_id, guild_id=subscription.guild_id
+        )
+    except Exception as exc:  # noqa: BLE001 - ingest must survive any adjudication bug
+        logger.warning("realtime.inbound.corroboration_failed", error=str(exc))
 
 
 def _kda_by_puuid(teams: list[Any]) -> dict[str, dict[str, int]]:

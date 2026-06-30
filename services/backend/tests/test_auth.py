@@ -278,11 +278,15 @@ def test_jwt_expired_is_rejected() -> None:
 def test_jwt_tamper_is_rejected() -> None:
     token = mint_access_token(user_id="u", guild_id=None, roles=())
     head, payload, sig = token.split(".")
-    # Flip the last signature char to a guaranteed-DIFFERENT base64url char so the
-    # tamper is deterministic (replacing with a fixed string could coincidentally
-    # equal the original signature ~1/4096 of the time -> flaky).
-    flipped = "A" if sig[-1] != "A" else "B"
-    tampered = f"{head}.{payload}.{sig[:-1]}{flipped}"
+    # Flip the FIRST signature char (not the last): a 43-char base64url HMAC-SHA256
+    # signature's LAST char encodes only 4 significant bits (the low 2 are unused),
+    # so flipping it between same-group chars (e.g. A<->B, or x->A when x in A..D) is
+    # a no-op that leaves the signature bytes identical -> the tamper isn't detected
+    # and the test flakes (~1/16, depending on the time-based signature). The first
+    # char's 6 bits are all significant, so any different char guarantees a changed
+    # signature and a deterministic tamper.
+    flipped = "A" if sig[0] != "A" else "B"
+    tampered = f"{head}.{payload}.{flipped}{sig[1:]}"
     with pytest.raises(InvalidAccessToken):
         verify_access_token(tampered)
 

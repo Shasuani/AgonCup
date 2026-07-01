@@ -485,3 +485,33 @@ async def test_list_match_history_dedupes_and_resolves() -> None:
 async def test_list_match_history_empty_when_no_reports() -> None:
     session = _QueuedSession(_HistResult([]))
     assert await service.list_match_history(session, limit=50) == []  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Disputes — freeze a match as DISPUTED (no winner, no advance)
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_mark_disputed_creates_disputed_result_no_winner() -> None:
+    from lol_schemas.enums import MatchResultState
+
+    from app.models import MatchResult
+
+    session, _tid, _gid, _teams = _seed_bracket(4)
+    match = _match_at(session, 1, 0)
+
+    result = await service.mark_disputed(
+        session,
+        match_id=match.id,
+        agreed_game_id="100",
+        anomaly_flags=["asymmetric_winner_claim"],
+        reports_counted=10,
+        both_teams_represented=True,
+    )
+
+    assert result is not None
+    assert result.state == MatchResultState.DISPUTED
+    assert result.winner_team_id is None
+    assert result.quorum_detail["anomaly_flags"] == ["asymmetric_winner_claim"]
+    # The match is NOT stamped completed — it waits for an admin override.
+    assert match.status != MatchStatus.COMPLETED
+    assert session.store[MatchResult][0].state == MatchResultState.DISPUTED

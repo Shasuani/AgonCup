@@ -20,6 +20,7 @@ from lol_schemas.enums import ResultDecidedBy, UserGuildRoleName
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit import service as audit_service
 from app.auth.deps import Principal, get_current_principal, require_tenant_role
 from app.models import MatchResult
 from app.results import service
@@ -122,6 +123,20 @@ async def record_match_winner(
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except (service.MatchNotReadyError, service.TeamNotInMatchError) as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    # Append the privileged decision to the audit trail (best-effort; never fails
+    # the record). Admin overrides are the primary thing the audit viewer surfaces.
+    is_override = body.decided_by == ResultDecidedBy.ADMIN_OVERRIDE
+    await audit_service.record_audit(
+        session,
+        action="result.override" if is_override else "result.decided",
+        entity_type="match",
+        entity_id=match_id,
+        actor_id=admin_id,
+        actor_kind=audit_service.ACTOR_GUILD,
+        guild_id=result.guild_id,
+        detail=body.reason,
+    )
     return _to_response(result)
 
 
@@ -199,3 +214,60 @@ async def list_match_history(
     """
     games = await service.list_match_history(session, limit=limit)
     return [_history_response(g) for g in games]
+
+
+# ---------------------------------------------------------------------------
+# Dispute / override queue — frozen matches awaiting an admin decision
+# ---------------------------------------------------------------------------
+class DisputeTeamResponse(BaseModel):
+    team_id: str
+    name: str
+
+
+class DisputeAnomalyResponse(BaseModel):
+    code: str
+    detail: str
+    severity: str | None = None
+
+
+class DisputedMatchResponse(BaseModel):
+    match_id: str
+    tournament_id: str
+    tournament_name: str | None = None
+    round_label: str | None = None
+    status: str
+    teams: list[DisputeTeamResponse]
+    anomalies: list[DisputeAnomalyResponse]
+
+
+def _dispute_response(d: service.DisputeSummary) -> DisputedMatchResponse:
+    return DisputedMatchResponse(
+        match_id=d.match_id,
+        tournament_id=d.tournament_id,
+        tournament_name=d.tournament_name,
+        round_label=d.round_label,
+        status=d.status,
+        teams=[DisputeTeamResponse(team_id=t.team_id, name=t.name) for t in d.teams],
+        anomalies=[
+            DisputeAnomalyResponse(code=flag, detail=flag.replace("_", " "), severity="high")
+            for flag in d.anomaly_flags
+        ],
+    )
+
+
+@router.get(
+    "/disputes",
+    response_model=list[DisputedMatchResponse],
+    summary="Matches frozen as disputed, awaiting an admin override (guild_admin)",
+)
+async def list_disputes(
+    session: Annotated[AsyncSession, Depends(_ADMIN)],
+) -> list[DisputedMatchResponse]:
+    """Return the acting guild's ``DISPUTED`` matches for the override queue.
+
+    A match lands here when corroboration finds an adversarial signal (conflicting
+    winner claims, forged payloads, ...) and freezes rather than auto-advancing.
+    The admin resolves each via ``POST /results/matches/{id}/winner``. RLS-scoped.
+    """
+    disputes = await service.list_disputes(session)
+    return [_dispute_response(d) for d in disputes]

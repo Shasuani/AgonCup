@@ -15,6 +15,7 @@ from fastapi.responses import PlainTextResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, generate_latest
 
 from app.accounts.router import router as accounts_router
+from app.audit.router import router as audit_router
 from app.auth.router import router as auth_router
 from app.config import get_settings
 from app.federation.router import router as federation_router
@@ -90,6 +91,7 @@ def create_app() -> FastAPI:
         tournaments_router,
         orchestration_router,
         results_router,
+        audit_router,
         realtime_router,
         lifecycle_router,
         discord_bridge_router,

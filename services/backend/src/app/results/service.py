@@ -49,7 +49,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.logging import get_logger
-from app.models import Match, MatchResult, ResultReport, RiotAccount, Tournament, User
+from app.models import Match, MatchResult, ResultReport, RiotAccount, Team, Tournament, User
 
 logger = get_logger(__name__)
 
@@ -295,6 +295,132 @@ async def record_winner(
         decided_by=decided_by.value,
     )
     return result
+
+
+# ---------------------------------------------------------------------------
+# Disputes — a frozen, un-advanced match awaiting admin override (PLAN.md §3.6.6)
+# ---------------------------------------------------------------------------
+async def mark_disputed(
+    session: AsyncSession,
+    *,
+    match_id: uuid.UUID,
+    agreed_game_id: str | None,
+    anomaly_flags: list[str],
+    reports_counted: int,
+    both_teams_represented: bool,
+) -> MatchResult | None:
+    """Record a match as ``DISPUTED`` (no winner, no advance) for the admin queue.
+
+    Called by corroboration when the reports carry an adversarial signal. Never
+    downgrades an already-``CONFIRMED`` result (an admin override / clean quorum
+    wins); otherwise upserts the ``MatchResult`` in ``DISPUTED`` with the anomaly
+    audit trail in ``quorum_detail``. The bracket does NOT advance — the admin
+    decides via :func:`record_winner` (admin override).
+    """
+    match = await _get_match(session, match_id)
+    result = (
+        await session.execute(select(MatchResult).where(MatchResult.match_id == match_id))
+    ).scalar_one_or_none()
+    if result is not None and result.state == MatchResultState.CONFIRMED:
+        return result  # already decided — do not re-open.
+
+    detail = {
+        "anomaly_flags": anomaly_flags,
+        "reports_counted": reports_counted,
+        "both_teams_represented": both_teams_represented,
+    }
+    now = datetime.now(UTC)
+    if result is None:
+        result = MatchResult(
+            guild_id=match.guild_id,
+            match_id=match_id,
+            tournament_id=match.tournament_id,
+            winner_team_id=None,
+            decided_by=ResultDecidedBy.QUORUM,
+            quorum_detail=detail,
+            state=MatchResultState.DISPUTED,
+            agreed_game_id=agreed_game_id,
+            decided_at=now,
+        )
+        session.add(result)
+    else:
+        result.state = MatchResultState.DISPUTED
+        result.quorum_detail = detail
+        result.agreed_game_id = agreed_game_id
+        result.decided_at = now
+    await session.flush()
+    logger.info("result.disputed", match_id=str(match_id), anomaly_flags=anomaly_flags)
+    return result
+
+
+@dataclass(frozen=True, slots=True)
+class DisputeTeam:
+    team_id: str
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
+class DisputeSummary:
+    """One frozen match in the admin dispute/override queue (PLAN.md §3.6.6)."""
+
+    match_id: str
+    tournament_id: str
+    tournament_name: str | None
+    round_label: str | None
+    status: str
+    teams: list[DisputeTeam]
+    anomaly_flags: list[str]
+
+
+async def list_disputes(session: AsyncSession) -> list[DisputeSummary]:
+    """Return every ``DISPUTED`` match in the acting guild for the override queue.
+
+    RLS-scoped: only the acting guild's disputed results are visible (tenant
+    session). Joins the match + tournament for context and resolves both team
+    names so the admin can pick a winner. Anomaly flags come from the stored
+    ``quorum_detail`` audit trail written at dispute time.
+    """
+    rows = (
+        await session.execute(
+            select(MatchResult, Match, Tournament.name)
+            .join(Match, MatchResult.match_id == Match.id)
+            .join(Tournament, Match.tournament_id == Tournament.id)
+            .where(MatchResult.state == MatchResultState.DISPUTED)
+            .order_by(MatchResult.decided_at.desc())
+        )
+    ).all()
+    if not rows:
+        return []
+
+    team_ids = {t for _, m, _ in rows for t in (m.team_a, m.team_b) if t is not None}
+    names: dict[str, str] = {}
+    if team_ids:
+        for tid, name in (
+            await session.execute(select(Team.id, Team.name).where(Team.id.in_(team_ids)))
+        ).all():
+            names[str(tid)] = name
+
+    summaries: list[DisputeSummary] = []
+    for result, match, tournament_name in rows:
+        teams = [
+            DisputeTeam(team_id=str(tid), name=names.get(str(tid), "?"))
+            for tid in (match.team_a, match.team_b)
+            if tid is not None
+        ]
+        detail = result.quorum_detail if isinstance(result.quorum_detail, dict) else {}
+        flags = detail.get("anomaly_flags")
+        summaries.append(
+            DisputeSummary(
+                match_id=str(match.id),
+                tournament_id=str(match.tournament_id),
+                tournament_name=tournament_name,
+                round_label=f"Round {match.round}" if match.round is not None else None,
+                status="disputed",
+                teams=teams,
+                anomaly_flags=list(flags) if isinstance(flags, list) else [],
+            )
+        )
+    return summaries
 
 
 # ---------------------------------------------------------------------------

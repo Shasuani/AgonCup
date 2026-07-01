@@ -40,6 +40,7 @@ from lol_schemas.enums import MatchStatus, ResultDecidedBy
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit import service as audit_service
 from app.logging import get_logger
 from app.models import ClientSession, Match, MatchResult, ResultReport, TeamMember
 from app.results import service as results_service
@@ -56,6 +57,19 @@ class _RecordWinner(Protocol):
         winner_team_id: uuid.UUID,
         decided_by: ResultDecidedBy,
     ) -> MatchResult: ...
+
+
+class _MarkDisputed(Protocol):
+    async def __call__(
+        self,
+        session: AsyncSession,
+        *,
+        match_id: uuid.UUID,
+        agreed_game_id: str | None,
+        anomaly_flags: list[str],
+        reports_counted: int,
+        both_teams_represented: bool,
+    ) -> MatchResult | None: ...
 
 
 def _winning_puuids(raw_payload: Any) -> set[str]:
@@ -145,6 +159,7 @@ async def adjudicate_match(
     match_id: uuid.UUID,
     guild_id: uuid.UUID,
     record_winner: _RecordWinner | None = None,
+    mark_disputed: _MarkDisputed | None = None,
 ) -> AdjudicationOutcome | None:
     """Adjudicate ``match_id`` from its persisted reports; auto-record on quorum.
 
@@ -157,6 +172,7 @@ async def adjudicate_match(
     without driving the full bracket-advance path.
     """
     record = record_winner or results_service.record_winner
+    mark = mark_disputed or results_service.mark_disputed
 
     match = (await session.execute(select(Match).where(Match.id == match_id))).scalar_one_or_none()
     if match is None or match.status == MatchStatus.COMPLETED:
@@ -198,6 +214,15 @@ async def adjudicate_match(
                 winner_team_id=verdict.winner_team_id,
                 decided_by=ResultDecidedBy.QUORUM,
             )
+            await audit_service.record_audit(
+                session,
+                action="result.quorum",
+                entity_type="match",
+                entity_id=match_id,
+                actor_kind=audit_service.ACTOR_SYSTEM,
+                guild_id=guild_id,
+                detail=f"auto-decided by {verdict.reports_counted}-report quorum",
+            )
             logger.info(
                 "corroboration.accepted",
                 match_id=str(match_id),
@@ -208,6 +233,26 @@ async def adjudicate_match(
             # A racing admin override / conflicting decision — never crash ingest.
             logger.warning("corroboration.record_skipped", match_id=str(match_id), error=str(exc))
     elif verdict.outcome == AdjudicationOutcome.DISPUTE:
+        try:
+            await mark(
+                session,
+                match_id=match_id,
+                agreed_game_id=verdict.agreed_game_id,
+                anomaly_flags=verdict.anomaly_flags,
+                reports_counted=verdict.reports_counted,
+                both_teams_represented=verdict.both_teams_represented,
+            )
+            await audit_service.record_audit(
+                session,
+                action="result.disputed",
+                entity_type="match",
+                entity_id=match_id,
+                actor_kind=audit_service.ACTOR_SYSTEM,
+                guild_id=guild_id,
+                detail=", ".join(verdict.anomaly_flags) or "conflicting reports",
+            )
+        except results_service.ResultError as exc:
+            logger.warning("corroboration.dispute_skipped", match_id=str(match_id), error=str(exc))
         logger.warning(
             "corroboration.disputed",
             match_id=str(match_id),

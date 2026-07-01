@@ -79,9 +79,16 @@ class _QueuedSession:
 
     def __init__(self, *results: _Res) -> None:
         self._q = list(results)
+        self.added: list[Any] = []
 
     async def execute(self, statement: Any, params: Any = None) -> Any:
         return self._q.pop(0)
+
+    def add(self, obj: Any) -> None:  # for the audit-trail write (no execute)
+        self.added.append(obj)
+
+    async def flush(self) -> None:
+        return None
 
 
 class _RecordSpy:
@@ -174,16 +181,19 @@ async def test_conflicting_reports_dispute_no_record() -> None:
     reports = [_report(p, _A, _B) for p in _A] + [_report(p, _B, _A) for p in _B]
     session, match_id, _ta, _tb = _build(reports=reports)
     spy = _RecordSpy()
+    dispute_spy = _RecordSpy()
 
     outcome = await corroboration.adjudicate_match(
         session,  # type: ignore[arg-type]
         match_id=match_id,
         guild_id=uuid.uuid4(),
         record_winner=spy,
+        mark_disputed=dispute_spy,
     )
 
     assert outcome == AdjudicationOutcome.DISPUTE
-    assert spy.calls == []
+    assert spy.calls == []  # no winner recorded
+    assert len(dispute_spy.calls) == 1  # match frozen as disputed for the admin queue
 
 
 @pytest.mark.asyncio

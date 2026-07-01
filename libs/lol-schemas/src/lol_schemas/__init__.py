@@ -30,6 +30,7 @@ from .dtos import (
     VerifyLcuRequestDTO,
 )
 from .enums import (
+    GameMode,
     GuildStatus,
     LobbyPhase,
     MatchResultState,
@@ -47,6 +48,7 @@ from .enums import (
 __version__ = "0.1.0"
 
 __all__ = [
+    "GameMode",
     "MAX_TEAMS",
     "__version__",
     # DTOs

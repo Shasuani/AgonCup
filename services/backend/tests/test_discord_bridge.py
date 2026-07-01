@@ -20,6 +20,7 @@ import uuid
 import pytest
 from fastapi import HTTPException
 from lol_schemas.enums import (
+    GameMode,
     GuildStatus,
     RegistrationStatus,
     TournamentStatus,
@@ -106,12 +107,45 @@ async def test_create_tournament_admin_allowed() -> None:
     )
     assert isinstance(t, Tournament)
     assert t.status == TournamentStatus.DRAFT
+    # Defaults to the 5v5 Rift when no mode is given.
+    assert t.game_mode == GameMode.SUMMONERS_RIFT_5V5
     # Delegated insert derived guild_id from the GUC set by the bridge.
     assert session.current_guild == str(guild.id)
     assert str(t.guild_id) == str(guild.id)
     # The Manage-Guild assertion authorized the action but must NOT have seeded a
     # durable guild_admin role row (no permanent backdoor from a transient flag).
     assert session.store[UserGuildRole] == []
+
+
+@pytest.mark.asyncio
+async def test_create_tournament_1v1_aram_mode() -> None:
+    session = FakeSession()
+    await _seed_onboarded_guild(session)
+
+    t = await bridge.create_tournament(
+        session,
+        ctx=_ctx(discord_user_id=DISCORD_ADMIN, is_admin=True),
+        name="Duel Night",
+        game_mode=GameMode.ARAM_1V1,
+        best_of=3,
+    )
+    assert t.game_mode == GameMode.ARAM_1V1
+    assert t.best_of == 3
+
+
+@pytest.mark.asyncio
+async def test_create_tournament_rejects_invalid_best_of() -> None:
+    from app.tournaments import service as tournaments_service
+
+    session = FakeSession()
+    await _seed_onboarded_guild(session)
+    with pytest.raises(tournaments_service.InvalidStateError):
+        await bridge.create_tournament(
+            session,
+            ctx=_ctx(discord_user_id=DISCORD_ADMIN, is_admin=True),
+            name="Bad Series",
+            best_of=4,
+        )
 
 
 @pytest.mark.asyncio

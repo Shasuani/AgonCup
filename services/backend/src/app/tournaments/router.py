@@ -13,7 +13,7 @@ import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from lol_schemas.enums import TournamentFormat, UserGuildRoleName
+from lol_schemas.enums import GameMode, TournamentFormat, UserGuildRoleName
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,6 +33,8 @@ _CAPTAIN = require_tenant_role(UserGuildRoleName.CAPTAIN, UserGuildRoleName.GUIL
 class CreateTournamentRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     format: TournamentFormat = TournamentFormat.SINGLE_ELIMINATION
+    game_mode: GameMode = GameMode.SUMMONERS_RIFT_5V5
+    best_of: int = Field(default=1, description="Series length: 1, 3, or 5.")
     max_teams: int = Field(default=16, ge=2, le=16)
     ruleset: dict[str, Any] = Field(default_factory=dict)
 
@@ -42,6 +44,8 @@ class TournamentResponse(BaseModel):
     name: str
     status: str
     format: str
+    game_mode: str
+    best_of: int
     max_teams: int
     is_shared_to_central: bool
 
@@ -74,6 +78,8 @@ def _to_response(t: Tournament) -> TournamentResponse:
         name=t.name,
         status=_enum_value(t.status),
         format=_enum_value(t.format),
+        game_mode=_enum_value(t.game_mode),
+        best_of=t.best_of,
         max_teams=t.max_teams,
         is_shared_to_central=t.is_shared_to_central,
     )
@@ -101,6 +107,8 @@ async def create_tournament(
             session,
             name=body.name,
             format=body.format,
+            game_mode=body.game_mode,
+            best_of=body.best_of,
             max_teams=body.max_teams,
             ruleset=body.ruleset,
         )

@@ -21,6 +21,7 @@ from typing import Any
 
 from lol_core.bracket import generate_single_elimination
 from lol_schemas.enums import (
+    GameMode,
     MatchStatus,
     RegistrationStatus,
     TournamentFormat,
@@ -32,6 +33,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Match, Registration, Team, Tournament
 
 MAX_TEAMS_HARD_CAP = 16
+
+#: Series lengths a tournament may pick: single game, best-of-3, best-of-5.
+ALLOWED_BEST_OF: frozenset[int] = frozenset({1, 3, 5})
 
 
 class TournamentError(Exception):
@@ -118,17 +122,23 @@ async def create_tournament(
     *,
     name: str,
     format: TournamentFormat = TournamentFormat.SINGLE_ELIMINATION,
+    game_mode: GameMode = GameMode.SUMMONERS_RIFT_5V5,
+    best_of: int = 1,
     max_teams: int = MAX_TEAMS_HARD_CAP,
     ruleset: dict[str, Any] | None = None,
 ) -> Tournament:
-    """Create a DRAFT tournament in the acting guild."""
+    """Create a DRAFT tournament in the acting guild (5v5 Rift or 1v1 ARAM)."""
     if not 2 <= max_teams <= MAX_TEAMS_HARD_CAP:
         raise InvalidStateError(f"max_teams must be in [2, {MAX_TEAMS_HARD_CAP}]")
+    if best_of not in ALLOWED_BEST_OF:
+        raise InvalidStateError(f"best_of must be one of {sorted(ALLOWED_BEST_OF)}")
     guild_id = await _current_guild(session)
     tournament = Tournament(
         guild_id=guild_id,
         name=name,
         format=format,
+        game_mode=game_mode,
+        best_of=best_of,
         max_teams=max_teams,
         status=TournamentStatus.DRAFT,
         ruleset_json=ruleset or {},

@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 from lol_core.adjudication import AdjudicationOutcome
-from lol_schemas.enums import MatchStatus, ResultDecidedBy, ResultSource
+from lol_schemas.enums import GameMode, MatchStatus, ResultDecidedBy, ResultSource
 
 from app.results import corroboration
 
@@ -67,6 +67,9 @@ class _Res:
     def scalar_one_or_none(self) -> Any:
         return self._rows[0] if self._rows else None
 
+    def first(self) -> Any:
+        return self._rows[0] if self._rows else None
+
     def scalars(self) -> _Res:
         return self
 
@@ -100,9 +103,11 @@ class _RecordSpy:
         return SimpleNamespace(**kwargs)
 
 
-def _report(reporter: str, winner_puuids: list[str], loser_puuids: list[str]) -> Any:
+def _report(
+    reporter: str, winner_puuids: list[str], loser_puuids: list[str], *, game: str = "100"
+) -> Any:
     return SimpleNamespace(
-        lcu_game_id="100",
+        lcu_game_id=game,
         reporter_puuid=reporter,
         source=ResultSource.EOG_STATS_BLOCK,
         schema_version="v1",
@@ -111,23 +116,44 @@ def _report(reporter: str, winner_puuids: list[str], loser_puuids: list[str]) ->
     )
 
 
-def _build(*, reports: list[Any]) -> tuple[_QueuedSession, uuid.UUID, uuid.UUID, uuid.UUID]:
-    """Seed a queued session for a 5v5 match where A=team_a, B=team_b checked in."""
+def _build(
+    *,
+    reports: list[Any],
+    game_mode: GameMode = GameMode.SUMMONERS_RIFT_5V5,
+    players_per_team: int = 5,
+    best_of: int = 1,
+) -> tuple[_QueuedSession, uuid.UUID, uuid.UUID, uuid.UUID]:
+    """Seed a queued session for a match where A=team_a, B=team_b checked in.
+
+    Mirrors adjudicate_match's execute() order: Match, TeamMember(a), TeamMember(b),
+    ClientSession, (Tournament.game_mode, best_of), ResultReport.
+    """
+    n = players_per_team
     match_id, ta, tb = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
-    a_users = [uuid.uuid4() for _ in range(5)]
-    b_users = [uuid.uuid4() for _ in range(5)]
-    a_puuids = [f"pa{i}" for i in range(5)]
-    b_puuids = [f"pb{i}" for i in range(5)]
-    match = SimpleNamespace(id=match_id, status=MatchStatus.PENDING, team_a=ta, team_b=tb)
-    sessions = [(a_users[i], a_puuids[i]) for i in range(5)] + [
-        (b_users[i], b_puuids[i]) for i in range(5)
+    a_users = [uuid.uuid4() for _ in range(n)]
+    b_users = [uuid.uuid4() for _ in range(n)]
+    a_puuids = [f"pa{i}" for i in range(n)]
+    b_puuids = [f"pb{i}" for i in range(n)]
+    match = SimpleNamespace(
+        id=match_id,
+        status=MatchStatus.PENDING,
+        team_a=ta,
+        team_b=tb,
+        tournament_id=uuid.uuid4(),
+        wins_a=0,
+        wins_b=0,
+        scored_game_ids=[],
+    )
+    sessions = [(a_users[i], a_puuids[i]) for i in range(n)] + [
+        (b_users[i], b_puuids[i]) for i in range(n)
     ]
     session = _QueuedSession(
         _Res([match]),  # 1: select(Match)
         _Res(a_users),  # 2: TeamMember(team_a).user_id
         _Res(b_users),  # 3: TeamMember(team_b).user_id
         _Res(sessions),  # 4: ClientSession (user_id, puuid)
-        _Res(reports),  # 5: ResultReport rows
+        _Res([(game_mode, best_of)]),  # 5: (Tournament.game_mode, best_of)
+        _Res(reports),  # 6: ResultReport rows
     )
     return session, match_id, ta, tb
 
@@ -194,6 +220,97 @@ async def test_conflicting_reports_dispute_no_record() -> None:
     assert outcome == AdjudicationOutcome.DISPUTE
     assert spy.calls == []  # no winner recorded
     assert len(dispute_spy.calls) == 1  # match frozen as disputed for the admin queue
+
+
+@pytest.mark.asyncio
+async def test_1v1_duel_both_agree_auto_records_with_2_of_2_quorum() -> None:
+    # A 1v1 has only 2 reports, so the 6/10 default can never pass; the ARAM_1V1
+    # mode threshold (2/2) must let both-agree resolve. Both players report A won.
+    reports = [_report("pa0", ["pa0"], ["pb0"]), _report("pb0", ["pa0"], ["pb0"])]
+    session, match_id, ta, _tb = _build(
+        reports=reports, game_mode=GameMode.ARAM_1V1, players_per_team=1
+    )
+    spy = _RecordSpy()
+
+    outcome = await corroboration.adjudicate_match(
+        session,  # type: ignore[arg-type]
+        match_id=match_id,
+        guild_id=uuid.uuid4(),
+        record_winner=spy,
+    )
+
+    assert outcome == AdjudicationOutcome.ACCEPT
+    assert len(spy.calls) == 1
+    assert spy.calls[0]["winner_team_id"] == ta
+
+
+@pytest.mark.asyncio
+async def test_1v1_single_report_is_insufficient() -> None:
+    # Only one of the two duelists has reported -> wait for the other (2/2 not met).
+    reports = [_report("pa0", ["pa0"], ["pb0"])]
+    session, match_id, _ta, _tb = _build(
+        reports=reports, game_mode=GameMode.ARAM_1V1, players_per_team=1
+    )
+    spy = _RecordSpy()
+
+    outcome = await corroboration.adjudicate_match(
+        session,  # type: ignore[arg-type]
+        match_id=match_id,
+        guild_id=uuid.uuid4(),
+        record_winner=spy,
+    )
+
+    assert outcome == AdjudicationOutcome.INSUFFICIENT
+    assert spy.calls == []
+
+
+@pytest.mark.asyncio
+async def test_best_of_three_decides_after_two_game_wins() -> None:
+    # Two distinct games (100, 200), both won by A -> series 2-0 -> ACCEPT team_a.
+    reports = [
+        _report("pa0", ["pa0"], ["pb0"], game="100"),
+        _report("pb0", ["pa0"], ["pb0"], game="100"),
+        _report("pa0", ["pa0"], ["pb0"], game="200"),
+        _report("pb0", ["pa0"], ["pb0"], game="200"),
+    ]
+    session, match_id, ta, _tb = _build(
+        reports=reports, game_mode=GameMode.ARAM_1V1, players_per_team=1, best_of=3
+    )
+    spy = _RecordSpy()
+
+    outcome = await corroboration.adjudicate_match(
+        session,  # type: ignore[arg-type]
+        match_id=match_id,
+        guild_id=uuid.uuid4(),
+        record_winner=spy,
+    )
+
+    assert outcome == AdjudicationOutcome.ACCEPT
+    assert len(spy.calls) == 1
+    assert spy.calls[0]["winner_team_id"] == ta
+
+
+@pytest.mark.asyncio
+async def test_best_of_three_one_game_in_is_insufficient() -> None:
+    # Only game 1 decided (A) -> series 1-0, not yet at 2 wins -> no advance.
+    reports = [
+        _report("pa0", ["pa0"], ["pb0"], game="100"),
+        _report("pb0", ["pa0"], ["pb0"], game="100"),
+    ]
+    session, match_id, _ta, _tb = _build(
+        reports=reports, game_mode=GameMode.ARAM_1V1, players_per_team=1, best_of=3
+    )
+    spy = _RecordSpy()
+
+    outcome = await corroboration.adjudicate_match(
+        session,  # type: ignore[arg-type]
+        match_id=match_id,
+        guild_id=uuid.uuid4(),
+        record_winner=spy,
+    )
+
+    assert outcome == AdjudicationOutcome.INSUFFICIENT
+    assert spy.calls == []
 
 
 @pytest.mark.asyncio

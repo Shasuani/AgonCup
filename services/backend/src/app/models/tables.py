@@ -23,6 +23,7 @@ from datetime import datetime
 from typing import Any
 
 from lol_schemas.enums import (
+    GameMode,
     GuildStatus,
     LobbyPhase,
     MatchResultState,
@@ -319,6 +320,15 @@ class Tournament(GuildScoped, Base):
         nullable=False,
         server_default=TournamentFormat.SINGLE_ELIMINATION.value,
     )
+    # The custom-game shape (5v5 Rift vs 1v1 ARAM) — drives lobby config + quorum.
+    game_mode: Mapped[GameMode] = mapped_column(
+        pg_enum(GameMode, "game_mode"),
+        nullable=False,
+        server_default=GameMode.SUMMONERS_RIFT_5V5.value,
+    )
+    # Series length: a match is won by the first team to (best_of // 2 + 1) games.
+    # 1 = single game (default); 3 = best-of-three; 5 = best-of-five.
+    best_of: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     max_teams: Mapped[int] = mapped_column(Integer, nullable=False, server_default="16")
     start_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     is_shared_to_central: Mapped[bool] = mapped_column(
@@ -381,6 +391,13 @@ class Match(GuildScoped, Base):
         pg_enum(MatchStatus, "match_status"),
         nullable=False,
         server_default=MatchStatus.PENDING.value,
+    )
+    # Best-of-N series state: games won by each side, and the LCU game ids already
+    # counted (so a re-sent report for a decided game never double-counts).
+    wins_a: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    wins_b: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    scored_game_ids: Mapped[list[Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

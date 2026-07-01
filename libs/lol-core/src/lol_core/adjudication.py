@@ -193,6 +193,7 @@ def adjudicate_result(
     roster_by_team: Mapping[UUID, frozenset[str]],
     *,
     quorum_threshold: int = QUORUM_THRESHOLD,
+    total_participants: int = TOTAL_PARTICIPANTS,
     used_game_ids: frozenset[str] = frozenset(),
     valid_nonces: Mapping[str, str] | None = None,
     killstream_by_game: Mapping[str, KillStreamSummary] | None = None,
@@ -227,7 +228,10 @@ def adjudicate_result(
         roster_by_team: registered PUUIDs per team id (exactly two for a 1v1);
             the both-teams-represented authority. Sourced from registration/
             check-in, NEVER from the reports themselves.
-        quorum_threshold: agreeing-report floor (default 6).
+        quorum_threshold: agreeing-report floor (default 6; a 1v1 duel passes 2).
+        total_participants: expected reporters for the mode (default 10; a 1v1
+            passes 2 so a both-reports-in stalemate resolves instead of hanging
+            forever on the ``reachable`` capture-race branch).
         used_game_ids: game ids already consumed by a prior match (reuse → high
             anomaly). Default empty (off).
         valid_nonces: ``reporter_puuid -> expected single-use nonce``; a report
@@ -267,7 +271,7 @@ def adjudicate_result(
     flags.update(dedupe_flags)
 
     distinct_reporters_seen = len(votes)
-    if distinct_reporters_seen > TOTAL_PARTICIPANTS:
+    if distinct_reporters_seen > total_participants:
         flags.add(_Flag(FLAG_OVERSUBSCRIBED_REPORTS, _Severity.HIGH))
 
     # --- Stage 2: disqualify (degrade-to-absent), partition on/off roster --
@@ -285,7 +289,7 @@ def adjudicate_result(
     if any(v.reporter_puuid not in puuid_to_team for v in qualified):
         flags.add(_Flag(FLAG_OUTSIDER_REPORT, _Severity.LOW))
 
-    if len({v.reporter_puuid for v in countable}) < TOTAL_PARTICIPANTS:
+    if len({v.reporter_puuid for v in countable}) < total_participants:
         flags.add(_Flag(FLAG_MISSING_REPORTS, _Severity.LOW))
 
     # --- Stage 3: game-id binding -----------------------------------------
@@ -336,6 +340,7 @@ def adjudicate_result(
         roster_team_ids=roster_team_ids,
         flags=flags,
         quorum_threshold=quorum_threshold,
+        total_participants=total_participants,
         dominant_game_id=dominant_game_id,
         distinct_reporters_seen=distinct_reporters_seen,
     )
@@ -559,6 +564,7 @@ def _verdict(
     roster_team_ids: frozenset[UUID],
     flags: set[_Flag],
     quorum_threshold: int,
+    total_participants: int,
     dominant_game_id: str | None,
     distinct_reporters_seen: int,
 ) -> AdjudicationResult:
@@ -572,7 +578,7 @@ def _verdict(
     winner = best.winner if best is not None else None
     quorum_met = best is not None and agree >= quorum_threshold and both_teams
     # Still-outstanding reports mean the picture can change → a shortfall is benign.
-    reachable = distinct_reporters_seen < TOTAL_PARTICIPANTS
+    reachable = distinct_reporters_seen < total_participants
 
     # 1. A clean both-teams quorum auto-resolves — unless something escalated it.
     if quorum_met and not high and not block:
@@ -583,7 +589,7 @@ def _verdict(
             reports_counted=agree,
             both_teams_represented=True,
             anomaly_flags=codes,
-            detail=f"accept: quorum {agree}/{TOTAL_PARTICIPANTS} for {winner}, both teams",
+            detail=f"accept: quorum {agree}/{total_participants} for {winner}, both teams",
         )
 
     # 2. Any high-severity anomaly freezes advancement → admin queue.

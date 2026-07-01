@@ -147,14 +147,14 @@ class LobbySpec(_Strict):
     """The immutable, re-creatable lobby spec (PLAN.md §3.6.2).
 
     Backend-owned so any successor host re-creates the lobby **verbatim**.
-    Defaults mirror the canonical custom-game config:
-    ``{gameMode:"CLASSIC", mapId:11, teamSize:5}`` (``teamSize=5`` caps the
-    lobby at 10, **not** the invitee list).
+    Defaults mirror the canonical 5v5 config ``{gameMode:"CLASSIC", mapId:11,
+    teamSize:5}`` (``teamSize`` caps each side, **not** the invitee list); a 1v1
+    duel overrides these to ``{gameMode:"ARAM", mapId:12, teamSize:1}``.
     """
 
     game_mode: str = Field(default="CLASSIC", description="LCU customGameLobby gameMode.")
-    map_id: int = Field(default=11, description="LCU mapId (11 = Summoner's Rift).")
-    team_size: Literal[5] = Field(default=5, description="Per-team cap; lobby holds 2x.")
+    map_id: int = Field(default=11, description="LCU mapId (11 = Rift, 12 = Howling Abyss).")
+    team_size: Literal[1, 5] = Field(default=5, description="Per-team cap (5 = 5v5, 1 = 1v1).")
     lobby_name: str = Field(description="Stable lobby name (embeds match_id for audit).")
     lobby_password: str = Field(description="Stable lobby password for manual fallback.")
     invitee_summoner_ids: list[str] = Field(

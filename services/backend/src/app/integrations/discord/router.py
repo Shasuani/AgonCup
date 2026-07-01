@@ -22,6 +22,7 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from lol_schemas.enums import GameMode
 from pydantic import BaseModel, Field
 
 from app.accounts import service as accounts_service
@@ -190,6 +191,8 @@ class TournamentCreateRequest(BaseModel):
     ctx: DiscordContextIn
     name: str = Field(min_length=1, max_length=120)
     max_teams: int = Field(default=16, ge=2, le=16)
+    game_mode: GameMode = GameMode.SUMMONERS_RIFT_5V5
+    best_of: int = Field(default=1, description="Series length: 1, 3, or 5.")
 
 
 class TournamentJoinRequest(BaseModel):
@@ -208,6 +211,8 @@ class TournamentResponse(BaseModel):
     name: str
     status: str
     format: str
+    game_mode: str
+    best_of: int
     max_teams: int
     is_shared_to_central: bool
 
@@ -229,6 +234,8 @@ def _tournament_response(t: Tournament) -> TournamentResponse:
         name=t.name,
         status=_enum_value(t.status),
         format=_enum_value(t.format),
+        game_mode=_enum_value(t.game_mode),
+        best_of=t.best_of,
         max_teams=t.max_teams,
         is_shared_to_central=t.is_shared_to_central,
     )
@@ -527,7 +534,12 @@ async def create_tournament(body: TournamentCreateRequest) -> TournamentResponse
     async with SessionLocal() as session, session.begin():
         try:
             t = await bridge.create_tournament(
-                session, ctx=body.ctx.to_ctx(), name=body.name, max_teams=body.max_teams
+                session,
+                ctx=body.ctx.to_ctx(),
+                name=body.name,
+                max_teams=body.max_teams,
+                game_mode=body.game_mode,
+                best_of=body.best_of,
             )
         except guilds_service.GuildNotOnboardedError as exc:
             raise _guild_not_onboarded(exc) from exc

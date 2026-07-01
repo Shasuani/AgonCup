@@ -36,13 +36,13 @@ from typing import Any, Protocol
 
 from lol_core.adjudication import AdjudicationOutcome, adjudicate_result
 from lol_schemas import ResultReportDTO
-from lol_schemas.enums import MatchStatus, ResultDecidedBy
+from lol_schemas.enums import GameMode, MatchStatus, ResultDecidedBy
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit import service as audit_service
 from app.logging import get_logger
-from app.models import ClientSession, Match, MatchResult, ResultReport, TeamMember
+from app.models import ClientSession, Match, MatchResult, ResultReport, TeamMember, Tournament
 from app.results import service as results_service
 
 logger = get_logger(__name__)
@@ -185,87 +185,139 @@ async def adjudicate_match(
         # Not enough of either side has checked in yet to represent both teams.
         return AdjudicationOutcome.INSUFFICIENT
 
+    # The tournament's mode drives quorum (6/10 for 5v5, 2/2 for a 1v1 duel); its
+    # best_of drives how many game wins decide the match (a series spans several
+    # LCU games, each adjudicated on its own).
+    meta = (
+        await session.execute(
+            select(Tournament.game_mode, Tournament.best_of).where(
+                Tournament.id == match.tournament_id
+            )
+        )
+    ).first()
+    game_mode = (meta[0] if meta else None) or GameMode.SUMMONERS_RIFT_5V5
+    best_of = meta[1] if meta and meta[1] else 1
+    needed = best_of // 2 + 1
+
     rows = (
         (await session.execute(select(ResultReport).where(ResultReport.match_id == match_id)))
         .scalars()
         .all()
     )
-    dtos = [
-        ResultReportDTO(
-            guild_id=guild_id,
-            match_id=match_id,
-            lcu_game_id=r.lcu_game_id,
-            reporter_puuid=r.reporter_puuid,
-            source=r.source,
-            winner=_derive_winner_team(_winning_puuids(r.raw_payload), roster_by_team),
-            schema_version=r.schema_version,
-            received_at=r.received_at,
-        )
-        for r in rows
-    ]
+    by_game: dict[str, list[Any]] = {}
+    for r in rows:
+        by_game.setdefault(r.lcu_game_id, []).append(r)
 
-    verdict = adjudicate_result(dtos, roster_by_team)
+    scored = list(match.scored_game_ids or [])
+    scored_set = set(scored)
+    disputed = False
 
-    if verdict.outcome == AdjudicationOutcome.ACCEPT and verdict.winner_team_id is not None:
-        try:
-            await record(
-                session,
-                match_id=match_id,
-                winner_team_id=verdict.winner_team_id,
-                decided_by=ResultDecidedBy.QUORUM,
-            )
-            await audit_service.record_audit(
-                session,
-                action="result.quorum",
-                entity_type="match",
-                entity_id=match_id,
-                actor_kind=audit_service.ACTOR_SYSTEM,
+    # Score each not-yet-counted game once. A re-sent report for a scored game is a
+    # no-op (game id already in ``scored``), so wins never double-count.
+    for game_id in sorted(g for g in by_game if g not in scored_set):
+        dtos = [
+            ResultReportDTO(
                 guild_id=guild_id,
-                detail=f"auto-decided by {verdict.reports_counted}-report quorum",
+                match_id=match_id,
+                lcu_game_id=r.lcu_game_id,
+                reporter_puuid=r.reporter_puuid,
+                source=r.source,
+                winner=_derive_winner_team(_winning_puuids(r.raw_payload), roster_by_team),
+                schema_version=r.schema_version,
+                received_at=r.received_at,
             )
+            for r in by_game[game_id]
+        ]
+        verdict = adjudicate_result(
+            dtos,
+            roster_by_team,
+            quorum_threshold=game_mode.quorum_threshold,
+            total_participants=game_mode.total_participants,
+        )
+        if verdict.outcome == AdjudicationOutcome.ACCEPT and verdict.winner_team_id is not None:
+            if verdict.winner_team_id == match.team_a:
+                match.wins_a += 1
+            elif verdict.winner_team_id == match.team_b:
+                match.wins_b += 1
+            scored.append(game_id)
+            scored_set.add(game_id)
             logger.info(
-                "corroboration.accepted",
+                "corroboration.game_decided",
                 match_id=str(match_id),
+                game_id=game_id,
                 winner_team_id=str(verdict.winner_team_id),
-                reports_counted=verdict.reports_counted,
+                wins_a=match.wins_a,
+                wins_b=match.wins_b,
             )
-        except results_service.ResultError as exc:
-            # A racing admin override / conflicting decision — never crash ingest.
-            logger.warning("corroboration.record_skipped", match_id=str(match_id), error=str(exc))
-    elif verdict.outcome == AdjudicationOutcome.DISPUTE:
-        try:
-            await mark(
-                session,
-                match_id=match_id,
-                agreed_game_id=verdict.agreed_game_id,
-                anomaly_flags=verdict.anomaly_flags,
-                reports_counted=verdict.reports_counted,
-                both_teams_represented=verdict.both_teams_represented,
-            )
-            await audit_service.record_audit(
-                session,
-                action="result.disputed",
-                entity_type="match",
-                entity_id=match_id,
-                actor_kind=audit_service.ACTOR_SYSTEM,
-                guild_id=guild_id,
-                detail=", ".join(verdict.anomaly_flags) or "conflicting reports",
-            )
-        except results_service.ResultError as exc:
-            logger.warning("corroboration.dispute_skipped", match_id=str(match_id), error=str(exc))
-        logger.warning(
-            "corroboration.disputed",
-            match_id=str(match_id),
-            anomaly_flags=verdict.anomaly_flags,
-            detail=verdict.detail,
+        elif verdict.outcome == AdjudicationOutcome.DISPUTE:
+            disputed = True
+            try:
+                await mark(
+                    session,
+                    match_id=match_id,
+                    agreed_game_id=verdict.agreed_game_id,
+                    anomaly_flags=verdict.anomaly_flags,
+                    reports_counted=verdict.reports_counted,
+                    both_teams_represented=verdict.both_teams_represented,
+                )
+                await audit_service.record_audit(
+                    session,
+                    action="result.disputed",
+                    entity_type="match",
+                    entity_id=match_id,
+                    actor_kind=audit_service.ACTOR_SYSTEM,
+                    guild_id=guild_id,
+                    detail=", ".join(verdict.anomaly_flags) or "conflicting reports",
+                )
+            except results_service.ResultError as exc:
+                logger.warning(
+                    "corroboration.dispute_skipped", match_id=str(match_id), error=str(exc)
+                )
+            logger.warning("corroboration.disputed", match_id=str(match_id), game_id=game_id)
+            break  # freeze the series for admin review
+        # INSUFFICIENT: this game's reports aren't all in yet — wait for the rest.
+
+    # Persist the updated series state (reassign so SQLAlchemy tracks the JSONB list).
+    match.scored_game_ids = scored
+
+    if disputed:
+        return AdjudicationOutcome.DISPUTE
+
+    series_winner: uuid.UUID | None = None
+    if match.wins_a >= needed:
+        series_winner = match.team_a
+    elif match.wins_b >= needed:
+        series_winner = match.team_b
+    if series_winner is None:
+        return AdjudicationOutcome.INSUFFICIENT  # series still in progress
+
+    try:
+        await record(
+            session,
+            match_id=match_id,
+            winner_team_id=series_winner,
+            decided_by=ResultDecidedBy.QUORUM,
         )
-    else:
+        await audit_service.record_audit(
+            session,
+            action="result.quorum",
+            entity_type="match",
+            entity_id=match_id,
+            actor_kind=audit_service.ACTOR_SYSTEM,
+            guild_id=guild_id,
+            detail=f"series decided {match.wins_a}-{match.wins_b} (best of {best_of})",
+        )
         logger.info(
-            "corroboration.insufficient",
+            "corroboration.series_decided",
             match_id=str(match_id),
-            reports_counted=verdict.reports_counted,
+            winner_team_id=str(series_winner),
+            wins_a=match.wins_a,
+            wins_b=match.wins_b,
         )
-    return verdict.outcome
+    except results_service.ResultError as exc:
+        # A racing admin override / conflicting decision — never crash ingest.
+        logger.warning("corroboration.record_skipped", match_id=str(match_id), error=str(exc))
+    return AdjudicationOutcome.ACCEPT
 
 
 __all__ = ["adjudicate_match"]

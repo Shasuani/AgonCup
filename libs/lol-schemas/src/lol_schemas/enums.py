@@ -51,6 +51,33 @@ class TournamentFormat(StrEnum):
     DOUBLE_ELIMINATION = "double_elimination"
 
 
+class GameMode(StrEnum):
+    """The custom-game shape a tournament runs (drives lobby config + quorum).
+
+    ``SUMMONERS_RIFT_5V5`` is the default 5v5 on the Rift (mapId 11); ``ARAM_1V1``
+    is a solo duel on the Howling Abyss (mapId 12, teamSize 1), decided by first
+    blood. The mode threads Tournament -> Match -> lobby spec + corroboration.
+    """
+
+    SUMMONERS_RIFT_5V5 = "summoners_rift_5v5"
+    ARAM_1V1 = "aram_1v1"
+
+    @property
+    def team_size(self) -> int:
+        """Players per side for the LCU custom lobby."""
+        return 1 if self is GameMode.ARAM_1V1 else 5
+
+    @property
+    def total_participants(self) -> int:
+        """Expected total reporters/players in a match of this mode (2 or 10)."""
+        return 2 if self is GameMode.ARAM_1V1 else 10
+
+    @property
+    def quorum_threshold(self) -> int:
+        """Agreeing-report floor to auto-decide a winner (2/2 for 1v1, 6/10 for 5v5)."""
+        return 2 if self is GameMode.ARAM_1V1 else 6
+
+
 class RegistrationStatus(StrEnum):
     PENDING = "pending"
     APPROVED = "approved"

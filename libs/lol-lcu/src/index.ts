@@ -209,9 +209,12 @@ export interface LcuAdapterConfig {
  * Re-created VERBATIM by any successor host (§3.6.1/§3.6.2).
  */
 export interface CustomGameConfiguration {
-  readonly gameMode: 'CLASSIC';
-  readonly mapId: 11;
-  readonly teamSize: 5;
+  /** `CLASSIC` = 5v5 Summoner's Rift; `ARAM` = Howling Abyss (used for 1v1 duels). */
+  readonly gameMode: 'CLASSIC' | 'ARAM';
+  /** `11` = Summoner's Rift, `12` = Howling Abyss (ARAM). */
+  readonly mapId: 11 | 12;
+  /** Per-team cap: `5` for 5v5, `1` for a 1v1 duel. */
+  readonly teamSize: 1 | 5;
   readonly mutators: { readonly id: number };
   readonly spectatorPolicy: 'AllAllowed' | 'NotAllowed';
 }

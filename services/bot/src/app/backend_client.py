@@ -211,10 +211,22 @@ class BackendClient:
         return await self._post_list("/tournaments/list", {"ctx": _ctx_payload(ctx)})
 
     async def create_tournament(
-        self, ctx: DiscordContext, *, name: str, max_teams: int = 16
+        self,
+        ctx: DiscordContext,
+        *,
+        name: str,
+        max_teams: int = 16,
+        game_mode: str = "summoners_rift_5v5",
+        best_of: int = 1,
     ) -> dict[str, Any]:
-        """Create a tournament (guild admin; PLAN.md §3.2)."""
-        payload = {"ctx": _ctx_payload(ctx), "name": name, "max_teams": max_teams}
+        """Create a tournament (guild admin). ``game_mode`` = 5v5 or 1v1 ARAM; ``best_of`` 1/3/5."""
+        payload = {
+            "ctx": _ctx_payload(ctx),
+            "name": name,
+            "max_teams": max_teams,
+            "game_mode": game_mode,
+            "best_of": best_of,
+        }
         return await self._require(self._post("/tournaments/create", payload))
 
     async def join_tournament(

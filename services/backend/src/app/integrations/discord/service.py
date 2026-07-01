@@ -24,6 +24,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 
+from lol_schemas.enums import GameMode
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.accounts import service as accounts_service
@@ -275,10 +276,14 @@ async def create_tournament(
     ctx: DiscordContext,
     name: str,
     max_teams: int = tournaments_service.MAX_TEAMS_HARD_CAP,
+    game_mode: GameMode = GameMode.SUMMONERS_RIFT_5V5,
+    best_of: int = 1,
 ) -> Tournament:
     """Create a tournament in the acting guild (guild_admin; delegated)."""
     await _resolve_actor_admin(session, ctx)
-    return await tournaments_service.create_tournament(session, name=name, max_teams=max_teams)
+    return await tournaments_service.create_tournament(
+        session, name=name, max_teams=max_teams, game_mode=game_mode, best_of=best_of
+    )
 
 
 async def join_tournament(

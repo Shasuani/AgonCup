@@ -74,14 +74,14 @@ from lol_realtime import (
     LobbySpec,
     PromoteHostCommand,
 )
-from lol_schemas.enums import LobbyPhase
+from lol_schemas.enums import GameMode, LobbyPhase
 from sqlalchemy import CursorResult, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.config import get_settings
 from app.logging import get_logger
-from app.models import ClientSession, Match, MatchLobby
+from app.models import ClientSession, Match, MatchLobby, Tournament
 
 logger = get_logger(__name__)
 
@@ -151,14 +151,22 @@ def build_lobby_spec(
     lobby_password: str,
     invitee_summoner_ids: Sequence[str],
     invitee_puuids: Sequence[str],
+    game_mode: GameMode = GameMode.SUMMONERS_RIFT_5V5,
 ) -> LobbySpec:
     """Build the immutable, verbatim-re-creatable lobby spec (PLAN.md §3.6.2).
 
     Backend-owned so any successor host re-creates the lobby identically. The
-    canonical custom-game config (``CLASSIC``/map 11/5v5) comes from the
-    ``LobbySpec`` defaults.
+    custom-game config is derived from ``game_mode``: 5v5 Summoner's Rift
+    (``CLASSIC``/map 11/teamSize 5) or a 1v1 ARAM duel (``ARAM``/map 12/teamSize 1).
     """
+    if game_mode is GameMode.ARAM_1V1:
+        lcu_mode, map_id, team_size = "ARAM", 12, 1
+    else:
+        lcu_mode, map_id, team_size = "CLASSIC", 11, 5
     return LobbySpec(
+        game_mode=lcu_mode,
+        map_id=map_id,
+        team_size=team_size,
         lobby_name=lobby_name,
         lobby_password=lobby_password,
         invitee_summoner_ids=list(invitee_summoner_ids),
@@ -304,6 +312,23 @@ async def _get_match(session: AsyncSession, match_id: uuid.UUID) -> Match:
     return match
 
 
+async def _game_mode_for_match_id(session: AsyncSession, match_id: uuid.UUID) -> GameMode:
+    """Resolve the tournament's game mode for a match id (drives the lobby config).
+
+    RLS-scoped like every other read here; joins match -> tournament and falls back
+    to the 5v5 default if either is missing (never raises — the lobby must still be
+    creatable on the failover path even if a row is unexpectedly absent).
+    """
+    mode = (
+        await session.execute(
+            select(Tournament.game_mode)
+            .join(Match, Match.tournament_id == Tournament.id)
+            .where(Match.id == match_id)
+        )
+    ).scalar_one_or_none()
+    return mode or GameMode.SUMMONERS_RIFT_5V5
+
+
 async def _get_lobby(session: AsyncSession, match_id: uuid.UUID) -> MatchLobby:
     lobby = (
         await session.execute(select(MatchLobby).where(MatchLobby.match_id == match_id))
@@ -365,6 +390,7 @@ async def initialize_lobby(
     server_secret = server_secret or get_settings().jwt_secret
     guild_id = await _current_guild(session)
     await _get_match(session, match_id)  # RLS membership / existence check
+    game_mode = await _game_mode_for_match_id(session, match_id)
 
     existing = (
         await session.execute(select(MatchLobby).where(MatchLobby.match_id == match_id))
@@ -407,6 +433,7 @@ async def initialize_lobby(
         # a downstream join the host performs — puuid is the collision-immune key.
         invitee_summoner_ids=[],
         invitee_puuids=[s.puuid for s in sessions],
+        game_mode=game_mode,
     )
     create_cmd = build_create_lobby_command(
         match_id=match_id, host_epoch=lobby.host_epoch, spec=spec
@@ -703,6 +730,7 @@ async def _apply_recreate(
     if not won:
         return
     await session.refresh(lobby)
+    game_mode = await _game_mode_for_match_id(session, lobby.match_id)
     sessions = await _checked_in_sessions(session, lobby.match_id)
     spec = build_lobby_spec(
         match_id=lobby.match_id,
@@ -710,6 +738,7 @@ async def _apply_recreate(
         lobby_password=lobby.lobby_password or "",
         invitee_summoner_ids=[],
         invitee_puuids=[s.puuid for s in sessions],
+        game_mode=game_mode,
     )
     create_cmd = build_create_lobby_command(
         match_id=lobby.match_id, host_epoch=lobby.host_epoch, spec=spec

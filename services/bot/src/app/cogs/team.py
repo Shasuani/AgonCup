@@ -51,7 +51,9 @@ class TeamCog(commands.GroupCog, name="team"):
             await interaction.followup.send(embed=error_embed(exc), ephemeral=True)
             return
         member = ctx.display_name or str(ctx.discord_user_id)
-        embed = embed_from(team_joined(team_name=joined["name"], member_name=member, member_count=0))
+        embed = embed_from(
+            team_joined(team_name=joined["name"], member_name=member, member_count=0)
+        )
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="leave", description="Leave a team you are on.")

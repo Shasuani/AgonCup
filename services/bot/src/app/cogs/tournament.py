@@ -119,19 +119,43 @@ class TournamentAdminCog(commands.Cog):
         name="tournament-create",
         description="Create a tournament (server admins only).",
     )
-    @app_commands.describe(name="Tournament name.", max_teams="Bracket size (2-16).")
+    @app_commands.describe(
+        name="Tournament name.",
+        max_teams="Bracket size (2-16).",
+        mode="Game mode: 5v5 Summoner's Rift (default) or 1v1 ARAM duel.",
+        series="Series length per match: best of 1 (default), 3, or 5.",
+    )
+    @app_commands.choices(
+        mode=[
+            app_commands.Choice(name="5v5 (Summoner's Rift)", value="summoners_rift_5v5"),
+            app_commands.Choice(name="1v1 (ARAM duel)", value="aram_1v1"),
+        ]
+    )
+    @app_commands.choices(
+        series=[
+            app_commands.Choice(name="Best of 1 (single game)", value=1),
+            app_commands.Choice(name="Best of 3", value=3),
+            app_commands.Choice(name="Best of 5", value=5),
+        ]
+    )
     @app_commands.default_permissions(manage_guild=True)
     async def create(
         self,
         interaction: discord.Interaction,
         name: str,
         max_teams: int = 16,
+        mode: app_commands.Choice[str] | None = None,
+        series: app_commands.Choice[int] | None = None,
     ) -> None:
         """Create a tournament (guild admin; backend re-checks the role)."""
         await interaction.response.defer(ephemeral=True, thinking=True)
         ctx = context_of(interaction)
+        game_mode = mode.value if mode is not None else "summoners_rift_5v5"
+        best_of = series.value if series is not None else 1
         try:
-            t = await self._backend.create_tournament(ctx, name=name, max_teams=max_teams)
+            t = await self._backend.create_tournament(
+                ctx, name=name, max_teams=max_teams, game_mode=game_mode, best_of=best_of
+            )
         except BackendError as exc:
             await interaction.followup.send(embed=error_embed(exc), ephemeral=True)
             return

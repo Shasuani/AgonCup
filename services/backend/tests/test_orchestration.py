@@ -106,7 +106,9 @@ class FakeSession:
         entity = statement.column_descriptions[0]["entity"]
         model = _model_of(entity)
         crit = _equality_filters(statement)
-        rows = [r for r in self.store[model] if _matches(r, crit)]
+        # A model with no seeded store (e.g. Tournament for the game-mode lookup)
+        # yields no rows -> the caller falls back to its default (5v5).
+        rows = [r for r in self.store.get(model, []) if _matches(r, crit)]
         return _Result(rows)
 
     def _execute_update(self, statement: Any) -> _Result:

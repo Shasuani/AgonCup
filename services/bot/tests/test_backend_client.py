@@ -151,6 +151,16 @@ def test_unlink_account_payload(monkeypatch: Any) -> None:
     assert out["removed"] is True
 
 
+def test_join_team_sends_name_or_id_ref(monkeypatch: Any) -> None:
+    client = _client(monkeypatch, _MockResponse(200, {"id": "t1", "name": "Alpha"}))
+    out = asyncio.run(client.join_team(CTX, team="Alpha"))
+
+    sent = _MockAsyncClient.last_post
+    assert sent["url"].endswith("/teams/join")
+    assert sent["json"]["team"] == "Alpha"
+    assert out["name"] == "Alpha"
+
+
 def test_create_tournament_payload(monkeypatch: Any) -> None:
     client = _client(
         monkeypatch, _MockResponse(200, {"id": "t1", "name": "Cup", "format": "single_elim"})

@@ -172,6 +172,13 @@ class TeamRefRequest(BaseModel):
     team_id: uuid.UUID
 
 
+class TeamJoinRequest(BaseModel):
+    """Join a team by NAME or id — whatever the player typed after ``/team join``."""
+
+    ctx: DiscordContextIn
+    team: str = Field(min_length=1, max_length=120, description="Team name or exact id.")
+
+
 class TeamResponse(BaseModel):
     id: str
     name: str
@@ -455,13 +462,19 @@ async def create_team(body: TeamCreateRequest) -> TeamResponse:
 @router.post(
     "/teams/join", response_model=TeamResponse, summary="Join a team as a player (service-auth)"
 )
-async def join_team(body: TeamRefRequest) -> TeamResponse:
+async def join_team(body: TeamJoinRequest) -> TeamResponse:
     async with SessionLocal() as session, session.begin():
         try:
-            await bridge.join_team(session, ctx=body.ctx.to_ctx(), team_id=body.team_id)
-            team = await teams_service.get_team(session, team_id=body.team_id)
+            team, _member = await bridge.join_team_by_ref(
+                session, ctx=body.ctx.to_ctx(), ref=body.team
+            )
         except guilds_service.GuildNotOnboardedError as exc:
             raise _guild_not_onboarded(exc) from exc
+        except teams_service.AmbiguousTeamError as exc:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail="more than one team has that name; join with the exact team id",
+            ) from exc
         except teams_service.TeamNotFoundError as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="team not found") from exc
         except teams_service.DuplicateMemberError as exc:

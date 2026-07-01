@@ -232,6 +232,28 @@ async def join_team(
     return await teams_service.add_member(session, team_id=team_id, user_id=actor.user.id)
 
 
+async def join_team_by_ref(
+    session: AsyncSession, *, ctx: DiscordContext, ref: str
+) -> tuple[Team, TeamMember]:
+    """The acting user joins a team named OR id'd by ``ref`` (the Discord flow).
+
+    ``ref`` is what the player typed after ``/team join`` — either the team's
+    display name (resolved within the guild) or its exact id. A UUID-shaped ref is
+    treated as an id; anything else is resolved by name (:class:`TeamNotFoundError`
+    / :class:`AmbiguousTeamError` on miss / collision). Returns the joined team so
+    the bot can echo its name.
+    """
+    actor = await _resolve_actor(session, ctx)
+    try:
+        team_id = uuid.UUID(ref.strip())
+    except ValueError:
+        team = await teams_service.get_team_by_name(session, name=ref)
+    else:
+        team = await teams_service.get_team(session, team_id=team_id)
+    member = await teams_service.add_member(session, team_id=team.id, user_id=actor.user.id)
+    return team, member
+
+
 async def leave_team(session: AsyncSession, *, ctx: DiscordContext, team_id: uuid.UUID) -> None:
     """The acting user leaves ``team_id`` (delegated; captain guard applies)."""
     actor = await _resolve_actor(session, ctx)
@@ -316,6 +338,7 @@ __all__ = [
     "create_tournament",
     "get_guild_settings",
     "join_team",
+    "join_team_by_ref",
     "join_tournament",
     "leave_team",
     "leave_tournament",

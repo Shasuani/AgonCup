@@ -39,19 +39,19 @@ class TeamCog(commands.GroupCog, name="team"):
         embed = embed_from(team_created(team_name=team["name"], captain_name=captain))
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    @app_commands.command(name="join", description="Join an existing team by id.")
-    @app_commands.describe(team_id="The team id to join.")
-    async def join(self, interaction: discord.Interaction, team_id: str) -> None:
-        """Join an existing team as a player."""
+    @app_commands.command(name="join", description="Join a team by name (or id).")
+    @app_commands.describe(team="The team name to join (or its exact id).")
+    async def join(self, interaction: discord.Interaction, team: str) -> None:
+        """Join an existing team as a player, by name or id."""
         await interaction.response.defer(ephemeral=True, thinking=True)
         ctx = context_of(interaction)
         try:
-            team = await self._backend.join_team(ctx, team_id=team_id)
+            joined = await self._backend.join_team(ctx, team=team)
         except BackendError as exc:
             await interaction.followup.send(embed=error_embed(exc), ephemeral=True)
             return
         member = ctx.display_name or str(ctx.discord_user_id)
-        embed = embed_from(team_joined(team_name=team["name"], member_name=member, member_count=0))
+        embed = embed_from(team_joined(team_name=joined["name"], member_name=member, member_count=0))
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="leave", description="Leave a team you are on.")

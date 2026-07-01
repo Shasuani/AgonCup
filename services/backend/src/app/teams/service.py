@@ -26,7 +26,7 @@ import uuid
 from dataclasses import dataclass
 
 from lol_schemas.enums import TeamMemberRole
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Team, TeamMember
@@ -58,6 +58,10 @@ class InvalidRoleError(TeamError):
 
 class CaptainProtectedError(TeamError):
     """The captain cannot be removed/leave while still captain (transfer first)."""
+
+
+class AmbiguousTeamError(TeamError):
+    """More than one team in the acting guild shares that name — use the id."""
 
 
 async def _current_guild(session: AsyncSession) -> uuid.UUID:
@@ -167,6 +171,26 @@ async def get_team(session: AsyncSession, *, team_id: uuid.UUID) -> Team:
     if team is None:
         raise TeamNotFoundError(str(team_id))
     return team
+
+
+async def get_team_by_name(session: AsyncSession, *, name: str) -> Team:
+    """Resolve a team by display name within the acting guild (RLS-scoped).
+
+    Case-insensitive. Team names are NOT unique per guild, so this is a
+    convenience for the Discord ``/team join <name>`` flow: no match raises
+    :class:`TeamNotFoundError`; more than one raises :class:`AmbiguousTeamError`
+    (the user should fall back to the exact id).
+    """
+    rows = (
+        (await session.execute(select(Team).where(func.lower(Team.name) == name.strip().lower())))
+        .scalars()
+        .all()
+    )
+    if not rows:
+        raise TeamNotFoundError(name)
+    if len(rows) > 1:
+        raise AmbiguousTeamError(name)
+    return rows[0]
 
 
 async def list_teams(session: AsyncSession) -> list[Team]:

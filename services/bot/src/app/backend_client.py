@@ -196,9 +196,9 @@ class BackendClient:
         payload = {"ctx": _ctx_payload(ctx), "name": name}
         return await self._require(self._post("/teams/create", payload))
 
-    async def join_team(self, ctx: DiscordContext, *, team_id: str) -> dict[str, Any]:
-        """Join an existing team as a player."""
-        payload = {"ctx": _ctx_payload(ctx), "team_id": team_id}
+    async def join_team(self, ctx: DiscordContext, *, team: str) -> dict[str, Any]:
+        """Join an existing team by NAME or id (whatever the player typed)."""
+        payload = {"ctx": _ctx_payload(ctx), "team": team}
         return await self._require(self._post("/teams/join", payload))
 
     async def leave_team(self, ctx: DiscordContext, *, team_id: str) -> None:

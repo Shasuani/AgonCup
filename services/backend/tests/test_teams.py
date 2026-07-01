@@ -9,17 +9,21 @@ RLS-dependent and covered by the Postgres integration suite once a DB is wired i
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 import pytest
 from lol_schemas.enums import TeamMemberRole
 
 from app.teams.service import (
     ADDABLE_ROLES,
+    AmbiguousTeamError,
     CaptainProtectedError,
     DuplicateMemberError,
     InvalidRoleError,
     MemberNotFoundError,
     MembershipChange,
+    TeamNotFoundError,
+    get_team_by_name,
     validate_add_member,
     validate_remove_member,
 )
@@ -27,6 +31,58 @@ from app.teams.service import (
 
 def _ids(n: int) -> list[uuid.UUID]:
     return [uuid.uuid4() for _ in range(n)]
+
+
+class _ScalarResult:
+    def __init__(self, rows: list[Any]) -> None:
+        self._rows = rows
+
+    def scalars(self) -> _ScalarResult:
+        return self
+
+    def all(self) -> list[Any]:
+        return self._rows
+
+
+class _NameSession:
+    """Returns a canned team list for the get_team_by_name lookup (RLS is real DB)."""
+
+    def __init__(self, rows: list[Any]) -> None:
+        self._rows = rows
+
+    async def execute(self, statement: Any, params: Any = None) -> Any:
+        return _ScalarResult(self._rows)
+
+
+# ---------------------------------------------------------------------------
+# get_team_by_name (name resolution for /team join)
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_get_team_by_name_returns_single_match() -> None:
+    from app.models import Team
+
+    team = Team(id=uuid.uuid4(), guild_id=uuid.uuid4(), name="Alpha", captain_user_id=uuid.uuid4())
+    result = await get_team_by_name(_NameSession([team]), name="  alpha ")  # type: ignore[arg-type]
+    assert result is team
+
+
+@pytest.mark.asyncio
+async def test_get_team_by_name_missing_raises_not_found() -> None:
+    with pytest.raises(TeamNotFoundError):
+        await get_team_by_name(_NameSession([]), name="Ghost")  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_get_team_by_name_collision_raises_ambiguous() -> None:
+    from app.models import Team
+
+    gid = uuid.uuid4()
+    dupes = [
+        Team(id=uuid.uuid4(), guild_id=gid, name="Alpha", captain_user_id=uuid.uuid4())
+        for _ in range(2)
+    ]
+    with pytest.raises(AmbiguousTeamError):
+        await get_team_by_name(_NameSession(dupes), name="Alpha")  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------

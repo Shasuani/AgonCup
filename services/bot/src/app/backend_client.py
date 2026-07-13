@@ -230,15 +230,27 @@ class BackendClient:
         return await self._require(self._post("/tournaments/create", payload))
 
     async def join_tournament(
-        self, ctx: DiscordContext, *, tournament_id: str, team_id: str
+        self, ctx: DiscordContext, *, tournament: str, team: str
     ) -> dict[str, Any]:
-        """Register a team into a tournament (PLAN.md §2 Registration)."""
+        """Register a team into a tournament by NAME or id (PLAN.md §2 Registration)."""
         payload = {
             "ctx": _ctx_payload(ctx),
-            "tournament_id": tournament_id,
-            "team_id": team_id,
+            "tournament": tournament,
+            "team": team,
         }
         return await self._require(self._post("/tournaments/join", payload))
+
+    async def check_in_tournament(
+        self, ctx: DiscordContext, *, tournament: str, team: str
+    ) -> dict[str, Any]:
+        """Check a team in to a tournament by NAME or id (PLAN.md §2 check-in)."""
+        payload = {"ctx": _ctx_payload(ctx), "tournament": tournament, "team": team}
+        return await self._require(self._post("/tournaments/check-in", payload))
+
+    async def start_tournament(self, ctx: DiscordContext, *, tournament: str) -> dict[str, Any]:
+        """Generate the bracket + start a tournament by NAME or id (guild admin)."""
+        payload = {"ctx": _ctx_payload(ctx), "tournament": tournament}
+        return await self._require(self._post("/tournaments/start", payload))
 
     async def leave_tournament(
         self, ctx: DiscordContext, *, tournament_id: str, team_id: str

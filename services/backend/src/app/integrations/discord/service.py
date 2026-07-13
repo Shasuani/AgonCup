@@ -245,12 +245,7 @@ async def join_team_by_ref(
     the bot can echo its name.
     """
     actor = await _resolve_actor(session, ctx)
-    try:
-        team_id = uuid.UUID(ref.strip())
-    except ValueError:
-        team = await teams_service.get_team_by_name(session, name=ref)
-    else:
-        team = await teams_service.get_team(session, team_id=team_id)
+    team = await teams_service.resolve_team_ref(session, ref=ref)
     member = await teams_service.add_member(session, team_id=team.id, user_id=actor.user.id)
     return team, member
 
@@ -305,6 +300,46 @@ async def join_tournament(
     )
 
 
+async def join_tournament_by_ref(
+    session: AsyncSession, *, ctx: DiscordContext, tournament_ref: str, team_ref: str
+) -> tuple[Tournament, Registration]:
+    """Register a team into a tournament, both named OR id'd (the Discord flow).
+
+    ``tournament_ref`` / ``team_ref`` are what the captain typed — the display name
+    (resolved within the guild) or the exact id. UUID-shaped refs are treated as
+    ids; anything else resolves by name (Not-found / Ambiguous errors propagate).
+    Returns the tournament so the bot can echo its name.
+    """
+    await _resolve_actor(session, ctx)
+    tournament = await tournaments_service.resolve_tournament_ref(session, ref=tournament_ref)
+    team = await teams_service.resolve_team_ref(session, ref=team_ref)
+    reg = await tournaments_service.register_team(
+        session, tournament_id=tournament.id, team_id=team.id
+    )
+    return tournament, reg
+
+
+async def check_in_team(
+    session: AsyncSession, *, ctx: DiscordContext, tournament_ref: str, team_ref: str
+) -> tuple[Tournament, Registration]:
+    """Check a registered team in (name/short-id refs); eligible for the bracket."""
+    await _resolve_actor(session, ctx)
+    tournament = await tournaments_service.resolve_tournament_ref(session, ref=tournament_ref)
+    team = await teams_service.resolve_team_ref(session, ref=team_ref)
+    reg = await tournaments_service.check_in(session, tournament_id=tournament.id, team_id=team.id)
+    return tournament, reg
+
+
+async def start_tournament(
+    session: AsyncSession, *, ctx: DiscordContext, tournament_ref: str
+) -> tuple[Tournament, tournaments_service.StartResult]:
+    """Generate the bracket + move to RUNNING (guild_admin; name/short-id ref)."""
+    await _resolve_actor_admin(session, ctx)
+    tournament = await tournaments_service.resolve_tournament_ref(session, ref=tournament_ref)
+    result = await tournaments_service.start_tournament(session, tournament_id=tournament.id)
+    return tournament, result
+
+
 async def leave_tournament(
     session: AsyncSession,
     *,
@@ -344,7 +379,10 @@ __all__ = [
     "get_guild_settings",
     "join_team",
     "join_team_by_ref",
+    "check_in_team",
     "join_tournament",
+    "join_tournament_by_ref",
+    "start_tournament",
     "leave_team",
     "leave_tournament",
     "list_my_accounts",

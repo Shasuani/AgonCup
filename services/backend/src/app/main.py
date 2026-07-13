@@ -24,6 +24,7 @@ from app.lifecycle.router import router as lifecycle_router
 from app.logging import configure_logging, get_logger
 from app.notifications.router import router as notifications_router
 from app.orchestration.router import router as orchestration_router
+from app.presence.router import router as presence_router
 from app.realtime.router import router as realtime_router
 from app.results.router import router as results_router
 from app.teams.router import router as teams_router
@@ -90,6 +91,7 @@ def create_app() -> FastAPI:
         teams_router,
         tournaments_router,
         orchestration_router,
+        presence_router,
         results_router,
         audit_router,
         realtime_router,

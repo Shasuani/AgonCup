@@ -595,7 +595,33 @@ async def ingest_lobby_state(
         lobby_event=event.value,
         state=lobby.state.value,
     )
+    # Best-effort global presence (the desktop bell). Publish when the match goes
+    # in-game; clear when it ends. A Redis/presence failure never fails the ack.
+    await _sync_presence(session, match_id=match_id, state=lobby.state)
     return IngestResult(accepted=True, host_epoch=lobby.host_epoch, state=lobby.state)
+
+
+#: Terminal lobby states that should drop a match from the live-presence feed.
+_PRESENCE_CLEAR_STATES = frozenset({LobbyPhase.ENDED, LobbyPhase.ABORTED, LobbyPhase.HOST_LOST})
+
+
+async def _sync_presence(session: AsyncSession, *, match_id: uuid.UUID, state: LobbyPhase) -> None:
+    """Mirror a lobby state change into the global presence store (best-effort).
+
+    Deferred imports keep the presence/Redis dependency out of the module import
+    path; every failure is swallowed inside the presence helpers so orchestration
+    is never impacted (PLAN.md §3.2 live presence).
+    """
+    if state is not LobbyPhase.IN_GAME and state not in _PRESENCE_CLEAR_STATES:
+        return
+    from app.presence import service as presence_service  # noqa: PLC0415 - deferred, best-effort
+    from app.realtime.redis_client import get_redis  # noqa: PLC0415
+
+    redis = get_redis()
+    if state is LobbyPhase.IN_GAME:
+        await presence_service.refresh_presence_for_match(session, redis, match_id=match_id)
+    else:
+        await presence_service.clear_presence_for_match(redis, match_id=match_id)
 
 
 @dataclass(slots=True)

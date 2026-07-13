@@ -991,6 +991,44 @@ async def unlink_user_account(
     raise AccountNotLinked(f"no linked account matching {game_name}#{tag_line.lstrip('#')}")
 
 
+async def unlink_account_by_id(
+    session: AsyncSession, *, user_id: str, account_id: str
+) -> MyAccountSummary:
+    """Remove one of the acting user's OWN linked accounts by its account id.
+
+    The id-based counterpart of :func:`unlink_user_account`, for the desktop
+    "unregister" button (the client already holds each account's id from
+    ``GET /accounts/me``). Scoped to the acting user, so a principal can only ever
+    delete their own account. Deleting the ``RiotAccount`` row is referentially
+    safe (result reports / client sessions carry the PUUID as a plain string, no
+    FK), so history is untouched.
+
+    Raises:
+        AccountNotLinked: no account with that id owned by the user (404).
+    """
+    acct = (
+        await session.execute(
+            select(RiotAccount).where(RiotAccount.id == account_id, RiotAccount.user_id == user_id)
+        )
+    ).scalar_one_or_none()
+    if acct is None:
+        raise AccountNotLinked(f"no linked account {account_id}")
+    summary = MyAccountSummary(
+        account_id=str(acct.id),
+        game_name=acct.riot_id_game_name,
+        tag_line=acct.riot_id_tag_line,
+        region=acct.region,
+        verified=acct.verified,
+        verified_at=acct.verified_at,
+        rank_text=format_rank_fields(
+            tier=acct.rank_tier, division=acct.rank_division, league_points=acct.rank_lp
+        ),
+    )
+    await session.delete(acct)
+    log.info("account_unlinked", user_id=user_id, account_id=summary.account_id)
+    return summary
+
+
 async def get_attempt(
     session: AsyncSession, *, attempt_id: str, user_id: str
 ) -> VerificationAttempt | None:

@@ -1,18 +1,16 @@
-"""``/tournament`` group + ``/tournament-create`` (PLAN.md §3.2 / §2 Tournament).
+"""``/tournament-create`` + ``/tournament-start`` — admin-only (PLAN.md §3.2).
 
-* ``/tournament list|join|leave|status`` — player-facing read/registration actions.
-* ``/tournament-create`` — guild-admin only (the cog gates the command with the
-  Manage-Guild permission AND the backend re-checks ``is_discord_guild_admin`` /
-  a persisted ``guild_admin`` role; defence in depth).
+The user-facing tournament actions (list/join/check-in/leave/status) now live in
+the **desktop client**; the bot keeps only the admin surface. ``/tournament-create``
+mints a shareable **join code** the admin hands to players — they redeem it in the
+client to enrol. Both commands are gated by the Manage-Guild permission AND the
+backend re-checks the persisted ``guild_admin`` role (defence in depth).
 
 Thin presentation layer: every handler delegates to the backend bridge and renders
-a ``lol_discord`` embed. Bracket planning, registration caps and state machine all
-live in the backend tournament service.
+a ``lol_discord`` embed.
 """
 
 from __future__ import annotations
-
-from typing import Any
 
 import discord
 from discord import app_commands
@@ -23,94 +21,8 @@ from app.backend_client import BackendClient, BackendError
 from app.cogs._helpers import context_of, embed_from, error_embed, info_embed
 
 
-def _tournament_line(t: dict[str, Any]) -> str:
-    """One display line for a tournament in the list output."""
-    return f"**{t.get('name', '?')}** — `{t.get('id', '?')}` ({t.get('status', '?')})"
-
-
-class TournamentCog(commands.GroupCog, name="tournament"):
-    """The ``/tournament`` command group (player-facing)."""
-
-    def __init__(self, backend: BackendClient) -> None:
-        self._backend = backend
-        super().__init__()
-
-    @app_commands.command(name="list", description="List this server's tournaments.")
-    async def list_(self, interaction: discord.Interaction) -> None:
-        """List the guild's tournaments (ephemeral)."""
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        ctx = context_of(interaction)
-        try:
-            rows = await self._backend.list_tournaments(ctx)
-        except BackendError as exc:
-            await interaction.followup.send(embed=error_embed(exc), ephemeral=True)
-            return
-        if not rows:
-            body = "No tournaments yet. An admin can create one with `/tournament-create`."
-        else:
-            body = "\n".join(_tournament_line(t) for t in rows)
-        await interaction.followup.send(embed=info_embed("Tournaments", body), ephemeral=True)
-
-    @app_commands.command(name="join", description="Register your team into a tournament.")
-    @app_commands.describe(tournament_id="The tournament id.", team_id="Your team id.")
-    async def join(
-        self, interaction: discord.Interaction, tournament_id: str, team_id: str
-    ) -> None:
-        """Register a team into a tournament."""
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        ctx = context_of(interaction)
-        try:
-            reg = await self._backend.join_tournament(
-                ctx, tournament_id=tournament_id, team_id=team_id
-            )
-        except BackendError as exc:
-            await interaction.followup.send(embed=error_embed(exc), ephemeral=True)
-            return
-        await interaction.followup.send(
-            embed=info_embed("Registered", f"Registration status: **{reg.get('status', '?')}**."),
-            ephemeral=True,
-        )
-
-    @app_commands.command(name="leave", description="Withdraw your team from a tournament.")
-    @app_commands.describe(tournament_id="The tournament id.", team_id="Your team id.")
-    async def leave(
-        self, interaction: discord.Interaction, tournament_id: str, team_id: str
-    ) -> None:
-        """Withdraw a team from a tournament."""
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        ctx = context_of(interaction)
-        try:
-            await self._backend.leave_tournament(ctx, tournament_id=tournament_id, team_id=team_id)
-        except BackendError as exc:
-            await interaction.followup.send(embed=error_embed(exc), ephemeral=True)
-            return
-        await interaction.followup.send(
-            embed=info_embed("Withdrawn", "Your team has been withdrawn."), ephemeral=True
-        )
-
-    @app_commands.command(name="status", description="Show a tournament's current status.")
-    @app_commands.describe(tournament_id="The tournament id.")
-    async def status(self, interaction: discord.Interaction, tournament_id: str) -> None:
-        """Show a tournament's current status."""
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        ctx = context_of(interaction)
-        try:
-            t = await self._backend.tournament_status(ctx, tournament_id=tournament_id)
-        except BackendError as exc:
-            await interaction.followup.send(embed=error_embed(exc), ephemeral=True)
-            return
-        body = (
-            f"Status: **{t.get('status', '?')}**\n"
-            f"Format: **{t.get('format', '?')}**\n"
-            f"Max teams: **{t.get('max_teams', '?')}**"
-        )
-        await interaction.followup.send(
-            embed=info_embed(t.get("name", "Tournament"), body), ephemeral=True
-        )
-
-
 class TournamentAdminCog(commands.Cog):
-    """The admin-only ``/tournament-create`` command (PLAN.md §3.2 guild admin)."""
+    """Admin-only tournament management (create + start)."""
 
     def __init__(self, backend: BackendClient) -> None:
         self._backend = backend
@@ -160,9 +72,49 @@ class TournamentAdminCog(commands.Cog):
             await interaction.followup.send(embed=error_embed(exc), ephemeral=True)
             return
         embed = embed_from(
-            tournament_created(name=t["name"], fmt=str(t.get("format", "single_elim")))
+            tournament_created(
+                name=t["name"],
+                fmt=str(t.get("format", "single_elim")),
+                tournament_id=str(t.get("id", "")),
+                mode=t.get("game_mode"),
+                best_of=t.get("best_of"),
+            )
         )
+        join_code = t.get("join_code")
+        if join_code:
+            embed.add_field(
+                name="Join code",
+                value=(
+                    f"`{join_code}`\nShare this with your players — they enter it in the "
+                    "**desktop client** to join this tournament."
+                ),
+                inline=False,
+            )
         await interaction.followup.send(embed=embed, ephemeral=True)
 
+    @app_commands.command(
+        name="tournament-start",
+        description="Start a tournament & generate the bracket (server admins only).",
+    )
+    @app_commands.describe(tournament="Tournament name (or its id).")
+    @app_commands.default_permissions(manage_guild=True)
+    async def start(self, interaction: discord.Interaction, tournament: str) -> None:
+        """Generate the bracket and start the tournament (backend gates guild-admin)."""
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        ctx = context_of(interaction)
+        try:
+            res = await self._backend.start_tournament(ctx, tournament=tournament)
+        except BackendError as exc:
+            await interaction.followup.send(embed=error_embed(exc), ephemeral=True)
+            return
+        await interaction.followup.send(
+            embed=info_embed(
+                "Tournament started",
+                f"Bracket generated: **{res.get('matches_created', '?')}** matches, "
+                f"**{res.get('rounds', '?')}** rounds, **{res.get('byes', 0)}** byes.",
+            ),
+            ephemeral=True,
+        )
 
-__all__ = ["TournamentAdminCog", "TournamentCog"]
+
+__all__ = ["TournamentAdminCog"]

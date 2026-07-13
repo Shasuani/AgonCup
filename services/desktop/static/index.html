@@ -278,6 +278,98 @@
 
       .hidden { display: none !important; }
 
+      /* ---------------- header bell + presence panel ---------------- */
+      .bell {
+        margin-left: auto; position: relative; flex: 0 0 auto;
+        width: 44px; height: 44px; display: grid; place-items: center; cursor: pointer;
+        background: #05080c; color: var(--gold); border: 1px solid var(--line);
+        clip-path: var(--chamfer); transition: border-color 0.2s ease, color 0.2s ease;
+      }
+      .bell:hover { border-color: var(--cyan); color: var(--gold-bright); }
+      .bell svg { width: 20px; height: 20px; }
+      .bell .count {
+        position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; padding: 0 4px;
+        display: grid; place-items: center; font-family: var(--mono); font-size: 10px; font-weight: 700;
+        color: #05080c; background: var(--cyan); border-radius: 2px; box-shadow: 0 0 8px rgba(43,212,230,0.6);
+      }
+
+      .presence-panel {
+        margin: 0 0 20px; padding: 16px 18px; clip-path: var(--chamfer);
+        background: linear-gradient(180deg, var(--panel-2), var(--panel));
+        border: 1px solid var(--line); border-left: 2px solid var(--cyan-deep);
+        animation: rise 0.35s cubic-bezier(0.16,1,0.3,1) both;
+      }
+      .presence-panel h3 {
+        margin: 0 0 12px; font-family: var(--mono); font-size: 11px; letter-spacing: 2px;
+        text-transform: uppercase; color: var(--cyan);
+      }
+      .presence-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 9px; }
+      .presence-list li {
+        padding: 10px 13px; clip-path: var(--chamfer);
+        background: rgba(43,212,230,0.05); border: 1px solid var(--line-soft); border-left: 2px solid var(--cyan-deep);
+      }
+      .presence-list .who { color: var(--gold-bright); font-weight: 700; font-size: 13px; }
+      .presence-list .meta { color: var(--muted); font-family: var(--mono); font-size: 11px; margin-top: 5px; line-height: 1.5; }
+      .presence-list .meta b { color: var(--text); font-weight: 600; }
+      .presence-empty { color: var(--faint); font-family: var(--mono); font-size: 12px; }
+
+      /* ---------------- nav tabs ---------------- */
+      .nav { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 22px; }
+      .nav button {
+        appearance: none; cursor: pointer; color: var(--muted);
+        background: #05080c; border: 1px solid var(--line-soft); border-left: 2px solid var(--gold-dim);
+        clip-path: var(--chamfer); font-family: var(--mono); font-size: 11px; font-weight: 700;
+        letter-spacing: 1.5px; text-transform: uppercase; padding: 10px 15px;
+        transition: color 0.2s ease, border-left-color 0.2s ease, background 0.2s ease;
+      }
+      .nav button:hover { color: var(--gold-bright); border-left-color: var(--gold); }
+      .nav button.active { color: #0a0d12; background: linear-gradient(180deg, var(--gold), var(--gold-dim)); border-color: var(--gold); }
+
+      /* ---------------- generic lists (tournaments / rosters) ---------------- */
+      .data-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+      .data-list li {
+        padding: 11px 14px; clip-path: var(--chamfer);
+        background: linear-gradient(180deg, var(--panel-2), var(--panel));
+        border: 1px solid var(--line-soft); border-left: 2px solid var(--gold-dim);
+      }
+      .data-list .row-title { color: var(--gold-bright); font-weight: 700; font-size: 14px; }
+      .data-list .row-meta { color: var(--muted); font-family: var(--mono); font-size: 11px; margin-top: 5px; line-height: 1.5; }
+      .data-list .row-meta .pill {
+        display: inline-block; margin-right: 7px; padding: 2px 7px; color: var(--cyan);
+        background: rgba(43,212,230,0.06); border: 1px solid var(--line-soft);
+      }
+      .empty-hint { color: var(--faint); font-family: var(--mono); font-size: 12px; margin: 0; }
+
+      /* ---------------- join-code reveal + copy ---------------- */
+      .code-reveal {
+        margin: 4px 0 14px; padding: 14px 16px; clip-path: var(--chamfer);
+        background: #05080c; border: 1px solid var(--line); border-left: 2px solid var(--ok);
+        display: flex; align-items: center; gap: 12px;
+      }
+      .code-reveal .value {
+        font-family: var(--mono); font-size: 20px; font-weight: 700; letter-spacing: 4px;
+        color: var(--gold-bright); text-shadow: 0 0 10px rgba(200,170,110,0.3);
+        -webkit-user-select: text; user-select: text;
+      }
+      .code-reveal .copy {
+        margin-left: auto; appearance: none; cursor: pointer; color: var(--gold);
+        background: rgba(200,170,110,0.08); border: 1px solid var(--gold-dim); clip-path: var(--chamfer);
+        font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
+        padding: 8px 12px; transition: color 0.2s ease, border-color 0.2s ease;
+      }
+      .code-reveal .copy:hover { color: var(--gold-bright); border-color: var(--gold); }
+
+      .sub-block { margin-top: 22px; padding-top: 20px; border-top: 1px solid var(--line-soft); }
+      .sub-block:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+      .row-actions { display: flex; align-items: center; gap: 9px; }
+      .btn-danger {
+        appearance: none; cursor: pointer; margin-left: auto; color: var(--danger);
+        background: rgba(255,70,85,0.06); border: 1px solid rgba(255,70,85,0.35); clip-path: var(--chamfer);
+        font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
+        padding: 7px 11px; transition: color 0.2s ease, border-color 0.2s ease;
+      }
+      .btn-danger:hover { color: #fff; border-color: var(--danger); background: rgba(255,70,85,0.14); }
+
       @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; } }
     </style>
   </head>
@@ -309,10 +401,35 @@
           <p class="eyebrow">// Match Runner Protocol</p>
           <h1>League<b>Of</b>Leagues</h1>
         </div>
+
+        <button id="bell" class="bell hidden" type="button" title="Who's playing now" aria-label="Live presence">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M12 3a6 6 0 0 0-6 6v3.5L4.5 16.5h15L18 12.5V9a6 6 0 0 0-6-6Z"
+                  stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+            <path d="M9.5 19a2.5 2.5 0 0 0 5 0" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+          <span id="bell-count" class="count hidden">0</span>
+        </button>
       </header>
 
       <div class="divider" aria-hidden="true"><span></span></div>
 
+      <!-- Screen navigation (visible only when signed in). -->
+      <nav id="nav" class="nav hidden" aria-label="Screens">
+        <button type="button" data-screen="onboarding" class="active">Onboarding</button>
+        <button type="button" data-screen="tournaments">Tournaments</button>
+        <button type="button" data-screen="teams">Teams</button>
+        <button type="button" data-screen="account">Account</button>
+      </nav>
+
+      <!-- Live-presence panel (toggled by the header bell). -->
+      <div id="presence-panel" class="presence-panel hidden" role="region" aria-label="Live presence">
+        <h3>Live now — who's in a game</h3>
+        <ul id="presence-list" class="presence-list"></ul>
+        <p id="presence-empty" class="presence-empty hidden">No one is in a game right now.</p>
+      </div>
+
+      <section id="screen-onboarding" class="screen">
       <p class="lead">
         Autonomous <b>match runner</b>. Connects per assigned match, drives the custom lobby through your
         local League client, and reports stats for cross-client corroboration. <b>Zero</b> in-game automation.
@@ -386,6 +503,107 @@
         <b>Safety-first</b> — LCU automation is community-reverse-engineered and gated behind a ToS spike.
         Korea is excluded. Every lobby write is opt-in, presence-gated, and human-paced.
       </p>
+      </section>
+
+      <!-- ================= Tournaments screen ================= -->
+      <section id="screen-tournaments" class="screen hidden" aria-labelledby="tour-title">
+        <div class="link-card">
+          <div class="inner">
+            <p class="step">Tournaments — Join</p>
+            <h2 id="tour-title">Join a Tournament</h2>
+            <p class="hint">Paste a tournament join code from your organiser and enter to join.</p>
+            <div class="field">
+              <label for="tour-code">Tournament Code</label>
+              <input id="tour-code" type="text" autocomplete="off" spellcheck="false" placeholder="Enter code" />
+            </div>
+            <button id="tour-join-btn" class="btn" type="button">Join tournament</button>
+            <p id="tour-join-status" class="status info" role="status" aria-live="polite"></p>
+          </div>
+        </div>
+
+        <div class="link-card">
+          <div class="inner">
+            <p class="step">Tournaments — Mine</p>
+            <h2>My Tournaments</h2>
+            <p class="hint">Tournaments you're entered in across your servers.</p>
+            <button id="tour-refresh-btn" class="btn" type="button">Refresh list</button>
+            <ul id="tour-list" class="data-list" style="margin-top:16px"></ul>
+            <p id="tour-empty" class="empty-hint hidden">You're not in any tournaments yet.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= Teams screen ================= -->
+      <section id="screen-teams" class="screen hidden" aria-labelledby="team-title">
+        <div class="link-card">
+          <div class="inner">
+            <p class="step">Teams — Create</p>
+            <h2 id="team-title">Create a Team</h2>
+            <p class="hint">You become the captain. Share the join code below with your teammates.</p>
+            <div class="field">
+              <label for="team-name">Team Name</label>
+              <input id="team-name" type="text" autocomplete="off" spellcheck="false" placeholder="Team name" />
+            </div>
+            <button id="team-create-btn" class="btn" type="button">Create team</button>
+            <div id="team-created" class="hidden" style="margin-top:16px">
+              <div class="code-reveal">
+                <span id="team-created-code" class="value"></span>
+                <button id="team-created-copy" class="copy" type="button">Copy</button>
+              </div>
+              <p class="empty-hint">Share this code so teammates can join your team.</p>
+            </div>
+            <p id="team-create-status" class="status info" role="status" aria-live="polite"></p>
+          </div>
+        </div>
+
+        <div class="link-card">
+          <div class="inner">
+            <p class="step">Teams — Join</p>
+            <h2>Join a Team</h2>
+            <p class="hint">Paste a team join code to join an existing team.</p>
+            <div class="field">
+              <label for="team-code">Team Code</label>
+              <input id="team-code" type="text" autocomplete="off" spellcheck="false" placeholder="Enter code" />
+            </div>
+            <button id="team-join-btn" class="btn" type="button">Join team</button>
+            <p id="team-join-status" class="status info" role="status" aria-live="polite"></p>
+          </div>
+        </div>
+
+        <div class="link-card">
+          <div class="inner">
+            <p class="step">Teams — Roster</p>
+            <h2>View a Team</h2>
+            <p class="hint">Enter a team ID to see its roster. If you're the captain, its join code is shown too.</p>
+            <div class="field">
+              <label for="team-id">Team ID</label>
+              <input id="team-id" type="text" autocomplete="off" spellcheck="false" placeholder="Team ID" />
+            </div>
+            <button id="team-view-btn" class="btn" type="button">View team</button>
+            <div id="team-view-code" class="code-reveal hidden" style="margin-top:14px">
+              <span id="team-view-code-value" class="value"></span>
+              <button id="team-view-code-copy" class="copy" type="button">Copy</button>
+            </div>
+            <ul id="team-roster" class="data-list" style="margin-top:14px"></ul>
+            <p id="team-view-status" class="status info" role="status" aria-live="polite"></p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= Account screen ================= -->
+      <section id="screen-account" class="screen hidden" aria-labelledby="acct-title">
+        <div class="link-card">
+          <div class="inner">
+            <p class="step">Account — Linked Riot IDs</p>
+            <h2 id="acct-title">Your Linked Accounts</h2>
+            <p class="hint">Riot accounts linked to your profile. Unregister to unlink one from your identity.</p>
+            <button id="acct-refresh-btn" class="btn" type="button">Refresh</button>
+            <ul id="acct-list" class="data-list" style="margin-top:16px"></ul>
+            <p id="acct-empty" class="empty-hint hidden">No linked accounts. Link one from the Onboarding screen.</p>
+            <p id="acct-status" class="status info" role="status" aria-live="polite"></p>
+          </div>
+        </div>
+      </section>
 
       <footer>
         <span>build <code>dev</code></span>
@@ -394,6 +612,7 @@
       </footer>
     </main>
 
+    <script src="app.js"></script>
     <script src="verify.js"></script>
   </body>
 </html>

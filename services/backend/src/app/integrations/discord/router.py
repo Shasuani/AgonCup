@@ -196,9 +196,25 @@ class TournamentCreateRequest(BaseModel):
 
 
 class TournamentJoinRequest(BaseModel):
+    """Register a team into a tournament, both by NAME or exact id (Discord flow)."""
+
     ctx: DiscordContextIn
-    tournament_id: uuid.UUID
-    team_id: uuid.UUID
+    tournament: str = Field(min_length=1, max_length=120, description="Tournament name or id.")
+    team: str = Field(min_length=1, max_length=120, description="Team name or id.")
+
+
+class TournamentStartRequest(BaseModel):
+    """Start a tournament by NAME or id (guild_admin)."""
+
+    ctx: DiscordContextIn
+    tournament: str = Field(min_length=1, max_length=120, description="Tournament name or id.")
+
+
+class StartResponse(BaseModel):
+    tournament_id: str
+    matches_created: int
+    rounds: int
+    byes: int
 
 
 class TournamentRefRequest(BaseModel):
@@ -215,6 +231,9 @@ class TournamentResponse(BaseModel):
     best_of: int
     max_teams: int
     is_shared_to_central: bool
+    # The shareable join code the admin hands to players (they redeem it in the
+    # desktop client). Surfaced only to the service-token bot, never to users.
+    join_code: str | None = None
 
 
 class RegistrationResponse(BaseModel):
@@ -238,6 +257,7 @@ def _tournament_response(t: Tournament) -> TournamentResponse:
         best_of=t.best_of,
         max_teams=t.max_teams,
         is_shared_to_central=t.is_shared_to_central,
+        join_code=t.join_code,
     )
 
 
@@ -558,16 +578,28 @@ async def create_tournament(body: TournamentCreateRequest) -> TournamentResponse
 async def join_tournament(body: TournamentJoinRequest) -> RegistrationResponse:
     async with SessionLocal() as session, session.begin():
         try:
-            reg = await bridge.join_tournament(
+            _tournament, reg = await bridge.join_tournament_by_ref(
                 session,
                 ctx=body.ctx.to_ctx(),
-                tournament_id=body.tournament_id,
-                team_id=body.team_id,
+                tournament_ref=body.tournament,
+                team_ref=body.team,
             )
         except guilds_service.GuildNotOnboardedError as exc:
             raise _guild_not_onboarded(exc) from exc
+        except tournaments_service.AmbiguousTournamentError as exc:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail="more than one tournament has that name; use the exact id",
+            ) from exc
+        except teams_service.AmbiguousTeamError as exc:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail="more than one team has that name; use the exact team id",
+            ) from exc
         except tournaments_service.TournamentNotFoundError as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="tournament not found") from exc
+        except teams_service.TeamNotFoundError as exc:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="team not found") from exc
         except tournaments_service.TournamentFullError as exc:
             raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
         except (
@@ -576,6 +608,74 @@ async def join_tournament(body: TournamentJoinRequest) -> RegistrationResponse:
         ) as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return _registration_response(reg)
+
+
+@router.post(
+    "/tournaments/check-in",
+    response_model=RegistrationResponse,
+    summary="Check a team in to a tournament (service-auth)",
+)
+async def check_in_tournament(body: TournamentJoinRequest) -> RegistrationResponse:
+    async with SessionLocal() as session, session.begin():
+        try:
+            _t, reg = await bridge.check_in_team(
+                session,
+                ctx=body.ctx.to_ctx(),
+                tournament_ref=body.tournament,
+                team_ref=body.team,
+            )
+        except guilds_service.GuildNotOnboardedError as exc:
+            raise _guild_not_onboarded(exc) from exc
+        except tournaments_service.AmbiguousTournamentError as exc:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, detail="ambiguous tournament name; use the id"
+            ) from exc
+        except teams_service.AmbiguousTeamError as exc:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, detail="ambiguous team name; use the id"
+            ) from exc
+        except (
+            tournaments_service.TournamentNotFoundError,
+            teams_service.TeamNotFoundError,
+        ) as exc:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="not found") from exc
+        except tournaments_service.InvalidStateError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return _registration_response(reg)
+
+
+@router.post(
+    "/tournaments/start",
+    response_model=StartResponse,
+    summary="Generate the bracket + start a tournament (guild_admin; service-auth)",
+)
+async def start_tournament(body: TournamentStartRequest) -> StartResponse:
+    async with SessionLocal() as session, session.begin():
+        try:
+            _t, result = await bridge.start_tournament(
+                session, ctx=body.ctx.to_ctx(), tournament_ref=body.tournament
+            )
+        except guilds_service.GuildNotOnboardedError as exc:
+            raise _guild_not_onboarded(exc) from exc
+        except guilds_service.NotGuildAdminError as exc:
+            raise _not_admin(exc) from exc
+        except tournaments_service.AmbiguousTournamentError as exc:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, detail="ambiguous tournament name; use the id"
+            ) from exc
+        except tournaments_service.TournamentNotFoundError as exc:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="tournament not found") from exc
+        except (
+            tournaments_service.NotEnoughTeamsError,
+            tournaments_service.InvalidStateError,
+        ) as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return StartResponse(
+        tournament_id=result.tournament_id,
+        matches_created=result.matches_created,
+        rounds=result.rounds,
+        byes=result.byes,
+    )
 
 
 @router.post(

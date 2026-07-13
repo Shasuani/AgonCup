@@ -17,6 +17,7 @@ ownership to the authenticated principal in the query.
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 from typing import Annotated, Protocol
 
@@ -244,6 +245,47 @@ async def my_accounts(
         )
         for a in rows
     ]
+
+
+@router.delete(
+    "/me/{account_id}",
+    response_model=MyAccountResponse,
+    summary="Unlink (unregister) one of the authenticated user's own Riot accounts",
+)
+async def unlink_my_account(
+    account_id: str,
+    principal: Annotated[Principal, Depends(get_current_principal)],
+) -> MyAccountResponse:
+    """Remove one of the caller's own linked accounts by id (the "unregister" button).
+
+    Self-service: scoped to the bearer, so a principal can only delete their own
+    account. ``RiotAccount`` is GLOBAL (not guild-RLS), so this runs on a plain
+    ``SessionLocal``; deleting the row is referentially safe (history keyed on the
+    PUUID string survives) and the player can re-link later.
+    """
+    try:
+        uuid.UUID(account_id)  # malformed id → 404 (never a raw DB cast error/500)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="account not linked"
+        ) from exc
+    try:
+        async with SessionLocal() as session, session.begin():
+            removed = await service.unlink_account_by_id(
+                session, user_id=principal.user_id, account_id=account_id
+            )
+    except service.AccountNotLinked as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="account not linked"
+        ) from exc
+    return MyAccountResponse(
+        account_id=removed.account_id,
+        game_name=removed.game_name,
+        tag_line=removed.tag_line,
+        region=removed.region,
+        verified=removed.verified,
+        rank_text=removed.rank_text,
+    )
 
 
 @router.get(

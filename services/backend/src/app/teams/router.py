@@ -37,7 +37,9 @@ _CAPTAIN = require_tenant_role(UserGuildRoleName.CAPTAIN, UserGuildRoleName.GUIL
 # ---------------------------------------------------------------------------
 class CreateTeamRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
-    captain_user_id: uuid.UUID
+    # Optional: the desktop client omits this and the acting principal becomes the
+    # captain. The Discord/admin path may still name a captain explicitly.
+    captain_user_id: uuid.UUID | None = None
 
 
 class TeamResponse(BaseModel):
@@ -45,6 +47,21 @@ class TeamResponse(BaseModel):
     name: str
     captain_user_id: str
     guild_id: str
+
+
+class CreatedTeamResponse(TeamResponse):
+    """Create result — carries the ``join_code`` the captain shares with players."""
+
+    join_code: str
+
+
+class JoinCodeResponse(BaseModel):
+    team_id: str
+    join_code: str
+
+
+class JoinByCodeRequest(BaseModel):
+    code: str = Field(min_length=1, max_length=32)
 
 
 class AddMemberRequest(BaseModel):
@@ -86,13 +103,18 @@ def _member_response(m: TeamMember) -> TeamMemberResponse:
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
-@router.post("", response_model=TeamResponse, summary="Create a team (captain)")
+@router.post("", response_model=CreatedTeamResponse, summary="Create a team (captain)")
 async def create_team(
     body: CreateTeamRequest,
+    principal: Annotated[Principal, Depends(get_current_principal)],
     session: Annotated[AsyncSession, Depends(_CAPTAIN)],
-) -> TeamResponse:
-    team = await service.create_team(session, name=body.name, captain_user_id=body.captain_user_id)
-    return _to_response(team)
+) -> CreatedTeamResponse:
+    # The desktop client omits captain_user_id → the acting principal captains the
+    # team they just created (the client-first "team leader" flow, PLAN.md §3.1).
+    captain_id = body.captain_user_id or uuid.UUID(principal.user_id)
+    team = await service.create_team(session, name=body.name, captain_user_id=captain_id)
+    base = _to_response(team)
+    return CreatedTeamResponse(**base.model_dump(), join_code=team.join_code or "")
 
 
 @router.get("", response_model=list[TeamResponse], summary="List teams in this guild")
@@ -100,6 +122,25 @@ async def list_teams(
     session: Annotated[AsyncSession, Depends(get_tenant_session)],
 ) -> list[TeamResponse]:
     return [_to_response(t) for t in await service.list_teams(session)]
+
+
+@router.post(
+    "/join-by-code",
+    response_model=TeamResponse,
+    summary="Join a team by its join code",
+)
+async def join_by_code(
+    body: JoinByCodeRequest,
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    session: Annotated[AsyncSession, Depends(get_tenant_session)],
+) -> TeamResponse:
+    try:
+        team, _ = await service.join_by_code(
+            session, code=body.code, user_id=uuid.UUID(principal.user_id)
+        )
+    except service.InvalidJoinCodeError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="invalid join code") from exc
+    return _to_response(team)
 
 
 @router.get("/{team_id}", response_model=TeamResponse, summary="Get a team")
@@ -111,6 +152,31 @@ async def get_team(
         return _to_response(await service.get_team(session, team_id=team_id))
     except service.TeamNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="team not found") from exc
+
+
+@router.get(
+    "/{team_id}/join-code",
+    response_model=JoinCodeResponse,
+    summary="Get a team's join code (captain of that team, or guild_admin)",
+)
+async def get_join_code(
+    team_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    session: Annotated[AsyncSession, Depends(get_tenant_session)],
+) -> JoinCodeResponse:
+    try:
+        team = await service.get_team(session, team_id=team_id)
+    except service.TeamNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="team not found") from exc
+    is_captain = str(team.captain_user_id) == principal.user_id
+    is_admin = (
+        principal.is_platform_operator or UserGuildRoleName.GUILD_ADMIN.value in principal.roles
+    )
+    if not (is_captain or is_admin):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, detail="only the team captain can read the join code"
+        )
+    return JoinCodeResponse(team_id=str(team.id), join_code=team.join_code or "")
 
 
 @router.get(

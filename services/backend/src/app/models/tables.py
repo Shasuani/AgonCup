@@ -266,6 +266,10 @@ class Team(GuildScoped, TimestampMixin, Base):
     captain_user_id: Mapped[uuid.UUID] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
+    # Shareable capability: the captain hands this to players so they can join the
+    # team from the desktop client (PLAN.md §3.1). Redeemed only under the acting
+    # guild (RLS), so it cannot cross tenants. Unique; NULL only for legacy rows.
+    join_code: Mapped[str | None] = mapped_column(Text, nullable=True, unique=True)
 
 
 class TeamMember(Base):
@@ -334,6 +338,10 @@ class Tournament(GuildScoped, Base):
     is_shared_to_central: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=false()
     )
+    # Shareable capability the admin mints on the bot and hands to players; they
+    # redeem it in the desktop client to enrol (PLAN.md §3.1). Redeemed only under
+    # the acting guild (RLS). Unique; NULL only for legacy rows.
+    join_code: Mapped[str | None] = mapped_column(Text, nullable=True, unique=True)
     ruleset_json: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
@@ -366,6 +374,42 @@ class Registration(GuildScoped, Base):
         nullable=False,
         server_default=RegistrationStatus.PENDING.value,
     )
+
+
+class TournamentParticipant(GuildScoped, Base):
+    """A user enrolled into a tournament via its join code (PLAN.md §3.1).
+
+    Redeeming a tournament's ``join_code`` from the desktop client creates one of
+    these (``team_id`` NULL = free agent). Joining/forming a team later fills
+    ``team_id``. Guild-scoped (RLS) + a same-guild composite FK to the tournament,
+    so a participant can only ever reference a same-guild tournament — cross-server
+    participation is structurally impossible. ``(tournament_id, user_id)`` is unique
+    so redeeming the same code twice is idempotent, not a duplicate.
+    """
+
+    __tablename__ = "tournament_participants"
+    __table_args__ = (
+        UniqueConstraint(
+            "tournament_id", "user_id", name="uq_tournament_participants_tournament_user"
+        ),
+        ForeignKeyConstraint(
+            ["tournament_id", "guild_id"],
+            ["tournaments.id", "tournaments.guild_id"],
+            name="fk_tournament_participants_tournament_guild",
+            ondelete="CASCADE",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    tournament_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # The team this participant ended up on (NULL = free agent). Plain column (the
+    # team membership itself is the source of truth via team_members); this is a
+    # convenience denormalization for the "my tournaments" view.
+    team_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = created_at_col()
 
 
 class Match(GuildScoped, Base):
@@ -697,6 +741,7 @@ GUILD_ISOLATED_TABLES: tuple[str, ...] = (
     "teams",
     "team_members",
     "tournaments",
+    "tournament_participants",
     "registrations",
     "matches",
     "match_lobbies",

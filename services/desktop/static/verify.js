@@ -200,6 +200,8 @@
       var result = await window.lol.pair(code, deviceLabel);
       if (result && result.ok) {
         setStatus(pairStatus, "ok", "Signed in! Now link your League account.");
+        // Reveal the top-level nav + live-presence bell (owned by app.js).
+        if (window.lolNav) window.lolNav.setSignedIn(true);
         showVerify();
         if (result.account && result.account.linked && result.account.verified) {
           addLinkedAccount(result.account);

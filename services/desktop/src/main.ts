@@ -45,6 +45,10 @@ import { checkLcuIdentity, type IdentityCheckResult } from "./identity/identityC
 import { readCurrentSummoner } from "./lcu/readSummoner.js";
 import { verifyDesktop, type VerifyResult } from "./lcu/verify.js";
 import { listMyAccounts, type ListAccountsResult } from "./accounts/listAccounts.js";
+import { unlinkAccount } from "./accounts/unlinkAccount.js";
+import { joinTournamentByCode, listMyTournaments } from "./tournaments/tournaments.js";
+import { createTeam, getTeamJoinCode, joinTeamByCode, listTeamMembers } from "./teams/teams.js";
+import { getPresence } from "./presence/presence.js";
 import {
   pairDesktop,
   refreshSession,
@@ -608,6 +612,69 @@ async function bootstrap(): Promise<void> {
     }
     return result;
   });
+
+  // Run an authenticated backend call with the current session: on a 401,
+  // silently refresh once and retry (mirrors lol:verify / lol:list-accounts). An
+  // unrecoverable 401 clears the session and notifies the renderer to re-pair.
+  const withSession = async <T extends { ok: boolean; status?: number }>(
+    call: (accessToken: string) => Promise<T>,
+  ): Promise<T | { ok: false; status: number; detail: string }> => {
+    const active = session;
+    if (active === null) {
+      return { ok: false, status: 401, detail: "Not signed in." };
+    }
+    let result = await call(active.accessToken);
+    if (!result.ok && result.status === 401) {
+      if (await active.refresh()) {
+        result = await call(active.accessToken);
+      } else {
+        session = null;
+        sendToRenderer("lol:auth-lost", {});
+        return { ok: false, status: 401, detail: "Session expired." };
+      }
+    }
+    return result;
+  };
+
+  // The signed-in user's tournaments + join-by-code.
+  ipcMain.handle("lol:tournaments-mine", () =>
+    withSession((t) => listMyTournaments({ accessToken: t }, { backendUrl: backendBaseUrl() })),
+  );
+  ipcMain.handle("lol:tournament-join", (_event, args: { code: string }) =>
+    withSession((t) =>
+      joinTournamentByCode({ accessToken: t, code: args.code }, { backendUrl: backendBaseUrl() }),
+    ),
+  );
+
+  // Teams: create (captain + join code), join-by-code, roster, captain join code.
+  ipcMain.handle("lol:team-create", (_event, args: { name: string }) =>
+    withSession((t) => createTeam({ accessToken: t, name: args.name }, { backendUrl: backendBaseUrl() })),
+  );
+  ipcMain.handle("lol:team-join", (_event, args: { code: string }) =>
+    withSession((t) => joinTeamByCode({ accessToken: t, code: args.code }, { backendUrl: backendBaseUrl() })),
+  );
+  ipcMain.handle("lol:team-members", (_event, args: { teamId: string }) =>
+    withSession((t) =>
+      listTeamMembers({ accessToken: t, teamId: args.teamId }, { backendUrl: backendBaseUrl() }),
+    ),
+  );
+  ipcMain.handle("lol:team-code", (_event, args: { teamId: string }) =>
+    withSession((t) =>
+      getTeamJoinCode({ accessToken: t, teamId: args.teamId }, { backendUrl: backendBaseUrl() }),
+    ),
+  );
+
+  // Unregister one linked Riot account.
+  ipcMain.handle("lol:account-unlink", (_event, args: { accountId: string }) =>
+    withSession((t) =>
+      unlinkAccount({ accessToken: t, accountId: args.accountId }, { backendUrl: backendBaseUrl() }),
+    ),
+  );
+
+  // Global live presence (bell badge + panel).
+  ipcMain.handle("lol:presence", () =>
+    withSession((t) => getPresence({ accessToken: t }, { backendUrl: backendBaseUrl() })),
+  );
 
   // --- LCU reachability poller (3-5s) -> renderer badge --------------------- //
   const poller = new LcuStatusPoller({

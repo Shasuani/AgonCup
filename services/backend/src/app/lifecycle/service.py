@@ -61,6 +61,7 @@ from app.models.tables import (
     Team,
     TeamMember,
     Tournament,
+    TournamentParticipant,
     UserGuildRole,
 )
 
@@ -83,6 +84,7 @@ _PURGE_ORDER: tuple[Any, ...] = (
     MatchLobby,
     Match,
     Registration,
+    TournamentParticipant,
     Tournament,
     TeamMember,
     Team,

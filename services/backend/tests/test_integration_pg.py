@@ -312,3 +312,55 @@ async def test_cross_guild_row_isolation_tournaments_and_teams() -> None:
     finally:
         await owner_engine.dispose()
         await app_engine.dispose()
+
+
+async def test_cross_guild_row_isolation_tournament_participants() -> None:
+    """(4) The new ``tournament_participants`` pool is under the same
+    ``guild_isolation`` policy: a user enrolled in guild A's tournament is invisible
+    to tenant B, and an UNSET ``app.current_guild`` fails closed (PLAN.md §3.1)."""
+    owner_engine = create_async_engine(OWNER_URL)
+    app_engine = create_async_engine(APP_URL)
+    try:
+        async with owner_engine.begin() as owner:
+            g_a = await _seed_guild(owner, 940001)
+            g_b = await _seed_guild(owner, 940002)
+            # Enrol each guild's admin into its own tournament (over the owner conn).
+            for g in (g_a, g_b):
+                await owner.execute(
+                    text(
+                        "INSERT INTO tournament_participants "
+                        "(tournament_id, user_id, guild_id) VALUES (:t, :u, :g)"
+                    ),
+                    {"t": g.tournament_id, "u": g.admin_user_id, "g": g.guild_id},
+                )
+
+        async with app_engine.connect() as conn:
+            # Tenant A sees only A's participant row.
+            async with conn.begin():
+                await _set_current_guild(conn, g_a.guild_id)
+                rows = (
+                    (await conn.execute(text("SELECT tournament_id FROM tournament_participants")))
+                    .scalars()
+                    .all()
+                )
+                assert rows == [g_a.tournament_id]
+
+            # Tenant B: the mirror image.
+            async with conn.begin():
+                await _set_current_guild(conn, g_b.guild_id)
+                rows = (
+                    (await conn.execute(text("SELECT tournament_id FROM tournament_participants")))
+                    .scalars()
+                    .all()
+                )
+                assert rows == [g_b.tournament_id]
+
+            # Fail closed: no acting guild → zero rows.
+            async with conn.begin():
+                count = (
+                    await conn.execute(text("SELECT count(*) FROM tournament_participants"))
+                ).scalar_one()
+                assert count == 0
+    finally:
+        await owner_engine.dispose()
+        await app_engine.dispose()

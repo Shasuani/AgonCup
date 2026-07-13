@@ -27,10 +27,11 @@ from lol_schemas.enums import (
     TournamentFormat,
     TournamentStatus,
 )
-from sqlalchemy import func, select, text
+from sqlalchemy import String, cast, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Match, Registration, Team, Tournament
+from app.joincodes import generate_join_code, normalize_join_code
+from app.models import Match, Registration, Team, Tournament, TournamentParticipant
 
 MAX_TEAMS_HARD_CAP = 16
 
@@ -60,6 +61,14 @@ class NotEnoughTeamsError(TournamentError):
 
 class InvalidStateError(TournamentError):
     """The tournament is not in a state that permits the requested transition."""
+
+
+class AmbiguousTournamentError(TournamentError):
+    """More than one tournament in the acting guild shares that name — use the id."""
+
+
+class InvalidJoinCodeError(TournamentError):
+    """No tournament in the acting guild has that join code (bad/foreign code)."""
 
 
 async def _current_guild(session: AsyncSession) -> uuid.UUID:
@@ -141,6 +150,7 @@ async def create_tournament(
         best_of=best_of,
         max_teams=max_teams,
         status=TournamentStatus.DRAFT,
+        join_code=generate_join_code(),
         ruleset_json=ruleset or {},
     )
     session.add(tournament)
@@ -158,8 +168,141 @@ async def get_tournament(session: AsyncSession, *, tournament_id: uuid.UUID) -> 
     return t
 
 
+async def get_tournament_by_name(session: AsyncSession, *, name: str) -> Tournament:
+    """Resolve a tournament by display name within the acting guild (RLS-scoped).
+
+    Case-insensitive convenience for the Discord flow so admins/captains never
+    paste a UUID. No match -> :class:`TournamentNotFoundError`; a name shared by
+    more than one tournament -> :class:`AmbiguousTournamentError` (use the id).
+    """
+    rows = (
+        (
+            await session.execute(
+                select(Tournament).where(func.lower(Tournament.name) == name.strip().lower())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not rows:
+        raise TournamentNotFoundError(name)
+    if len(rows) > 1:
+        raise AmbiguousTournamentError(name)
+    return rows[0]
+
+
+def _looks_like_id_prefix(ref: str) -> bool:
+    """True if ``ref`` is a short hex id prefix (e.g. ``b00cc7da``) — >=4 hex chars."""
+    r = ref.strip().lower()
+    return len(r) >= 4 and all(c in "0123456789abcdef" for c in r)
+
+
+async def get_tournament_by_id_prefix(session: AsyncSession, *, prefix: str) -> Tournament:
+    """Resolve a tournament by the short id prefix shown to users (RLS-scoped)."""
+    p = prefix.strip().lower()
+    rows = (
+        (await session.execute(select(Tournament).where(cast(Tournament.id, String).like(p + "%"))))
+        .scalars()
+        .all()
+    )
+    if not rows:
+        raise TournamentNotFoundError(prefix)
+    if len(rows) > 1:
+        raise AmbiguousTournamentError(prefix)
+    return rows[0]
+
+
+async def resolve_tournament_ref(session: AsyncSession, *, ref: str) -> Tournament:
+    """Resolve a tournament from a full id, a name, OR a short id prefix.
+
+    Precedence: exact UUID -> exact name -> short hex-id prefix.
+    """
+    ref = ref.strip()
+    try:
+        return await get_tournament(session, tournament_id=uuid.UUID(ref))
+    except ValueError:
+        pass
+    try:
+        return await get_tournament_by_name(session, name=ref)
+    except TournamentNotFoundError:
+        if _looks_like_id_prefix(ref):
+            return await get_tournament_by_id_prefix(session, prefix=ref)
+        raise
+
+
 async def list_tournaments(session: AsyncSession) -> list[Tournament]:
     return list((await session.execute(select(Tournament))).scalars().all())
+
+
+async def get_tournament_by_code(session: AsyncSession, *, code: str) -> Tournament:
+    """Resolve a tournament by its join code within the acting guild (RLS-scoped).
+
+    The code is normalized (upper-cased, separators dropped) before lookup so a
+    hand-typed ``t-abcd 2345`` resolves. A code that belongs to another guild is
+    invisible under RLS and therefore reads as invalid — cross-server join is
+    structurally impossible. No match -> :class:`InvalidJoinCodeError`.
+    """
+    normalized = normalize_join_code(code)
+    if not normalized:
+        raise InvalidJoinCodeError("empty code")
+    t = (
+        await session.execute(select(Tournament).where(Tournament.join_code == normalized))
+    ).scalar_one_or_none()
+    if t is None:
+        raise InvalidJoinCodeError(normalized)
+    return t
+
+
+async def join_by_code(
+    session: AsyncSession, *, code: str, user_id: uuid.UUID
+) -> tuple[Tournament, TournamentParticipant]:
+    """Enrol the acting user into a tournament by its join code (idempotent).
+
+    Redeeming twice returns the existing participant row rather than raising (the
+    ``(tournament_id, user_id)`` unique constraint would reject a second insert
+    anyway). Registration must be open (DRAFT/OPEN) — a running/finished
+    tournament rejects new participants with :class:`RegistrationClosedError`.
+    """
+    tournament = await get_tournament_by_code(session, code=code)
+    if tournament.status not in (TournamentStatus.OPEN, TournamentStatus.DRAFT):
+        raise RegistrationClosedError(tournament.status.value)
+
+    existing = (
+        await session.execute(
+            select(TournamentParticipant).where(
+                TournamentParticipant.tournament_id == tournament.id,
+                TournamentParticipant.user_id == user_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return tournament, existing
+
+    guild_id = await _current_guild(session)
+    participant = TournamentParticipant(
+        guild_id=guild_id,
+        tournament_id=tournament.id,
+        user_id=user_id,
+    )
+    session.add(participant)
+    await session.flush()
+    return tournament, participant
+
+
+async def list_my_tournaments(session: AsyncSession, *, user_id: uuid.UUID) -> list[Tournament]:
+    """List tournaments the acting user has enrolled in (RLS-scoped to the guild)."""
+    rows = (
+        await session.execute(
+            select(Tournament)
+            .join(
+                TournamentParticipant,
+                TournamentParticipant.tournament_id == Tournament.id,
+            )
+            .where(TournamentParticipant.user_id == user_id)
+            .order_by(Tournament.created_at.desc())
+        )
+    ).scalars()
+    return list(rows)
 
 
 async def register_team(
@@ -246,7 +389,14 @@ async def start_tournament(session: AsyncSession, *, tournament_id: uuid.UUID) -
     finds it RUNNING and raises InvalidStateError rather than double-creating.
     """
     tournament = await get_tournament(session, tournament_id=tournament_id)
-    if tournament.status not in (TournamentStatus.OPEN, TournamentStatus.CHECK_IN):
+    # DRAFT/OPEN/CHECK_IN are all startable: registration is allowed in DRAFT (see
+    # register_team), so a draft with >=2 checked-in teams can go straight to a
+    # bracket. RUNNING/COMPLETED/CANCELLED cannot restart (no double-bracket).
+    if tournament.status not in (
+        TournamentStatus.DRAFT,
+        TournamentStatus.OPEN,
+        TournamentStatus.CHECK_IN,
+    ):
         raise InvalidStateError(f"cannot start from state {tournament.status.value}")
 
     seeds = await _seeded_team_ids(session, tournament_id)

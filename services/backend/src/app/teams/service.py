@@ -26,9 +26,10 @@ import uuid
 from dataclasses import dataclass
 
 from lol_schemas.enums import TeamMemberRole
-from sqlalchemy import func, select, text
+from sqlalchemy import String, cast, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.joincodes import generate_join_code, normalize_join_code
 from app.models import Team, TeamMember
 
 # Roles a member may be *added* with (the captain is created implicitly, never
@@ -62,6 +63,10 @@ class CaptainProtectedError(TeamError):
 
 class AmbiguousTeamError(TeamError):
     """More than one team in the acting guild shares that name — use the id."""
+
+
+class InvalidJoinCodeError(TeamError):
+    """No team in the acting guild has that join code (bad/foreign code)."""
 
 
 async def _current_guild(session: AsyncSession) -> uuid.UUID:
@@ -150,7 +155,12 @@ async def create_team(session: AsyncSession, *, name: str, captain_user_id: uuid
     same-guild invariant).
     """
     guild_id = await _current_guild(session)
-    team = Team(guild_id=guild_id, name=name, captain_user_id=captain_user_id)
+    team = Team(
+        guild_id=guild_id,
+        name=name,
+        captain_user_id=captain_user_id,
+        join_code=generate_join_code(),
+    )
     session.add(team)
     await session.flush()  # assign team.id before the membership row references it
     session.add(
@@ -193,8 +203,95 @@ async def get_team_by_name(session: AsyncSession, *, name: str) -> Team:
     return rows[0]
 
 
+def _looks_like_id_prefix(ref: str) -> bool:
+    """True if ``ref`` is a short hex id prefix (e.g. ``b00cc7da``) — >=4 hex chars."""
+    r = ref.strip().lower()
+    return len(r) >= 4 and all(c in "0123456789abcdef" for c in r)
+
+
+async def get_team_by_id_prefix(session: AsyncSession, *, prefix: str) -> Team:
+    """Resolve a team by the short id prefix shown to users (RLS-scoped).
+
+    Matches a team whose full UUID starts with ``prefix`` (the first 8 hex chars we
+    display). No match -> :class:`TeamNotFoundError`; a prefix shared by more than
+    one team -> :class:`AmbiguousTeamError`.
+    """
+    p = prefix.strip().lower()
+    rows = (
+        (await session.execute(select(Team).where(cast(Team.id, String).like(p + "%"))))
+        .scalars()
+        .all()
+    )
+    if not rows:
+        raise TeamNotFoundError(prefix)
+    if len(rows) > 1:
+        raise AmbiguousTeamError(prefix)
+    return rows[0]
+
+
+async def resolve_team_ref(session: AsyncSession, *, ref: str) -> Team:
+    """Resolve a team from a full id, a name, OR a short id prefix (Discord flow).
+
+    Precedence: exact UUID -> exact name -> short hex-id prefix. Ambiguity on a name
+    or prefix propagates so the user can disambiguate with the exact id.
+    """
+    ref = ref.strip()
+    try:
+        return await get_team(session, team_id=uuid.UUID(ref))
+    except ValueError:
+        pass
+    try:
+        return await get_team_by_name(session, name=ref)
+    except TeamNotFoundError:
+        if _looks_like_id_prefix(ref):
+            return await get_team_by_id_prefix(session, prefix=ref)
+        raise
+
+
 async def list_teams(session: AsyncSession) -> list[Team]:
     return list((await session.execute(select(Team))).scalars().all())
+
+
+async def get_team_by_code(session: AsyncSession, *, code: str) -> Team:
+    """Resolve a team by its join code within the acting guild (RLS-scoped).
+
+    Normalizes the code (upper-cased, separators dropped). A code that belongs to
+    another guild is invisible under RLS and reads as invalid. No match ->
+    :class:`InvalidJoinCodeError`.
+    """
+    normalized = normalize_join_code(code)
+    if not normalized:
+        raise InvalidJoinCodeError("empty code")
+    team = (
+        await session.execute(select(Team).where(Team.join_code == normalized))
+    ).scalar_one_or_none()
+    if team is None:
+        raise InvalidJoinCodeError(normalized)
+    return team
+
+
+async def join_by_code(
+    session: AsyncSession, *, code: str, user_id: uuid.UUID
+) -> tuple[Team, TeamMember]:
+    """Add the acting user to a team by its join code (idempotent as a PLAYER).
+
+    Redeeming a code you already hold membership for returns the existing row
+    rather than raising :class:`DuplicateMemberError` — a friendly no-op for a
+    double-paste. Captains keep their captain membership (never downgraded).
+    """
+    team = await get_team_by_code(session, code=code)
+    existing_role = await _member_role(session, team_id=team.id, user_id=user_id)
+    if existing_role is not None:
+        member = (
+            await session.execute(
+                select(TeamMember).where(
+                    TeamMember.team_id == team.id, TeamMember.user_id == user_id
+                )
+            )
+        ).scalar_one()
+        return team, member
+    member = await add_member(session, team_id=team.id, user_id=user_id, role=TeamMemberRole.PLAYER)
+    return team, member
 
 
 async def list_members(session: AsyncSession, *, team_id: uuid.UUID) -> list[TeamMember]:

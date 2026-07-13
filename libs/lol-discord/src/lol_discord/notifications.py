@@ -122,13 +122,20 @@ def registration_approved(*, tournament_name: str, team_name: str) -> dict[str, 
 # --------------------------------------------------------------------------- #
 # Teams                                                                        #
 # --------------------------------------------------------------------------- #
-def team_created(*, team_name: str, captain_name: str) -> dict[str, Any]:
-    """A new team was created (PLAN.md §2 Team)."""
+def team_created(
+    *, team_name: str, captain_name: str, team_id: str | None = None
+) -> dict[str, Any]:
+    """A new team was created (PLAN.md §2 Team). Surfaces the ``team_id`` so it can
+    be registered into a tournament (``/tournament join <tournament_id> <team_id>``)."""
+    fields = [_field("Captain", captain_name, inline=True)]
+    if team_id:
+        # Short 8-char id — commands also accept the team name or this short id.
+        fields.append(_field("Team id", f"`{team_id[:8]}` (or use the name)", inline=False))
     return build_embed(
         "Team created",
         f"**{team_name}** is ready to roster up.",
         color=EmbedColor.SUCCESS,
-        fields=[_field("Captain", captain_name, inline=True)],
+        fields=fields,
     )
 
 
@@ -145,13 +152,36 @@ def team_joined(*, team_name: str, member_name: str, member_count: int) -> dict[
 # --------------------------------------------------------------------------- #
 # Tournament lifecycle (PLAN.md §2 TournamentStatus)                           #
 # --------------------------------------------------------------------------- #
-def tournament_created(*, name: str, fmt: str) -> dict[str, Any]:
-    """Tournament drafted/created. ``fmt`` is the bracket format display string."""
+def tournament_created(
+    *,
+    name: str,
+    fmt: str,
+    tournament_id: str | None = None,
+    mode: str | None = None,
+    best_of: int | None = None,
+) -> dict[str, Any]:
+    """Tournament drafted/created. ``fmt`` is the bracket format display string.
+
+    Surfaces the ``tournament_id`` (needed for ``/tournament join``) plus the game
+    mode + series length when the caller has them, so the admin gets everything to
+    run it in one message.
+    """
+    fields = [_field("Format", fmt, inline=True)]
+    if mode:
+        pretty = "1v1 ARAM" if mode == "aram_1v1" else "5v5 Summoner's Rift"
+        fields.append(_field("Mode", pretty, inline=True))
+    if best_of:
+        fields.append(_field("Series", f"Best of {best_of}", inline=True))
+    if tournament_id:
+        # Show the short 8-char id — commands also accept the name or this short id.
+        fields.append(
+            _field("Tournament id", f"`{tournament_id[:8]}` (or use the name)", inline=False)
+        )
     return build_embed(
         "Tournament created",
         f"**{name}** has been created.",
         color=EmbedColor.DEFAULT,
-        fields=[_field("Format", fmt, inline=True)],
+        fields=fields,
     )
 
 

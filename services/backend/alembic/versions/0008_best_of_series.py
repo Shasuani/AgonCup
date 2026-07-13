@@ -28,12 +28,8 @@ def upgrade() -> None:
         "tournaments",
         sa.Column("best_of", sa.Integer(), nullable=False, server_default="1"),
     )
-    op.add_column(
-        "matches", sa.Column("wins_a", sa.Integer(), nullable=False, server_default="0")
-    )
-    op.add_column(
-        "matches", sa.Column("wins_b", sa.Integer(), nullable=False, server_default="0")
-    )
+    op.add_column("matches", sa.Column("wins_a", sa.Integer(), nullable=False, server_default="0"))
+    op.add_column("matches", sa.Column("wins_b", sa.Integer(), nullable=False, server_default="0"))
     op.add_column(
         "matches",
         sa.Column(

@@ -25,6 +25,7 @@ EXPECTED_TABLES = {
     "teams",
     "team_members",
     "tournaments",
+    "tournament_participants",
     "registrations",
     "matches",
     "match_lobbies",

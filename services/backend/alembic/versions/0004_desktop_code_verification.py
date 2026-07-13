@@ -119,15 +119,9 @@ def downgrade() -> None:
     op.drop_index("ix_riot_accounts_origin_guild_id", table_name="riot_accounts")
     op.drop_column("riot_accounts", "origin_guild_id")
 
-    op.drop_index(
-        "ix_verification_attempts_origin_guild_id", table_name="verification_attempts"
-    )
-    op.drop_index(
-        "uq_verification_attempts_code_active", table_name="verification_attempts"
-    )
-    op.drop_constraint(
-        "verify_kind_allowed", "verification_attempts", type_="check"
-    )
+    op.drop_index("ix_verification_attempts_origin_guild_id", table_name="verification_attempts")
+    op.drop_index("uq_verification_attempts_code_active", table_name="verification_attempts")
+    op.drop_constraint("verify_kind_allowed", "verification_attempts", type_="check")
 
     # Revert NOT NULL relaxations (may fail on a populated DB — forward-only).
     op.alter_column("verification_attempts", "nonce", nullable=False)

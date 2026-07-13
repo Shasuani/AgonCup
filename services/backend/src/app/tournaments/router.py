@@ -17,7 +17,12 @@ from lol_schemas.enums import GameMode, TournamentFormat, UserGuildRoleName
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.deps import get_tenant_session, require_tenant_role
+from app.auth.deps import (
+    Principal,
+    get_current_principal,
+    get_tenant_session,
+    require_tenant_role,
+)
 from app.models.tables import Registration, Tournament
 from app.tournaments import service
 
@@ -48,6 +53,21 @@ class TournamentResponse(BaseModel):
     best_of: int
     max_teams: int
     is_shared_to_central: bool
+
+
+class CreatedTournamentResponse(TournamentResponse):
+    """Create result — carries the ``join_code`` the admin hands to players.
+
+    The code is returned ONLY here (and to the bot bridge on create), never in the
+    list/get responses, so possession of the code stays the admin's gate on who
+    can enrol (PLAN.md §3.1).
+    """
+
+    join_code: str
+
+
+class JoinByCodeRequest(BaseModel):
+    code: str = Field(min_length=1, max_length=32)
 
 
 class TeamRef(BaseModel):
@@ -97,11 +117,13 @@ def _reg_response(reg: Registration) -> RegistrationResponse:
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
-@router.post("", response_model=TournamentResponse, summary="Create a tournament (guild_admin)")
+@router.post(
+    "", response_model=CreatedTournamentResponse, summary="Create a tournament (guild_admin)"
+)
 async def create_tournament(
     body: CreateTournamentRequest,
     session: Annotated[AsyncSession, Depends(_ADMIN)],
-) -> TournamentResponse:
+) -> CreatedTournamentResponse:
     try:
         t = await service.create_tournament(
             session,
@@ -114,7 +136,8 @@ async def create_tournament(
         )
     except service.InvalidStateError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    return _to_response(t)
+    base = _to_response(t)
+    return CreatedTournamentResponse(**base.model_dump(), join_code=t.join_code or "")
 
 
 @router.get("", response_model=list[TournamentResponse], summary="List tournaments in this guild")
@@ -122,6 +145,42 @@ async def list_tournaments(
     session: Annotated[AsyncSession, Depends(get_tenant_session)],
 ) -> list[TournamentResponse]:
     return [_to_response(t) for t in await service.list_tournaments(session)]
+
+
+@router.get(
+    "/mine",
+    response_model=list[TournamentResponse],
+    summary="List tournaments the caller has enrolled in",
+)
+async def list_my_tournaments(
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    session: Annotated[AsyncSession, Depends(get_tenant_session)],
+) -> list[TournamentResponse]:
+    rows = await service.list_my_tournaments(session, user_id=uuid.UUID(principal.user_id))
+    return [_to_response(t) for t in rows]
+
+
+@router.post(
+    "/join-by-code",
+    response_model=TournamentResponse,
+    summary="Enrol the caller into a tournament by its join code",
+)
+async def join_by_code(
+    body: JoinByCodeRequest,
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    session: Annotated[AsyncSession, Depends(get_tenant_session)],
+) -> TournamentResponse:
+    try:
+        tournament, _ = await service.join_by_code(
+            session, code=body.code, user_id=uuid.UUID(principal.user_id)
+        )
+    except service.InvalidJoinCodeError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="invalid join code") from exc
+    except service.RegistrationClosedError as exc:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, detail="tournament is not accepting players"
+        ) from exc
+    return _to_response(tournament)
 
 
 @router.get("/{tournament_id}", response_model=TournamentResponse, summary="Get a tournament")

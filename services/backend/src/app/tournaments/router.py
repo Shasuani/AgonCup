@@ -68,6 +68,9 @@ class CreatedTournamentResponse(TournamentResponse):
 
 class JoinByCodeRequest(BaseModel):
     code: str = Field(min_length=1, max_length=32)
+    # Team-mode only: which captained team enrols. Omit when the caller captains a
+    # single team (auto-resolved) or for solo modes (ignored).
+    team_id: uuid.UUID | None = None
 
 
 class TeamRef(BaseModel):
@@ -86,6 +89,22 @@ class StartResponse(BaseModel):
     matches_created: int
     rounds: int
     byes: int
+
+
+class BracketMatchResponse(BaseModel):
+    round: int
+    slot: int
+    team_a_id: str | None
+    team_a_name: str | None
+    team_b_id: str | None
+    team_b_name: str | None
+    winner_team_id: str | None
+    status: str
+
+
+class BracketResponse(BaseModel):
+    tournament: TournamentResponse
+    matches: list[BracketMatchResponse]
 
 
 def _enum_value(v: object) -> str:
@@ -172,7 +191,10 @@ async def join_by_code(
 ) -> TournamentResponse:
     try:
         tournament, _ = await service.join_by_code(
-            session, code=body.code, user_id=uuid.UUID(principal.user_id)
+            session,
+            code=body.code,
+            user_id=uuid.UUID(principal.user_id),
+            team_id=body.team_id,
         )
     except service.InvalidJoinCodeError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="invalid join code") from exc
@@ -180,6 +202,23 @@ async def join_by_code(
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, detail="tournament is not accepting players"
         ) from exc
+    except service.NoCaptainTeamError as exc:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="this is a team tournament — create a team first, then join as its captain",
+        ) from exc
+    except service.AmbiguousCaptainTeamError as exc:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="you captain multiple teams — specify which team_id joins",
+        ) from exc
+    except service.NotTeamCaptainError as exc:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="only the team captain can enrol the team",
+        ) from exc
+    except service.TournamentFullError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="tournament is full") from exc
     return _to_response(tournament)
 
 
@@ -192,6 +231,38 @@ async def get_tournament(
         return _to_response(await service.get_tournament(session, tournament_id=tournament_id))
     except service.TournamentNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="tournament not found") from exc
+
+
+@router.get(
+    "/{tournament_id}/bracket",
+    response_model=BracketResponse,
+    summary="The tournament's bracket (matches with team names)",
+)
+async def get_bracket(
+    tournament_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_tenant_session)],
+) -> BracketResponse:
+    try:
+        tournament = await service.get_tournament(session, tournament_id=tournament_id)
+        matches = await service.get_bracket(session, tournament_id=tournament_id)
+    except service.TournamentNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="tournament not found") from exc
+    return BracketResponse(
+        tournament=_to_response(tournament),
+        matches=[
+            BracketMatchResponse(
+                round=m.round,
+                slot=m.slot,
+                team_a_id=str(m.team_a_id) if m.team_a_id else None,
+                team_a_name=m.team_a_name,
+                team_b_id=str(m.team_b_id) if m.team_b_id else None,
+                team_b_name=m.team_b_name,
+                winner_team_id=str(m.winner_team_id) if m.winner_team_id else None,
+                status=m.status,
+            )
+            for m in matches
+        ],
+    )
 
 
 @router.post(

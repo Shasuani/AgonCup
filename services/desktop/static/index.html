@@ -313,6 +313,42 @@
       .presence-list .meta b { color: var(--text); font-weight: 600; }
       .presence-empty { color: var(--faint); font-family: var(--mono); font-size: 12px; }
 
+      /* ---------------- team join-request notifications (top-left) ---------------- */
+      .join-requests {
+        position: fixed; top: 16px; left: 16px; z-index: 60; width: 300px; max-width: calc(100vw - 32px);
+        padding: 14px 16px; clip-path: var(--chamfer);
+        background: linear-gradient(180deg, var(--panel-2), var(--panel));
+        border: 1px solid var(--line); border-left: 2px solid var(--gold);
+        box-shadow: 0 12px 34px rgba(0,0,0,0.55);
+        animation: rise 0.35s cubic-bezier(0.16,1,0.3,1) both;
+      }
+      .join-requests h3 {
+        margin: 0 0 10px; font-family: var(--mono); font-size: 11px; letter-spacing: 2px;
+        text-transform: uppercase; color: var(--gold-bright);
+      }
+      .jr-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+      .jr-list li {
+        display: flex; align-items: center; gap: 8px; padding: 9px 11px; clip-path: var(--chamfer);
+        background: rgba(200,170,110,0.05); border: 1px solid var(--line-soft); border-left: 2px solid var(--gold-dim);
+      }
+      .jr-list .jr-who { flex: 1; min-width: 0; }
+      .jr-list .jr-name {
+        color: var(--gold-bright); font-weight: 700; font-size: 13px;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
+      .jr-list .jr-team { color: var(--muted); font-family: var(--mono); font-size: 10px; margin-top: 2px; }
+      .jr-btn {
+        appearance: none; cursor: pointer; width: 30px; height: 30px; flex: none;
+        display: grid; place-items: center; font-size: 15px; font-weight: 900; line-height: 1;
+        clip-path: var(--chamfer); border: 1px solid var(--line-soft); background: #05080c;
+        transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+      }
+      .jr-approve { color: #59d98b; border-left: 2px solid #2f7d52; }
+      .jr-approve:hover { background: rgba(89,217,139,0.14); border-color: #59d98b; }
+      .jr-reject { color: #e0654f; border-left: 2px solid #7d3226; }
+      .jr-reject:hover { background: rgba(224,101,79,0.14); border-color: #e0654f; }
+      .jr-btn:disabled { opacity: 0.5; cursor: default; }
+
       /* ---------------- nav tabs ---------------- */
       .nav { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 22px; }
       .nav button {
@@ -339,6 +375,31 @@
         background: rgba(43,212,230,0.06); border: 1px solid var(--line-soft);
       }
       .empty-hint { color: var(--faint); font-family: var(--mono); font-size: 12px; margin: 0; }
+
+      /* Nested roster (expanded inside a "My Teams" row) — indented + cyan spine. */
+      .roster-nested { margin: 12px 0 2px 14px; gap: 6px; }
+      .roster-nested li { border-left-color: var(--cyan-deep); background: rgba(43,212,230,0.04); padding: 9px 12px; }
+      .roster-nested .row-title { color: var(--text); font-size: 13px; }
+
+      /* Bracket (expanded inside a "My tournaments" row) — rounds as columns. */
+      .bracket-panel { margin-top: 12px; color: var(--muted); font-family: var(--mono); font-size: 12px; }
+      .bracket { display: flex; gap: 22px; overflow-x: auto; padding: 6px 2px 10px; align-items: stretch; }
+      .bracket-round { display: flex; flex-direction: column; justify-content: space-around; gap: 12px; min-width: 150px; }
+      .bracket-round-title {
+        font-family: var(--mono); font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase;
+        color: var(--cyan); margin-bottom: 4px; text-align: center;
+      }
+      .bracket-match {
+        clip-path: var(--chamfer); border: 1px solid var(--line-soft); border-left: 2px solid var(--gold-dim);
+        background: linear-gradient(180deg, var(--panel-2), var(--panel)); overflow: hidden;
+      }
+      .bm-team { display: flex; align-items: center; gap: 8px; padding: 8px 11px; }
+      .bm-team + .bm-team { border-top: 1px solid var(--line-soft); }
+      .bm-name { flex: 1; min-width: 0; color: var(--text); font-family: var(--sans, inherit); font-size: 13px;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .bm-win { background: rgba(200,170,110,0.08); }
+      .bm-win .bm-name { color: var(--gold-bright); font-weight: 700; }
+      .bm-check { color: var(--gold); font-weight: 900; font-size: 12px; }
 
       /* ---------------- join-code reveal + copy ---------------- */
       .code-reveal {
@@ -429,6 +490,14 @@
         <p id="presence-empty" class="presence-empty hidden">No one is in a game right now.</p>
       </div>
 
+      <!-- Team join-request notifications (top-left). Auto-shows when a player
+           asks to join a team the signed-in user captains; each row has the
+           applicant's name + approve (✓) / reject (✗). -->
+      <div id="join-requests" class="join-requests hidden" role="region" aria-label="Team join requests">
+        <h3>Join requests</h3>
+        <ul id="jr-list" class="jr-list"></ul>
+      </div>
+
       <section id="screen-onboarding" class="screen">
       <p class="lead">
         Autonomous <b>match runner</b>. Connects per assigned match, drives the custom lobby through your
@@ -511,10 +580,16 @@
           <div class="inner">
             <p class="step">Tournaments — Join</p>
             <h2 id="tour-title">Join a Tournament</h2>
-            <p class="hint">Paste a tournament join code from your organiser and enter to join.</p>
+            <p class="hint">Paste a tournament join code from your organiser. For a 5v5, pick which of your teams enters (solo tournaments ignore this).</p>
             <div class="field">
               <label for="tour-code">Tournament Code</label>
               <input id="tour-code" type="text" autocomplete="off" spellcheck="false" placeholder="Enter code" />
+            </div>
+            <div class="field">
+              <label for="tour-team">Team (5v5 only)</label>
+              <select id="tour-team">
+                <option value="">Auto (my only team / solo)</option>
+              </select>
             </div>
             <button id="tour-join-btn" class="btn" type="button">Join tournament</button>
             <p id="tour-join-status" class="status info" role="status" aria-live="polite"></p>
@@ -535,6 +610,18 @@
 
       <!-- ================= Teams screen ================= -->
       <section id="screen-teams" class="screen hidden" aria-labelledby="team-title">
+        <div class="link-card">
+          <div class="inner">
+            <p class="step">Teams — Yours</p>
+            <h2>My Teams</h2>
+            <p class="hint">Teams you're in. Click a team to expand its members; leave or disband from here.</p>
+            <button id="myteams-refresh-btn" class="btn" type="button">Refresh</button>
+            <ul id="myteams-list" class="data-list" style="margin-top:16px"></ul>
+            <p id="myteams-empty" class="empty-hint hidden">You're not in any team yet. Create one or join with a code below.</p>
+            <p id="myteams-status" class="status info" role="status" aria-live="polite"></p>
+          </div>
+        </div>
+
         <div class="link-card">
           <div class="inner">
             <p class="step">Teams — Create</p>
@@ -567,25 +654,6 @@
             </div>
             <button id="team-join-btn" class="btn" type="button">Join team</button>
             <p id="team-join-status" class="status info" role="status" aria-live="polite"></p>
-          </div>
-        </div>
-
-        <div class="link-card">
-          <div class="inner">
-            <p class="step">Teams — Roster</p>
-            <h2>View a Team</h2>
-            <p class="hint">Enter a team ID to see its roster. If you're the captain, its join code is shown too.</p>
-            <div class="field">
-              <label for="team-id">Team ID</label>
-              <input id="team-id" type="text" autocomplete="off" spellcheck="false" placeholder="Team ID" />
-            </div>
-            <button id="team-view-btn" class="btn" type="button">View team</button>
-            <div id="team-view-code" class="code-reveal hidden" style="margin-top:14px">
-              <span id="team-view-code-value" class="value"></span>
-              <button id="team-view-code-copy" class="copy" type="button">Copy</button>
-            </div>
-            <ul id="team-roster" class="data-list" style="margin-top:14px"></ul>
-            <p id="team-view-status" class="status info" role="status" aria-live="polite"></p>
           </div>
         </div>
       </section>

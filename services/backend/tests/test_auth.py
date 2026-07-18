@@ -523,6 +523,7 @@ def _seed_pair_code(
     discord_user_id: int = 42424242,
     display_name: str = "Chama",
     status_value: str | None = None,
+    origin_guild_id: uuid.UUID | None = None,
 ) -> User:
     """Seed a User + a live ``desktop_code`` VerificationAttempt for it."""
     user = User(discord_user_id=discord_user_id, display_name=display_name)
@@ -534,6 +535,7 @@ def _seed_pair_code(
         verify_kind=accounts_service.VERIFY_KIND_DESKTOP_CODE,
         status=status_value or accounts_service.STATUS_PENDING,
         expires_at=datetime.now(tz=UTC) + accounts_service.VERIFICATION_TTL,
+        origin_guild_id=origin_guild_id,
     )
     attempt.id = uuid.uuid4()
     session.store[VerificationAttempt].append(attempt)
@@ -570,6 +572,62 @@ async def test_desktop_pair_valid_code_mints_session(monkeypatch: pytest.MonkeyP
     # The refresh token persisted the device label.
     refresh_row = session.store[RefreshToken][0]
     assert refresh_row.device_label == "Kostas' MacBook"
+
+
+@pytest.mark.asyncio
+async def test_desktop_pair_grants_player_role_in_origin_guild(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pairing seeds a baseline ``player`` role in the /register origin guild so the
+    session token carries an acting guild (``gid``) — the client-first prerequisite
+    for a member to create a team / join tournaments."""
+    session = FakeSession()
+    origin_guild_id = uuid.uuid4()
+    user = _seed_pair_code(session, code="ABCD2345", origin_guild_id=origin_guild_id)
+    monkeypatch.setattr(auth_router, "SessionLocal", lambda: session)
+
+    resp = await auth_router.desktop_pair(
+        body=auth_router.DesktopPairRequest(code="ABCD2345"),
+        request=_FakePairRequest(),  # type: ignore[arg-type]
+        settings=get_settings(),
+    )
+
+    # A `player` role row now exists for (user, origin guild).
+    roles = session.store[UserGuildRole]
+    assert len(roles) == 1
+    assert roles[0].user_id == user.id
+    assert roles[0].guild_id == origin_guild_id
+    assert roles[0].role == UserGuildRoleName.PLAYER
+    # …and the minted access token carries that guild as its `gid` claim.
+    claims = verify_access_token(resp.access_token)
+    assert claims.guild_id == str(origin_guild_id)
+
+
+@pytest.mark.asyncio
+async def test_desktop_pair_does_not_duplicate_an_existing_role(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the user already holds a role in the origin guild (e.g. guild_admin),
+    pairing does NOT add a second (downgrading) ``player`` row."""
+    session = FakeSession()
+    origin_guild_id = uuid.uuid4()
+    user = _seed_pair_code(session, code="ABCD2345", origin_guild_id=origin_guild_id)
+    existing = UserGuildRole(
+        user_id=user.id, guild_id=origin_guild_id, role=UserGuildRoleName.GUILD_ADMIN
+    )
+    existing.id = uuid.uuid4()
+    session.store[UserGuildRole].append(existing)
+    monkeypatch.setattr(auth_router, "SessionLocal", lambda: session)
+
+    await auth_router.desktop_pair(
+        body=auth_router.DesktopPairRequest(code="ABCD2345"),
+        request=_FakePairRequest(),  # type: ignore[arg-type]
+        settings=get_settings(),
+    )
+
+    roles = session.store[UserGuildRole]
+    assert len(roles) == 1
+    assert roles[0].role == UserGuildRoleName.GUILD_ADMIN
 
 
 @pytest.mark.asyncio

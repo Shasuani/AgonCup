@@ -466,6 +466,36 @@ async def desktop_pair(
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid or expired code"
             )
 
+        # Give the paired player a baseline `player` role in the guild they ran
+        # /register from (``origin_guild_id``) so their session token carries an
+        # acting guild (``gid``) and they can act as a guild member — create a
+        # team, join tournaments. Idempotent (skip if they already hold any role
+        # there, e.g. captain/admin); scoped under RLS by setting the guild GUC
+        # first (mirrors dev-login's role seed).
+        origin_guild_id = attempt.origin_guild_id
+        if origin_guild_id is not None:
+            await session.execute(
+                text("SELECT set_config('app.current_guild', :g, true)"),
+                {"g": str(origin_guild_id)},
+            )
+            has_role = (
+                await session.execute(
+                    select(UserGuildRole.id).where(
+                        UserGuildRole.user_id == attempt.user_id,
+                        UserGuildRole.guild_id == origin_guild_id,
+                    )
+                )
+            ).first()
+            if has_role is None:
+                session.add(
+                    UserGuildRole(
+                        user_id=attempt.user_id,
+                        guild_id=origin_guild_id,
+                        role=UserGuildRoleName.PLAYER,
+                    )
+                )
+                await session.flush()
+
         acting_guild, roles = await _roles_for(session, user_id)
         access = mint_access_token(
             user_id=user_id, guild_id=acting_guild, roles=roles, settings=settings

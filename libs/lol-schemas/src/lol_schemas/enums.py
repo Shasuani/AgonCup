@@ -22,6 +22,19 @@ class TeamMemberRole(StrEnum):
     SUB = "sub"
 
 
+class TeamMemberStatus(StrEnum):
+    """Membership lifecycle (PLAN.md §3.1 team-leader approval flow).
+
+    A player redeems a team join code → a ``pending`` membership request is created
+    and surfaced to the captain, who ``active``-ates it (approve) or it is removed
+    (reject). The captain's own membership is ``active`` from creation. The active
+    roster is ``status == active``; the captain's pending queue is ``status == pending``.
+    """
+
+    PENDING = "pending"
+    ACTIVE = "active"
+
+
 class UserGuildRoleName(StrEnum):
     """Per-(user, guild) authorization role (PLAN.md §3.1 auth, §11 decision 6).
 

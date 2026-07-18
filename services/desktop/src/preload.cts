@@ -127,6 +127,22 @@ export type JoinTournamentBridgeResult =
   | { ok: true; tournament: TournamentBridge }
   | { ok: false; status: number; detail: string };
 
+/** One bracket match (team names resolved). */
+export interface BracketMatchBridge {
+  round: number;
+  slot: number;
+  teamAName: string | null;
+  teamBName: string | null;
+  winnerTeamId: string | null;
+  teamAId: string | null;
+  teamBId: string | null;
+  status: string;
+}
+
+export type BracketBridgeResult =
+  | { ok: true; tournament: TournamentBridge; matches: BracketMatchBridge[] }
+  | { ok: false; status: number; detail: string };
+
 /** A team as `createTeam` returns it (includes the shareable join code). */
 export interface CreatedTeamBridge {
   id: string;
@@ -149,6 +165,7 @@ export interface TeamMemberBridge {
   teamId: string;
   userId: string;
   role: string;
+  displayName: string;
 }
 
 export type CreateTeamBridgeResult =
@@ -165,6 +182,34 @@ export type TeamMembersBridgeResult =
 
 export type TeamJoinCodeBridgeResult =
   | { ok: true; teamId: string; joinCode: string }
+  | { ok: false; status: number; detail: string };
+
+/** One pending join request surfaced to the captain (with the joiner's name). */
+export interface JoinRequestBridge {
+  teamId: string;
+  teamName: string;
+  userId: string;
+  displayName: string;
+}
+
+export type TeamJoinRequestsBridgeResult =
+  | { ok: true; requests: JoinRequestBridge[] }
+  | { ok: false; status: number; detail: string };
+
+export type ActOnRequestBridgeResult =
+  | { ok: true }
+  | { ok: false; status: number; detail: string };
+
+/** A team the signed-in user belongs to, with their role + membership status. */
+export interface MyTeamBridge {
+  teamId: string;
+  name: string;
+  role: string;
+  status: string;
+}
+
+export type MyTeamsBridgeResult =
+  | { ok: true; teams: MyTeamBridge[] }
   | { ok: false; status: number; detail: string };
 
 /** One live match in the presence panel. */
@@ -194,10 +239,14 @@ export interface LolBridge {
   listAccounts(): Promise<ListAccountsBridgeResult>;
   /** Unregister one linked Riot account. */
   unlinkAccount(accountId: string): Promise<UnlinkAccountBridgeResult>;
+  /** Clear the local session (sign out) → next boot / view shows pairing (step 1). */
+  signOut(): Promise<{ ok: boolean }>;
   /** The signed-in user's tournaments. */
   listMyTournaments(): Promise<ListTournamentsBridgeResult>;
-  /** Join a tournament by its code. */
-  joinTournament(code: string): Promise<JoinTournamentBridgeResult>;
+  /** Join a tournament by its code. `teamId` picks the captained team for 5v5. */
+  joinTournament(code: string, teamId?: string): Promise<JoinTournamentBridgeResult>;
+  /** The tournament's bracket (matches with team names). */
+  tournamentBracket(tournamentId: string): Promise<BracketBridgeResult>;
   /** Create a team (acting user becomes captain; response carries the join code). */
   createTeam(name: string): Promise<CreateTeamBridgeResult>;
   /** Join a team by its code. */
@@ -206,6 +255,20 @@ export interface LolBridge {
   teamMembers(teamId: string): Promise<TeamMembersBridgeResult>;
   /** A team's join code (captain-only). */
   teamJoinCode(teamId: string): Promise<TeamJoinCodeBridgeResult>;
+  /** Pending join requests across every team the signed-in user captains. */
+  teamJoinRequests(): Promise<TeamJoinRequestsBridgeResult>;
+  /** Approve a pending join request (captain of that team). */
+  approveJoinRequest(teamId: string, userId: string): Promise<ActOnRequestBridgeResult>;
+  /** Reject a pending join request (captain of that team). */
+  rejectJoinRequest(teamId: string, userId: string): Promise<ActOnRequestBridgeResult>;
+  /** Remove a member from a team (captain of that team). */
+  removeMember(teamId: string, userId: string): Promise<ActOnRequestBridgeResult>;
+  /** Teams the signed-in user belongs to (with their role + status). */
+  myTeams(): Promise<MyTeamsBridgeResult>;
+  /** Leave a team (self-service; captains must transfer/disband first). */
+  leaveTeam(teamId: string): Promise<ActOnRequestBridgeResult>;
+  /** Disband a team you captain (deletes the team + its roster). */
+  deleteTeam(teamId: string): Promise<ActOnRequestBridgeResult>;
   /** Global live presence (who is in a game + which server). */
   presence(): Promise<PresenceBridgeResult>;
   readSummoner(): Promise<ReadSummonerBridgeResult>;
@@ -225,10 +288,13 @@ const bridge: LolBridge = {
     ipcRenderer.invoke("lol:list-accounts") as Promise<ListAccountsBridgeResult>,
   unlinkAccount: (accountId) =>
     ipcRenderer.invoke("lol:account-unlink", { accountId }) as Promise<UnlinkAccountBridgeResult>,
+  signOut: () => ipcRenderer.invoke("lol:sign-out") as Promise<{ ok: boolean }>,
   listMyTournaments: () =>
     ipcRenderer.invoke("lol:tournaments-mine") as Promise<ListTournamentsBridgeResult>,
-  joinTournament: (code) =>
-    ipcRenderer.invoke("lol:tournament-join", { code }) as Promise<JoinTournamentBridgeResult>,
+  joinTournament: (code, teamId) =>
+    ipcRenderer.invoke("lol:tournament-join", { code, teamId }) as Promise<JoinTournamentBridgeResult>,
+  tournamentBracket: (tournamentId) =>
+    ipcRenderer.invoke("lol:tournament-bracket", { tournamentId }) as Promise<BracketBridgeResult>,
   createTeam: (name) =>
     ipcRenderer.invoke("lol:team-create", { name }) as Promise<CreateTeamBridgeResult>,
   joinTeam: (code) =>
@@ -237,6 +303,19 @@ const bridge: LolBridge = {
     ipcRenderer.invoke("lol:team-members", { teamId }) as Promise<TeamMembersBridgeResult>,
   teamJoinCode: (teamId) =>
     ipcRenderer.invoke("lol:team-code", { teamId }) as Promise<TeamJoinCodeBridgeResult>,
+  teamJoinRequests: () =>
+    ipcRenderer.invoke("lol:team-join-requests") as Promise<TeamJoinRequestsBridgeResult>,
+  approveJoinRequest: (teamId, userId) =>
+    ipcRenderer.invoke("lol:team-approve", { teamId, userId }) as Promise<ActOnRequestBridgeResult>,
+  rejectJoinRequest: (teamId, userId) =>
+    ipcRenderer.invoke("lol:team-reject", { teamId, userId }) as Promise<ActOnRequestBridgeResult>,
+  removeMember: (teamId, userId) =>
+    ipcRenderer.invoke("lol:team-remove-member", { teamId, userId }) as Promise<ActOnRequestBridgeResult>,
+  myTeams: () => ipcRenderer.invoke("lol:teams-mine") as Promise<MyTeamsBridgeResult>,
+  leaveTeam: (teamId) =>
+    ipcRenderer.invoke("lol:team-leave", { teamId }) as Promise<ActOnRequestBridgeResult>,
+  deleteTeam: (teamId) =>
+    ipcRenderer.invoke("lol:team-delete", { teamId }) as Promise<ActOnRequestBridgeResult>,
   presence: () => ipcRenderer.invoke("lol:presence") as Promise<PresenceBridgeResult>,
   readSummoner: () => ipcRenderer.invoke("lol:read-summoner") as Promise<ReadSummonerBridgeResult>,
   onLcuStatus: (callback) => {

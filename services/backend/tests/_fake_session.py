@@ -20,6 +20,7 @@ from app.models import (
     Team,
     TeamMember,
     Tournament,
+    TournamentParticipant,
     User,
     UserGuildRole,
     VerificationAttempt,
@@ -33,6 +34,7 @@ _MODELS: tuple[type, ...] = (
     Team,
     TeamMember,
     Tournament,
+    TournamentParticipant,
     Registration,
     RiotAccount,
     VerificationAttempt,
@@ -67,6 +69,10 @@ class _Scalars:
 
     def all(self) -> list[Any]:
         return self.rows
+
+    def __iter__(self) -> Any:
+        # Real SQLAlchemy ScalarResult is iterable (e.g. ``list(...scalars())``).
+        return iter(self.rows)
 
 
 class _FakeTxn:

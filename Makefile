@@ -41,7 +41,7 @@ PY_SERVICE_DIRS := \
 PY_PKG_DIRS := $(PY_LIB_DIRS) $(PY_SERVICE_DIRS)
 
 .PHONY: help up down build-bases test test-db lint format typecheck gen-clients fixtures \
-	dev dev-backend dev-frontend dev-bot dev-desktop
+	dev dev-backend dev-frontend dev-bot dev-desktop sim-join
 
 # --- DB / RLS integration test config ----------------------------------------
 # Local equivalent of the CI `db-rls` job. Assumes a REACHABLE Postgres (e.g.
@@ -87,6 +87,10 @@ dev-bot: ## Run the Discord bot (host; sources services/bot/.env). Needs the bac
 
 dev-desktop: ## Build + launch the Electron desktop (LCU) client natively (must reach 127.0.0.1 LCU).
 	cd services/desktop && npm run build && npm start
+
+sim-join: ## DEV: simulate a 2nd player requesting to join a team. `make sim-join CODE=ABCD2345 NAME="Faker"`
+	cd services/backend && set -a && . ./.env && set +a && \
+		PYTHONPATH=src $(UV) run python scripts/sim_joiner.py "$(CODE)" "$(NAME)"
 
 dev: ## Run backend (:8000) AND frontend (:5173) together; Ctrl-C stops both.
 	@echo "==> backend :8000  +  frontend :5173  (Ctrl-C stops both)"

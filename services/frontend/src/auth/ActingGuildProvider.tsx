@@ -43,19 +43,22 @@ export function ActingGuildProvider({
 }: ActingGuildProviderProps): JSX.Element {
   const { claims } = useAuth();
 
-  // Seed from explicit prop, else the token claim, else null.
-  const seed =
-    initialGuildId !== undefined
-      ? initialGuildId
-      : (typeof claims?.guild_id === "string" ? claims.guild_id : null);
+  // An explicit user selection *overrides* the token default. `undefined` means
+  // "no override yet — follow the token claim", which is the common case: the
+  // access token often arrives AFTER first mount (dev-login / OAuth callback /
+  // refresh), so a one-time `useState` seed would latch `null` forever and every
+  // tenant-scoped request would fail with "no acting guild". Deriving the value
+  // reactively from `claims` fixes that.
+  const [override, setOverride] = useState<string | null | undefined>(initialGuildId);
 
-  const [actingGuildId, setActingGuildId] = useState<string | null>(seed);
+  const tokenGuild = typeof claims?.guild_id === "string" ? claims.guild_id : null;
+  const actingGuildId = override !== undefined ? override : tokenGuild;
 
-  const guildRef = useRef<string | null>(seed);
+  const guildRef = useRef<string | null>(actingGuildId);
   guildRef.current = actingGuildId;
 
   const setActingGuild = useCallback((guildId: string | null) => {
-    setActingGuildId(guildId);
+    setOverride(guildId);
   }, []);
 
   const getActingGuild = useCallback((): string | null => guildRef.current, []);

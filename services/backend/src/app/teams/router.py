@@ -30,6 +30,12 @@ from app.teams import service
 router = APIRouter(prefix="/teams", tags=["teams"])
 
 _CAPTAIN = require_tenant_role(UserGuildRoleName.CAPTAIN, UserGuildRoleName.GUILD_ADMIN)
+# Creating a team is open to ANY guild member: the creator becomes the team's
+# captain (a TeamMember role), so gating it on a pre-existing CAPTAIN guild-role
+# would be circular. `player` is the baseline every paired member holds.
+_MEMBER = require_tenant_role(
+    UserGuildRoleName.PLAYER, UserGuildRoleName.CAPTAIN, UserGuildRoleName.GUILD_ADMIN
+)
 
 
 # ---------------------------------------------------------------------------
@@ -77,10 +83,53 @@ class TeamMemberResponse(BaseModel):
     team_id: str
     user_id: str
     role: str
+    # Present on roster listings (JOINed to users); None on the bare approve result.
+    display_name: str | None = None
+
+
+class JoinRequestResponse(BaseModel):
+    """A pending join request surfaced to the captain (with the joiner's name)."""
+
+    team_id: str
+    team_name: str
+    user_id: str
+    display_name: str
+
+
+class MyTeamResponse(BaseModel):
+    """A team the caller belongs to, with their own role + membership status."""
+
+    team_id: str
+    name: str
+    role: str
+    status: str
 
 
 def _enum_value(v: object) -> str:
     return v.value if hasattr(v, "value") else str(v)
+
+
+def _ensure_team_captain(team: Team, principal: Principal) -> None:
+    """Authorize a per-team captain action. A team's *own* captain (a TeamMember
+    role, distinct from the guild-level ``captain`` role) may manage its join
+    requests, as may a guild admin / platform operator. Raises 403 otherwise."""
+    is_captain = str(team.captain_user_id) == principal.user_id
+    is_admin = (
+        principal.is_platform_operator or UserGuildRoleName.GUILD_ADMIN.value in principal.roles
+    )
+    if not (is_captain or is_admin):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, detail="only the team captain can manage join requests"
+        )
+
+
+def _join_request_response(r: service.JoinRequest) -> JoinRequestResponse:
+    return JoinRequestResponse(
+        team_id=str(r.team_id),
+        team_name=r.team_name,
+        user_id=str(r.user_id),
+        display_name=r.display_name,
+    )
 
 
 def _to_response(t: Team) -> TeamResponse:
@@ -103,11 +152,11 @@ def _member_response(m: TeamMember) -> TeamMemberResponse:
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
-@router.post("", response_model=CreatedTeamResponse, summary="Create a team (captain)")
+@router.post("", response_model=CreatedTeamResponse, summary="Create a team (any member)")
 async def create_team(
     body: CreateTeamRequest,
     principal: Annotated[Principal, Depends(get_current_principal)],
-    session: Annotated[AsyncSession, Depends(_CAPTAIN)],
+    session: Annotated[AsyncSession, Depends(_MEMBER)],
 ) -> CreatedTeamResponse:
     # The desktop client omits captain_user_id → the acting principal captains the
     # team they just created (the client-first "team leader" flow, PLAN.md §3.1).
@@ -127,20 +176,65 @@ async def list_teams(
 @router.post(
     "/join-by-code",
     response_model=TeamResponse,
-    summary="Join a team by its join code",
+    summary="Request to join a team by its code (pending captain approval)",
 )
 async def join_by_code(
     body: JoinByCodeRequest,
     principal: Annotated[Principal, Depends(get_current_principal)],
     session: Annotated[AsyncSession, Depends(get_tenant_session)],
 ) -> TeamResponse:
+    # Redeeming a code creates a PENDING request, not immediate membership — the
+    # captain approves/rejects it (see the /join-requests routes below).
     try:
         team, _ = await service.join_by_code(
             session, code=body.code, user_id=uuid.UUID(principal.user_id)
         )
     except service.InvalidJoinCodeError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="invalid join code") from exc
+    except service.TeamFullError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, detail=f"team is full ({exc} players max)"
+        ) from exc
     return _to_response(team)
+
+
+# NOTE: this literal route MUST precede ``/{team_id}`` so "join-requests" is not
+# captured as a (non-UUID) team id.
+@router.get(
+    "/join-requests/mine",
+    response_model=list[JoinRequestResponse],
+    summary="Pending join requests across teams the caller captains (notify feed)",
+)
+async def my_join_requests(
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    session: Annotated[AsyncSession, Depends(get_tenant_session)],
+) -> list[JoinRequestResponse]:
+    rows = await service.list_my_join_requests(
+        session, captain_user_id=uuid.UUID(principal.user_id)
+    )
+    return [_join_request_response(r) for r in rows]
+
+
+# NOTE: literal route — must precede ``/{team_id}`` (see the note above).
+@router.get(
+    "/mine",
+    response_model=list[MyTeamResponse],
+    summary="List the teams the caller belongs to (with their role + status)",
+)
+async def my_teams(
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    session: Annotated[AsyncSession, Depends(get_tenant_session)],
+) -> list[MyTeamResponse]:
+    rows = await service.list_my_teams(session, user_id=uuid.UUID(principal.user_id))
+    return [
+        MyTeamResponse(
+            team_id=str(r.team_id),
+            name=r.name,
+            role=_enum_value(r.role),
+            status=_enum_value(r.status),
+        )
+        for r in rows
+    ]
 
 
 @router.get("/{team_id}", response_model=TeamResponse, summary="Get a team")
@@ -152,6 +246,24 @@ async def get_team(
         return _to_response(await service.get_team(session, team_id=team_id))
     except service.TeamNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="team not found") from exc
+
+
+@router.delete(
+    "/{team_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Disband a team (captain of that team)",
+)
+async def delete_team(
+    team_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    session: Annotated[AsyncSession, Depends(get_tenant_session)],
+) -> None:
+    try:
+        team = await service.get_team(session, team_id=team_id)
+    except service.TeamNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="team not found") from exc
+    _ensure_team_captain(team, principal)
+    await service.delete_team(session, team_id=team_id)
 
 
 @router.get(
@@ -189,10 +301,18 @@ async def list_members(
     session: Annotated[AsyncSession, Depends(get_tenant_session)],
 ) -> list[TeamMemberResponse]:
     try:
-        members = await service.list_members(session, team_id=team_id)
+        roster = await service.list_roster(session, team_id=team_id)
     except service.TeamNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="team not found") from exc
-    return [_member_response(m) for m in members]
+    return [
+        TeamMemberResponse(
+            team_id=str(team_id),
+            user_id=str(r.user_id),
+            role=_enum_value(r.role),
+            display_name=r.display_name,
+        )
+        for r in roster
+    ]
 
 
 @router.post(
@@ -226,8 +346,14 @@ async def add_member(
 async def remove_member(
     team_id: uuid.UUID,
     user_id: uuid.UUID,
-    session: Annotated[AsyncSession, Depends(_CAPTAIN)],
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    session: Annotated[AsyncSession, Depends(get_tenant_session)],
 ) -> None:
+    try:
+        team = await service.get_team(session, team_id=team_id)
+    except service.TeamNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="team not found") from exc
+    _ensure_team_captain(team, principal)
     try:
         await service.remove_member(session, team_id=team_id, user_id=user_id)
     except service.TeamNotFoundError as exc:
@@ -259,3 +385,74 @@ async def leave_team(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="member not found") from exc
     except service.CaptainProtectedError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# Team-leader approval flow: pending join requests (PLAN.md §3.1)
+# ---------------------------------------------------------------------------
+@router.get(
+    "/{team_id}/join-requests",
+    response_model=list[JoinRequestResponse],
+    summary="List a team's pending join requests (captain of that team)",
+)
+async def team_join_requests(
+    team_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    session: Annotated[AsyncSession, Depends(get_tenant_session)],
+) -> list[JoinRequestResponse]:
+    try:
+        team = await service.get_team(session, team_id=team_id)
+    except service.TeamNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="team not found") from exc
+    _ensure_team_captain(team, principal)
+    rows = await service.list_join_requests(session, team_id=team_id)
+    return [_join_request_response(r) for r in rows]
+
+
+@router.post(
+    "/{team_id}/join-requests/{user_id}/approve",
+    response_model=TeamMemberResponse,
+    summary="Approve a pending join request (captain of that team)",
+)
+async def approve_join_request(
+    team_id: uuid.UUID,
+    user_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    session: Annotated[AsyncSession, Depends(get_tenant_session)],
+) -> TeamMemberResponse:
+    try:
+        team = await service.get_team(session, team_id=team_id)
+    except service.TeamNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="team not found") from exc
+    _ensure_team_captain(team, principal)
+    try:
+        member = await service.approve_join_request(session, team_id=team_id, user_id=user_id)
+    except service.MemberNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="no pending request") from exc
+    except service.TeamFullError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, detail=f"team is full ({exc} players max)"
+        ) from exc
+    return _member_response(member)
+
+
+@router.post(
+    "/{team_id}/join-requests/{user_id}/reject",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Reject a pending join request (captain of that team)",
+)
+async def reject_join_request(
+    team_id: uuid.UUID,
+    user_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    session: Annotated[AsyncSession, Depends(get_tenant_session)],
+) -> None:
+    try:
+        team = await service.get_team(session, team_id=team_id)
+    except service.TeamNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="team not found") from exc
+    _ensure_team_captain(team, principal)
+    try:
+        await service.reject_join_request(session, team_id=team_id, user_id=user_id)
+    except service.MemberNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="no pending request") from exc

@@ -32,6 +32,8 @@ export interface TeamMember {
   readonly teamId: string;
   readonly userId: string;
   readonly role: string;
+  /** The member's display name (falls back to the id if the backend omits it). */
+  readonly displayName: string;
 }
 
 export interface AuthedArgs {
@@ -101,10 +103,13 @@ function asJoinedTeam(raw: unknown): JoinedTeam {
 
 function asTeamMember(raw: unknown): TeamMember {
   const rec = (raw ?? {}) as Record<string, unknown>;
+  const userId = str(rec, "user_id");
+  const name = str(rec, "display_name");
   return {
     teamId: str(rec, "team_id"),
-    userId: str(rec, "user_id"),
+    userId,
     role: str(rec, "role"),
+    displayName: name !== "" ? name : userId,
   };
 }
 
@@ -257,5 +262,286 @@ export async function listTeamMembers(
     ok: false,
     status: res.status,
     detail: detailOf(json, `Could not load the roster (HTTP ${res.status}).`),
+  };
+}
+
+// --- team-leader approval flow (pending join requests) --------------------- //
+
+/** One pending join request as `/teams/join-requests/*` returns it. */
+export interface JoinRequest {
+  readonly teamId: string;
+  readonly teamName: string;
+  readonly userId: string;
+  readonly displayName: string;
+}
+
+export type ListJoinRequestsResult =
+  | { readonly ok: true; readonly requests: JoinRequest[] }
+  | { readonly ok: false; readonly status: number; readonly detail: string };
+
+export type ActOnRequestResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly status: number; readonly detail: string };
+
+function asJoinRequest(rec: unknown): JoinRequest {
+  const r = (rec ?? {}) as Record<string, unknown>;
+  return {
+    teamId: str(r, "team_id"),
+    teamName: str(r, "team_name"),
+    userId: str(r, "user_id"),
+    displayName: str(r, "display_name"),
+  };
+}
+
+/** Pending join requests across every team the signed-in user captains. */
+export async function listMyJoinRequests(
+  args: AuthedArgs,
+  deps: HttpDeps = {},
+): Promise<ListJoinRequestsResult> {
+  const doFetch = deps.fetch ?? fetch;
+  const backendUrl = resolveBackendUrl(deps.backendUrl);
+
+  let res: Response;
+  try {
+    res = await doFetch(`${backendUrl}/api/v1/teams/join-requests/mine`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${args.accessToken}` },
+    });
+  } catch (err) {
+    return { ok: false, status: 0, detail: `Backend unreachable: ${String(err)}` };
+  }
+
+  let json: unknown;
+  try {
+    json = await res.json();
+  } catch {
+    json = undefined;
+  }
+
+  if (res.ok) {
+    const list = Array.isArray(json) ? json : [];
+    return { ok: true, requests: list.map(asJoinRequest) };
+  }
+  return {
+    ok: false,
+    status: res.status,
+    detail: detailOf(json, `Could not load join requests (HTTP ${res.status}).`),
+  };
+}
+
+/** Approve (`approve`) or reject (`reject`) a pending request for one team. */
+async function actOnRequest(
+  action: "approve" | "reject",
+  args: AuthedArgs & { teamId: string; userId: string },
+  deps: HttpDeps = {},
+): Promise<ActOnRequestResult> {
+  const doFetch = deps.fetch ?? fetch;
+  const backendUrl = resolveBackendUrl(deps.backendUrl);
+  const path =
+    `${backendUrl}/api/v1/teams/${encodeURIComponent(args.teamId)}` +
+    `/join-requests/${encodeURIComponent(args.userId)}/${action}`;
+
+  let res: Response;
+  try {
+    res = await doFetch(path, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${args.accessToken}` },
+    });
+  } catch (err) {
+    return { ok: false, status: 0, detail: `Backend unreachable: ${String(err)}` };
+  }
+
+  if (res.ok) {
+    return { ok: true };
+  }
+  let json: unknown;
+  try {
+    json = await res.json();
+  } catch {
+    json = undefined;
+  }
+  return {
+    ok: false,
+    status: res.status,
+    detail: detailOf(json, `Could not ${action} the request (HTTP ${res.status}).`),
+  };
+}
+
+export function approveJoinRequest(
+  args: AuthedArgs & { teamId: string; userId: string },
+  deps: HttpDeps = {},
+): Promise<ActOnRequestResult> {
+  return actOnRequest("approve", args, deps);
+}
+
+export function rejectJoinRequest(
+  args: AuthedArgs & { teamId: string; userId: string },
+  deps: HttpDeps = {},
+): Promise<ActOnRequestResult> {
+  return actOnRequest("reject", args, deps);
+}
+
+/** Remove a member from a team (captain of that team). 204 on success. */
+export async function removeMember(
+  args: AuthedArgs & { teamId: string; userId: string },
+  deps: HttpDeps = {},
+): Promise<ActOnRequestResult> {
+  const doFetch = deps.fetch ?? fetch;
+  const backendUrl = resolveBackendUrl(deps.backendUrl);
+  const path =
+    `${backendUrl}/api/v1/teams/${encodeURIComponent(args.teamId)}` +
+    `/members/${encodeURIComponent(args.userId)}`;
+
+  let res: Response;
+  try {
+    res = await doFetch(path, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${args.accessToken}` },
+    });
+  } catch (err) {
+    return { ok: false, status: 0, detail: `Backend unreachable: ${String(err)}` };
+  }
+
+  if (res.ok) {
+    return { ok: true };
+  }
+  let json: unknown;
+  try {
+    json = await res.json();
+  } catch {
+    json = undefined;
+  }
+  return {
+    ok: false,
+    status: res.status,
+    detail: detailOf(json, `Could not remove the member (HTTP ${res.status}).`),
+  };
+}
+
+// --- "My Teams" (membership list + self-service leave) --------------------- //
+
+/** A team the signed-in user belongs to, with their role + membership status. */
+export interface MyTeam {
+  readonly teamId: string;
+  readonly name: string;
+  readonly role: string;
+  readonly status: string;
+}
+
+export type ListMyTeamsResult =
+  | { readonly ok: true; readonly teams: MyTeam[] }
+  | { readonly ok: false; readonly status: number; readonly detail: string };
+
+function asMyTeam(raw: unknown): MyTeam {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  return {
+    teamId: str(r, "team_id"),
+    name: str(r, "name"),
+    role: str(r, "role"),
+    status: str(r, "status"),
+  };
+}
+
+/** Teams the signed-in user is a member of (active or pending), with their role. */
+export async function listMyTeams(
+  args: AuthedArgs,
+  deps: HttpDeps = {},
+): Promise<ListMyTeamsResult> {
+  const doFetch = deps.fetch ?? fetch;
+  const backendUrl = resolveBackendUrl(deps.backendUrl);
+
+  let res: Response;
+  try {
+    res = await doFetch(`${backendUrl}/api/v1/teams/mine`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${args.accessToken}` },
+    });
+  } catch (err) {
+    return { ok: false, status: 0, detail: `Backend unreachable: ${String(err)}` };
+  }
+
+  let json: unknown;
+  try {
+    json = await res.json();
+  } catch {
+    json = undefined;
+  }
+
+  if (res.ok) {
+    const list = Array.isArray(json) ? json : [];
+    return { ok: true, teams: list.map(asMyTeam) };
+  }
+  return {
+    ok: false,
+    status: res.status,
+    detail: detailOf(json, `Could not load your teams (HTTP ${res.status}).`),
+  };
+}
+
+/** Leave a team (self-service; the captain must transfer/disband first → 409). */
+export async function leaveTeam(
+  args: AuthedArgs & { teamId: string },
+  deps: HttpDeps = {},
+): Promise<ActOnRequestResult> {
+  const doFetch = deps.fetch ?? fetch;
+  const backendUrl = resolveBackendUrl(deps.backendUrl);
+
+  let res: Response;
+  try {
+    res = await doFetch(`${backendUrl}/api/v1/teams/${encodeURIComponent(args.teamId)}/leave`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${args.accessToken}` },
+    });
+  } catch (err) {
+    return { ok: false, status: 0, detail: `Backend unreachable: ${String(err)}` };
+  }
+
+  if (res.ok) {
+    return { ok: true };
+  }
+  let json: unknown;
+  try {
+    json = await res.json();
+  } catch {
+    json = undefined;
+  }
+  return {
+    ok: false,
+    status: res.status,
+    detail: detailOf(json, `Could not leave the team (HTTP ${res.status}).`),
+  };
+}
+
+/** Disband a team (captain of that team). 204 on success. */
+export async function deleteTeam(
+  args: AuthedArgs & { teamId: string },
+  deps: HttpDeps = {},
+): Promise<ActOnRequestResult> {
+  const doFetch = deps.fetch ?? fetch;
+  const backendUrl = resolveBackendUrl(deps.backendUrl);
+
+  let res: Response;
+  try {
+    res = await doFetch(`${backendUrl}/api/v1/teams/${encodeURIComponent(args.teamId)}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${args.accessToken}` },
+    });
+  } catch (err) {
+    return { ok: false, status: 0, detail: `Backend unreachable: ${String(err)}` };
+  }
+
+  if (res.ok) {
+    return { ok: true };
+  }
+  let json: unknown;
+  try {
+    json = await res.json();
+  } catch {
+    json = undefined;
+  }
+  return {
+    ok: false,
+    status: res.status,
+    detail: detailOf(json, `Could not disband the team (HTTP ${res.status}).`),
   };
 }

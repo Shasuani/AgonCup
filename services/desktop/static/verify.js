@@ -102,6 +102,23 @@
     loadLinkedAccounts();
   }
 
+  // Clear the local session and return to step 1 (pairing). Used when a signed-in
+  // session has zero linked accounts — on boot, or right after the user
+  // unregisters their LAST account. An account-less session can orchestrate
+  // nothing, so we sign out rather than strand the user on the verify step.
+  function resetToPairing(message) {
+    var toPairing = function () {
+      if (window.lolNav) window.lolNav.setSignedIn(false);
+      showPairing();
+      if (message) setStatus(pairStatus, "info", message);
+    };
+    if (window.lol && window.lol.signOut) {
+      window.lol.signOut().then(toPairing).catch(toPairing);
+    } else {
+      toPairing();
+    }
+  }
+
   // Pull the signed-in user's already-linked accounts from the backend so the
   // list + "Link another account" affordance show on a cold reopen (not just
   // after a fresh verify this session). Non-fatal on any failure.
@@ -305,19 +322,42 @@
       setStatus(pairStatus, "err", "Your session expired. Enter a new code to sign in.");
     });
 
-    // Choose the initial view from the current session state.
+    // Choose the initial view from session + linked-account count:
+    //   not signed in            -> pairing (step 1)
+    //   signed in, >=1 account   -> verify / manage (step 2)
+    //   signed in, 0 accounts    -> nothing to act on: sign out -> pairing (step 1)
     window.lol
       .getSession()
       .then(function (state) {
-        if (state && state.signedIn) {
-          showVerify();
-        } else {
+        if (!state || !state.signedIn) {
           showPairing();
+          return;
         }
+        if (!window.lol.listAccounts) {
+          showVerify();
+          return;
+        }
+        window.lol
+          .listAccounts()
+          .then(function (res) {
+            var count = res && res.ok && res.accounts ? res.accounts.length : null;
+            if (count === 0) {
+              resetToPairing();
+            } else {
+              showVerify();
+            }
+          })
+          .catch(function () {
+            showVerify();
+          });
       })
       .catch(function () {
         showPairing();
       });
+
+    // Let app.js (owner of the account screen) return here after the user
+    // unregisters their last account.
+    window.lolOnboarding = { showPairing: showPairing, resetToPairing: resetToPairing };
   } else {
     showPairing();
     setStatus(pairStatus, "err", "Desktop bridge unavailable. Restart the app.");

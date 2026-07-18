@@ -9,8 +9,9 @@ function makeJwt(payload: Record<string, unknown>): string {
 }
 
 describe("decodeAccessToken", () => {
-  it("decodes roles + guild_id claims", () => {
-    const token = makeJwt({ sub: "u1", guild_id: "g1", roles: ["guild_admin"], exp: 9999999999 });
+  it("decodes roles + normalizes the backend `gid` claim to guild_id", () => {
+    // The backend mints the acting-guild claim as `gid` (not `guild_id`).
+    const token = makeJwt({ sub: "u1", gid: "g1", roles: ["guild_admin"], exp: 9999999999 });
     const claims = decodeAccessToken(token);
     expect(claims?.sub).toBe("u1");
     expect(claims?.guild_id).toBe("g1");

@@ -32,6 +32,7 @@ from lol_schemas.enums import (
     ResultDecidedBy,
     ResultSource,
     TeamMemberRole,
+    TeamMemberStatus,
     TournamentFormat,
     TournamentStatus,
     UserGuildRoleName,
@@ -302,6 +303,13 @@ class TeamMember(Base):
     )
     role: Mapped[TeamMemberRole] = mapped_column(
         pg_enum(TeamMemberRole, "team_member_role"), nullable=False
+    )
+    # Approval lifecycle: a code-redeeming player lands PENDING until the captain
+    # approves (→ ACTIVE) or rejects (row deleted). Captain rows are ACTIVE.
+    status: Mapped[TeamMemberStatus] = mapped_column(
+        pg_enum(TeamMemberStatus, "team_member_status"),
+        nullable=False,
+        server_default=TeamMemberStatus.ACTIVE.value,
     )
 
 

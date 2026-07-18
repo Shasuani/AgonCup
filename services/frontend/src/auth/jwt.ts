@@ -35,7 +35,15 @@ export function decodeAccessToken(token: string | null | undefined): AccessToken
   if (!payload) return null;
   const claims = decodeBase64Url(payload);
   if (claims === null || typeof claims !== "object") return null;
-  return claims as AccessTokenClaims;
+  // The backend mints the acting-guild claim under the short key `gid`
+  // (app.auth.jwt). Normalize it to `guild_id` so every UI reader can use the
+  // one field name — without this, `claims.guild_id` is always undefined at
+  // runtime and no `X-Guild-Id` header is stamped (→ "no acting guild").
+  const raw = claims as Record<string, unknown>;
+  if (raw["guild_id"] === undefined && typeof raw["gid"] === "string") {
+    raw["guild_id"] = raw["gid"];
+  }
+  return raw as AccessTokenClaims;
 }
 
 /** True when the token's `exp` (epoch seconds) is in the past. */

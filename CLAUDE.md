@@ -168,10 +168,16 @@ non-existent `false()` function and breaks `alembic upgrade head`).
 
 ## Status
 
-Phases 0–2 done (~205 tests green): scaffold, data model + RLS, auth (Discord
-OAuth2 + JWT + refresh + RBAC), code + desktop/LCU account verification
-(server-side Account-V1 PUUID resolution + dedupe + best-effort League-V4 rank
-snapshot + Discord DM), PII lifecycle, tournament/
-team/results CRUD + bracket, and autonomous LCU orchestration (state machine +
-backend + worker watchdog). See `PLAN.md §7` for the roadmap and the latest commit
-body for deferred hardening follow-ups.
+All phases (0–7) built out (~369 test files green): scaffold, data model + RLS,
+auth (Discord OAuth2 + JWT + refresh + RBAC), code + desktop/LCU account
+verification (server-side Account-V1 PUUID resolution + dedupe + best-effort
+League-V4 rank snapshot + Discord DM), PII lifecycle, tournament/team/results
+CRUD + bracket (single + double elim, 1v1 ARAM, best-of-N series), autonomous LCU
+orchestration (state machine + backend + worker watchdog), Discord bot +
+federation/central-feed, desktop Electron client, admin frontend, and result
+corroboration/dispute pipeline.
+
+The project is now in a **client-first refactor** phase: user actions are moving
+bot → desktop client (token-based tournament/team join codes, global presence
+bell, self-service unregister), leaving the bot slimmed to admin + onboarding.
+See `PLAN.md §7` for the original roadmap.

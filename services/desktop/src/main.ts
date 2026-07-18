@@ -46,8 +46,20 @@ import { readCurrentSummoner } from "./lcu/readSummoner.js";
 import { verifyDesktop, type VerifyResult } from "./lcu/verify.js";
 import { listMyAccounts, type ListAccountsResult } from "./accounts/listAccounts.js";
 import { unlinkAccount } from "./accounts/unlinkAccount.js";
-import { joinTournamentByCode, listMyTournaments } from "./tournaments/tournaments.js";
-import { createTeam, getTeamJoinCode, joinTeamByCode, listTeamMembers } from "./teams/teams.js";
+import { getBracket, joinTournamentByCode, listMyTournaments } from "./tournaments/tournaments.js";
+import {
+  approveJoinRequest,
+  createTeam,
+  deleteTeam,
+  getTeamJoinCode,
+  joinTeamByCode,
+  leaveTeam,
+  listMyJoinRequests,
+  listMyTeams,
+  listTeamMembers,
+  rejectJoinRequest,
+  removeMember,
+} from "./teams/teams.js";
 import { getPresence } from "./presence/presence.js";
 import {
   pairDesktop,
@@ -640,9 +652,20 @@ async function bootstrap(): Promise<void> {
   ipcMain.handle("lol:tournaments-mine", () =>
     withSession((t) => listMyTournaments({ accessToken: t }, { backendUrl: backendBaseUrl() })),
   );
-  ipcMain.handle("lol:tournament-join", (_event, args: { code: string }) =>
+  ipcMain.handle("lol:tournament-join", (_event, args: { code: string; teamId?: string }) =>
     withSession((t) =>
-      joinTournamentByCode({ accessToken: t, code: args.code }, { backendUrl: backendBaseUrl() }),
+      joinTournamentByCode(
+        { accessToken: t, code: args.code, ...(args.teamId ? { teamId: args.teamId } : {}) },
+        { backendUrl: backendBaseUrl() },
+      ),
+    ),
+  );
+  ipcMain.handle("lol:tournament-bracket", (_event, args: { tournamentId: string }) =>
+    withSession((t) =>
+      getBracket(
+        { accessToken: t, tournamentId: args.tournamentId },
+        { backendUrl: backendBaseUrl() },
+      ),
     ),
   );
 
@@ -664,12 +687,69 @@ async function bootstrap(): Promise<void> {
     ),
   );
 
+  // Team-leader approval flow: the captain's pending-request feed + approve/reject.
+  ipcMain.handle("lol:team-join-requests", () =>
+    withSession((t) => listMyJoinRequests({ accessToken: t }, { backendUrl: backendBaseUrl() })),
+  );
+  ipcMain.handle("lol:team-approve", (_event, args: { teamId: string; userId: string }) =>
+    withSession((t) =>
+      approveJoinRequest(
+        { accessToken: t, teamId: args.teamId, userId: args.userId },
+        { backendUrl: backendBaseUrl() },
+      ),
+    ),
+  );
+  ipcMain.handle("lol:team-reject", (_event, args: { teamId: string; userId: string }) =>
+    withSession((t) =>
+      rejectJoinRequest(
+        { accessToken: t, teamId: args.teamId, userId: args.userId },
+        { backendUrl: backendBaseUrl() },
+      ),
+    ),
+  );
+  ipcMain.handle("lol:team-remove-member", (_event, args: { teamId: string; userId: string }) =>
+    withSession((t) =>
+      removeMember(
+        { accessToken: t, teamId: args.teamId, userId: args.userId },
+        { backendUrl: backendBaseUrl() },
+      ),
+    ),
+  );
+  ipcMain.handle("lol:teams-mine", () =>
+    withSession((t) => listMyTeams({ accessToken: t }, { backendUrl: backendBaseUrl() })),
+  );
+  ipcMain.handle("lol:team-leave", (_event, args: { teamId: string }) =>
+    withSession((t) =>
+      leaveTeam({ accessToken: t, teamId: args.teamId }, { backendUrl: backendBaseUrl() }),
+    ),
+  );
+  ipcMain.handle("lol:team-delete", (_event, args: { teamId: string }) =>
+    withSession((t) =>
+      deleteTeam({ accessToken: t, teamId: args.teamId }, { backendUrl: backendBaseUrl() }),
+    ),
+  );
+
   // Unregister one linked Riot account.
   ipcMain.handle("lol:account-unlink", (_event, args: { accountId: string }) =>
     withSession((t) =>
       unlinkAccount({ accessToken: t, accountId: args.accountId }, { backendUrl: backendBaseUrl() }),
     ),
   );
+
+  // Explicit sign-out: drop the in-memory session, tear down the runtime, and
+  // wipe the persisted refresh token so the next boot shows the pairing screen.
+  // The renderer calls this after the user unregisters their LAST linked account
+  // (0 remaining) — an account-less session has nothing to orchestrate, so we
+  // return to step 1. Mirrors the onAuthLost teardown, minus the auth-lost event
+  // (the renderer drives the view transition itself). Idempotent.
+  ipcMain.handle("lol:sign-out", async () => {
+    session = null;
+    runtime?.shutdown();
+    runtime = null;
+    await store.clear();
+    log("signed_out", { hint: "user cleared session; show pairing screen" });
+    return { ok: true };
+  });
 
   // Global live presence (bell badge + panel).
   ipcMain.handle("lol:presence", () =>

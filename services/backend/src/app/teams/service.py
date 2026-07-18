@@ -25,12 +25,12 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 
-from lol_schemas.enums import TeamMemberRole
+from lol_schemas.enums import TeamMemberRole, TeamMemberStatus
 from sqlalchemy import String, cast, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.joincodes import generate_join_code, normalize_join_code
-from app.models import Team, TeamMember
+from app.models import Team, TeamMember, User
 
 # Roles a member may be *added* with (the captain is created implicitly, never
 # re-assigned via add_member).
@@ -67,6 +67,14 @@ class AmbiguousTeamError(TeamError):
 
 class InvalidJoinCodeError(TeamError):
     """No team in the acting guild has that join code (bad/foreign code)."""
+
+
+class TeamFullError(TeamError):
+    """The team is already at its ACTIVE-member cap (``MAX_TEAM_SIZE``)."""
+
+
+#: Max ACTIVE members per team — a 5v5 roster (the captain counts as one of the 5).
+MAX_TEAM_SIZE = 5
 
 
 async def _current_guild(session: AsyncSession) -> uuid.UUID:
@@ -169,6 +177,7 @@ async def create_team(session: AsyncSession, *, name: str, captain_user_id: uuid
             user_id=captain_user_id,
             guild_id=guild_id,
             role=TeamMemberRole.CAPTAIN,
+            status=TeamMemberStatus.ACTIVE,  # the captain is a member from creation
         )
     )
     await session.flush()
@@ -273,11 +282,13 @@ async def get_team_by_code(session: AsyncSession, *, code: str) -> Team:
 async def join_by_code(
     session: AsyncSession, *, code: str, user_id: uuid.UUID
 ) -> tuple[Team, TeamMember]:
-    """Add the acting user to a team by its join code (idempotent as a PLAYER).
+    """Request to join a team by its join code — creates a PENDING membership.
 
-    Redeeming a code you already hold membership for returns the existing row
-    rather than raising :class:`DuplicateMemberError` — a friendly no-op for a
-    double-paste. Captains keep their captain membership (never downgraded).
+    The redeemer does NOT join immediately: a ``pending`` request is created for
+    the captain to approve/reject (PLAN.md §3.1 team-leader approval flow).
+    Idempotent — redeeming a code you already hold ANY membership for (pending or
+    active) returns the existing row rather than raising :class:`DuplicateMemberError`.
+    Captains keep their (active) captain membership.
     """
     team = await get_team_by_code(session, code=code)
     existing_role = await _member_role(session, team_id=team.id, user_id=user_id)
@@ -290,19 +301,230 @@ async def join_by_code(
             )
         ).scalar_one()
         return team, member
-    member = await add_member(session, team_id=team.id, user_id=user_id, role=TeamMemberRole.PLAYER)
+    # A full roster (MAX_TEAM_SIZE active) can't take more requests.
+    if await _active_member_count(session, team.id) >= MAX_TEAM_SIZE:
+        raise TeamFullError(str(MAX_TEAM_SIZE))
+    member = await add_member(
+        session,
+        team_id=team.id,
+        user_id=user_id,
+        role=TeamMemberRole.PLAYER,
+        status=TeamMemberStatus.PENDING,
+    )
     return team, member
 
 
+async def _active_member_count(session: AsyncSession, team_id: uuid.UUID) -> int:
+    """Count of ACTIVE members on a team (the roster size, cap-checked)."""
+    return (
+        await session.execute(
+            select(func.count())
+            .select_from(TeamMember)
+            .where(
+                TeamMember.team_id == team_id,
+                TeamMember.status == TeamMemberStatus.ACTIVE,
+            )
+        )
+    ).scalar_one()
+
+
 async def list_members(session: AsyncSession, *, team_id: uuid.UUID) -> list[TeamMember]:
-    """List a team's members (RLS-scoped). Verifies the team exists in this guild."""
+    """List a team's ACTIVE members (the roster). Verifies the team exists here.
+
+    Pending join requests are excluded — they are not members yet. Use
+    :func:`list_join_requests` for the captain's approval queue.
+    """
     await get_team(session, team_id=team_id)
     rows = (
         await session.execute(
-            select(TeamMember).where(TeamMember.team_id == team_id).order_by(TeamMember.user_id)
+            select(TeamMember)
+            .where(
+                TeamMember.team_id == team_id,
+                TeamMember.status == TeamMemberStatus.ACTIVE,
+            )
+            .order_by(TeamMember.user_id)
         )
     ).scalars()
     return list(rows)
+
+
+@dataclass(frozen=True)
+class MyTeam:
+    """A team the caller belongs to, with their role + membership status."""
+
+    team_id: uuid.UUID
+    name: str
+    role: TeamMemberRole
+    status: TeamMemberStatus
+
+
+async def list_my_teams(session: AsyncSession, *, user_id: uuid.UUID) -> list[MyTeam]:
+    """Every team the caller is a member of (active OR pending), with their role.
+
+    Powers the desktop "My Teams" view — where the user is captain vs plain member,
+    and which requests are still awaiting approval. RLS scopes to the acting guild.
+    """
+    rows = (
+        await session.execute(
+            select(Team.id, Team.name, TeamMember.role, TeamMember.status)
+            .join(TeamMember, TeamMember.team_id == Team.id)
+            .where(TeamMember.user_id == user_id)
+            .order_by(Team.name)
+        )
+    ).all()
+    return [
+        MyTeam(team_id=tid, name=name, role=role, status=status)
+        for tid, name, role, status in rows
+    ]
+
+
+@dataclass(frozen=True)
+class RosterMember:
+    """An active roster row with the member's display name (not just their id)."""
+
+    user_id: uuid.UUID
+    role: TeamMemberRole
+    display_name: str
+
+
+async def list_roster(session: AsyncSession, *, team_id: uuid.UUID) -> list[RosterMember]:
+    """The team's ACTIVE roster, each row named (JOINed to ``users``)."""
+    await get_team(session, team_id=team_id)
+    rows = (
+        await session.execute(
+            select(TeamMember.user_id, TeamMember.role, User.display_name)
+            .join(User, User.id == TeamMember.user_id)
+            .where(
+                TeamMember.team_id == team_id,
+                TeamMember.status == TeamMemberStatus.ACTIVE,
+            )
+            .order_by(User.display_name)
+        )
+    ).all()
+    return [
+        RosterMember(user_id=uid, role=role, display_name=name) for uid, role, name in rows
+    ]
+
+
+@dataclass(frozen=True)
+class JoinRequest:
+    """A pending membership request surfaced to the captain (with joiner name)."""
+
+    team_id: uuid.UUID
+    team_name: str
+    user_id: uuid.UUID
+    display_name: str
+
+
+async def list_join_requests(
+    session: AsyncSession, *, team_id: uuid.UUID
+) -> list[JoinRequest]:
+    """Pending join requests for one team (captain's approval queue), joiner-named."""
+    team = await get_team(session, team_id=team_id)
+    rows = (
+        await session.execute(
+            select(TeamMember.user_id, User.display_name)
+            .join(User, User.id == TeamMember.user_id)
+            .where(
+                TeamMember.team_id == team_id,
+                TeamMember.status == TeamMemberStatus.PENDING,
+            )
+            .order_by(User.display_name)
+        )
+    ).all()
+    return [
+        JoinRequest(
+            team_id=team.id, team_name=team.name, user_id=uid, display_name=name
+        )
+        for uid, name in rows
+    ]
+
+
+async def list_my_join_requests(
+    session: AsyncSession, *, captain_user_id: uuid.UUID
+) -> list[JoinRequest]:
+    """All pending requests across teams the caller CAPTAINS (desktop notify feed).
+
+    Scoped to teams whose ``captain_user_id`` is the caller — so a captain only ever
+    sees requests for their own teams. RLS already scopes to the acting guild.
+    """
+    rows = (
+        await session.execute(
+            select(
+                Team.id,
+                Team.name,
+                TeamMember.user_id,
+                User.display_name,
+            )
+            .join(TeamMember, TeamMember.team_id == Team.id)
+            .join(User, User.id == TeamMember.user_id)
+            .where(
+                Team.captain_user_id == captain_user_id,
+                TeamMember.status == TeamMemberStatus.PENDING,
+            )
+            .order_by(Team.name, User.display_name)
+        )
+    ).all()
+    return [
+        JoinRequest(team_id=tid, team_name=tname, user_id=uid, display_name=dname)
+        for tid, tname, uid, dname in rows
+    ]
+
+
+async def approve_join_request(
+    session: AsyncSession, *, team_id: uuid.UUID, user_id: uuid.UUID
+) -> TeamMember:
+    """Approve a pending request → ACTIVE. Raises if there is no pending row, or
+    :class:`TeamFullError` if the roster is already at ``MAX_TEAM_SIZE``."""
+    await get_team(session, team_id=team_id)
+    member = (
+        await session.execute(
+            select(TeamMember).where(
+                TeamMember.team_id == team_id,
+                TeamMember.user_id == user_id,
+                TeamMember.status == TeamMemberStatus.PENDING,
+            )
+        )
+    ).scalar_one_or_none()
+    if member is None:
+        raise MemberNotFoundError(str(user_id))
+    if await _active_member_count(session, team_id) >= MAX_TEAM_SIZE:
+        raise TeamFullError(str(MAX_TEAM_SIZE))
+    member.status = TeamMemberStatus.ACTIVE
+    await session.flush()
+    return member
+
+
+async def reject_join_request(
+    session: AsyncSession, *, team_id: uuid.UUID, user_id: uuid.UUID
+) -> None:
+    """Reject a pending request → delete the row. Raises if none is pending."""
+    await get_team(session, team_id=team_id)
+    member = (
+        await session.execute(
+            select(TeamMember).where(
+                TeamMember.team_id == team_id,
+                TeamMember.user_id == user_id,
+                TeamMember.status == TeamMemberStatus.PENDING,
+            )
+        )
+    ).scalar_one_or_none()
+    if member is None:
+        raise MemberNotFoundError(str(user_id))
+    await session.delete(member)
+    await session.flush()
+
+
+async def delete_team(session: AsyncSession, *, team_id: uuid.UUID) -> None:
+    """Disband a team: delete the ``teams`` row (captain-driven).
+
+    ``team_members`` and ``registrations`` both carry ``ON DELETE CASCADE`` FKs to
+    ``teams``, so the whole roster + any tournament registrations are removed by the
+    database. RLS scopes the lookup to the acting guild. 404 if it does not exist.
+    """
+    team = await get_team(session, team_id=team_id)
+    await session.delete(team)
+    await session.flush()
 
 
 async def _member_user_ids(session: AsyncSession, team_id: uuid.UUID) -> frozenset[uuid.UUID]:
@@ -330,8 +552,13 @@ async def add_member(
     team_id: uuid.UUID,
     user_id: uuid.UUID,
     role: TeamMemberRole = TeamMemberRole.PLAYER,
+    status: TeamMemberStatus = TeamMemberStatus.ACTIVE,
 ) -> TeamMember:
-    """Add a player/sub to a team. Validation is delegated to the pure helper."""
+    """Add a player/sub to a team. Validation is delegated to the pure helper.
+
+    ``status`` defaults to ACTIVE (a captain directly adding someone). The code
+    self-service path passes PENDING so the captain must approve first.
+    """
     team = await get_team(session, team_id=team_id)
     existing = await _member_user_ids(session, team_id)
     change = validate_add_member(user_id=user_id, role=role, existing_member_user_ids=existing)
@@ -340,6 +567,7 @@ async def add_member(
         user_id=change.user_id,
         guild_id=team.guild_id,  # same-guild by construction (FK target's guild)
         role=change.role,
+        status=status,
     )
     session.add(member)
     await session.flush()

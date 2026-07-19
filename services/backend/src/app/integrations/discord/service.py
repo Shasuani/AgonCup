@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 
 from lol_schemas.enums import GameMode
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -273,11 +274,19 @@ async def create_tournament(
     max_teams: int = tournaments_service.MAX_TEAMS_HARD_CAP,
     game_mode: GameMode = GameMode.SUMMONERS_RIFT_5V5,
     best_of: int = 1,
+    registration_opens_at: datetime | None = None,
+    start_at: datetime | None = None,
 ) -> Tournament:
     """Create a tournament in the acting guild (guild_admin; delegated)."""
     await _resolve_actor_admin(session, ctx)
     return await tournaments_service.create_tournament(
-        session, name=name, max_teams=max_teams, game_mode=game_mode, best_of=best_of
+        session,
+        name=name,
+        max_teams=max_teams,
+        game_mode=game_mode,
+        best_of=best_of,
+        registration_opens_at=registration_opens_at,
+        start_at=start_at,
     )
 
 

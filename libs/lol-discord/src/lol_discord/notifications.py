@@ -119,6 +119,17 @@ def registration_approved(*, tournament_name: str, team_name: str) -> dict[str, 
     )
 
 
+def tournament_announced(*, tournament_name: str, headline: str, detail: str) -> dict[str, Any]:
+    """A scheduled tournament milestone — registration opened, or it is starting
+    (PLAN.md §3.2). ``headline`` is the banner, ``detail`` the pre-formatted body
+    (join code + times). Posted to the guild's public notify channel."""
+    return build_embed(
+        f"{tournament_name} — {headline}",
+        detail,
+        color=EmbedColor.DEFAULT,
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Teams                                                                        #
 # --------------------------------------------------------------------------- #

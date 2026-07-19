@@ -57,6 +57,16 @@ class Settings(BaseSettings):
     environment: Environment = Field(default="development")
     log_level: str = Field(default="INFO")
 
+    # --- Scheduled tournaments (PLAN.md §3.2) ------------------------------
+    scheduler_enabled: bool = Field(
+        default=True,
+        description="Run the in-app scheduled-tournament ticker (open + start announces).",
+    )
+    scheduler_interval_seconds: int = Field(
+        default=30,
+        description="Seconds between scheduler passes.",
+    )
+
     # --- Auth: JWT ----------------------------------------------------------
     # NOTE: placeholder secret only. Provided via the secrets manager in real
     # environments; never commit a real value. See PLAN.md §6 (secrets).

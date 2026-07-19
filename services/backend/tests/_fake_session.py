@@ -9,6 +9,7 @@ database, network, or Discord gateway is involved (PLAN.md SHARED CONVENTIONS).
 
 from __future__ import annotations
 
+import operator
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -225,6 +226,11 @@ def _equality_filters(statement: Any) -> dict[str, Any]:
     clauses = list(getattr(statement, "_where_criteria", ()) or ())
     for clause in clauses:
         for bool_expr in _flatten_and(clause):
+            # Only ``==`` clauses constrain the fake store; inequalities / IS (NOT)
+            # NULL (e.g. ``start_at <= now``) can't be modelled here and are left to
+            # the caller's own Python re-checks. (Mirrors tests/test_auth.py.)
+            if getattr(bool_expr, "operator", None) not in (operator.eq, None):
+                continue
             left = getattr(bool_expr, "left", None)
             right = getattr(bool_expr, "right", None)
             if left is not None and hasattr(left, "key"):

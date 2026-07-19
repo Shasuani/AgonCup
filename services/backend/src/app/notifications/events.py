@@ -56,6 +56,7 @@ class NotificationKind(StrEnum):
     CHECK_IN_REMINDER = "check_in_reminder"
     MATCH_READY = "match_ready"
     RESULT_RECORDED = "result_recorded"
+    TOURNAMENT_ANNOUNCED = "tournament_announced"
 
 
 class RegistrationApprovedPayload(_Strict):
@@ -134,12 +135,27 @@ class ResultRecordedPayload(_Strict):
     decided_by: str = Field(description="How the result was decided (e.g. 'reported').")
 
 
+class TournamentAnnouncedPayload(_Strict):
+    """A scheduled tournament reached a milestone — registration opened, or it is
+    starting (PLAN.md §3.2). Whitelisted display strings only — NO ids/secrets.
+
+    ``headline`` is the short banner (e.g. ``"Registration is open"``), ``detail``
+    the body line (e.g. ``"Join with code ABCD2345 — starts 2026-08-01 18:00 UTC"``).
+    """
+
+    kind: Literal[NotificationKind.TOURNAMENT_ANNOUNCED] = NotificationKind.TOURNAMENT_ANNOUNCED
+    tournament_name: str = Field(description="Display name of the tournament.")
+    headline: str = Field(description="Short milestone banner (pre-formatted).")
+    detail: str = Field(description="Body line with code / times (pre-formatted).")
+
+
 NotificationPayload = Annotated[
     RegistrationApprovedPayload
     | RegistrationVerifiedPayload
     | CheckInReminderPayload
     | MatchReadyPayload
-    | ResultRecordedPayload,
+    | ResultRecordedPayload
+    | TournamentAnnouncedPayload,
     Field(discriminator="kind"),
 ]
 
@@ -175,4 +191,5 @@ __all__ = [
     "RegistrationApprovedPayload",
     "RegistrationVerifiedPayload",
     "ResultRecordedPayload",
+    "TournamentAnnouncedPayload",
 ]

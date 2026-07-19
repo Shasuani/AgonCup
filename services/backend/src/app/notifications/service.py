@@ -63,6 +63,7 @@ from app.notifications.events import (
     RegistrationApprovedPayload,
     RegistrationVerifiedPayload,
     ResultRecordedPayload,
+    TournamentAnnouncedPayload,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, no runtime redis import.
@@ -147,6 +148,29 @@ async def publish_registration_approved(
     envelope = build_envelope(
         origin_guild_id=origin_guild_id,
         payload=RegistrationApprovedPayload(tournament_name=tournament_name, team_name=team_name),
+    )
+    await publisher.publish(envelope)
+    return envelope
+
+
+async def publish_tournament_announced(
+    publisher: NotificationPublisher,
+    *,
+    origin_guild_id: str,
+    tournament_name: str,
+    headline: str,
+    detail: str,
+) -> NotificationEnvelope:
+    """Emit ``tournament_announced`` (PLAN.md §3.2 scheduled tournaments).
+
+    The scheduler calls this when a scheduled tournament opens registration or is
+    starting; the bot posts it to the guild's notify channel.
+    """
+    envelope = build_envelope(
+        origin_guild_id=origin_guild_id,
+        payload=TournamentAnnouncedPayload(
+            tournament_name=tournament_name, headline=headline, detail=detail
+        ),
     )
     await publisher.publish(envelope)
     return envelope

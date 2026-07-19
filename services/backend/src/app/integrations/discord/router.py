@@ -193,6 +193,8 @@ class TournamentCreateRequest(BaseModel):
     max_teams: int = Field(default=16, ge=2, le=16)
     game_mode: GameMode = GameMode.SUMMONERS_RIFT_5V5
     best_of: int = Field(default=1, description="Series length: 1, 3, or 5.")
+    registration_opens_at: datetime | None = None
+    start_at: datetime | None = None
 
 
 class TournamentJoinRequest(BaseModel):
@@ -560,6 +562,8 @@ async def create_tournament(body: TournamentCreateRequest) -> TournamentResponse
                 max_teams=body.max_teams,
                 game_mode=body.game_mode,
                 best_of=body.best_of,
+                registration_opens_at=body.registration_opens_at,
+                start_at=body.start_at,
             )
         except guilds_service.GuildNotOnboardedError as exc:
             raise _guild_not_onboarded(exc) from exc

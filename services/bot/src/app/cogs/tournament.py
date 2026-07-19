@@ -12,6 +12,8 @@ a ``lol_discord`` embed.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -19,6 +21,24 @@ from lol_discord import tournament_created
 
 from app.backend_client import BackendClient, BackendError
 from app.cogs._helpers import context_of, embed_from, error_embed, info_embed
+
+
+def _parse_utc(value: str | None) -> str | None:
+    """Parse an admin-typed date/time as UTC → ISO-8601 string (or None).
+
+    Accepts ``2026-08-01 18:00`` / ``2026-08-01T18:00`` / a trailing ``Z``; a naive
+    time is assumed UTC. Raises ``ValueError`` with a friendly message on bad input.
+    """
+    if value is None or not value.strip():
+        return None
+    raw = value.strip().replace("Z", "+00:00").replace(" ", "T", 1)
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise ValueError(f"Couldn't read the time '{value}'.") from exc
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC).isoformat()
 
 
 class TournamentAdminCog(commands.Cog):
@@ -36,6 +56,8 @@ class TournamentAdminCog(commands.Cog):
         max_teams="Bracket size (2-16).",
         mode="Game mode: 5v5 Summoner's Rift (default) or 1v1 ARAM duel.",
         series="Series length per match: best of 1 (default), 3, or 5.",
+        registration_opens="UTC time registration opens, e.g. 2026-08-01 18:00 (optional).",
+        starts="UTC scheduled start time, e.g. 2026-08-02 20:00 (optional).",
     )
     @app_commands.choices(
         mode=[
@@ -58,6 +80,8 @@ class TournamentAdminCog(commands.Cog):
         max_teams: int = 16,
         mode: app_commands.Choice[str] | None = None,
         series: app_commands.Choice[int] | None = None,
+        registration_opens: str | None = None,
+        starts: str | None = None,
     ) -> None:
         """Create a tournament (guild admin; backend re-checks the role)."""
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -65,8 +89,22 @@ class TournamentAdminCog(commands.Cog):
         game_mode = mode.value if mode is not None else "summoners_rift_5v5"
         best_of = series.value if series is not None else 1
         try:
+            opens_iso = _parse_utc(registration_opens)
+            start_iso = _parse_utc(starts)
+        except ValueError as exc:
+            await interaction.followup.send(
+                f"⚠️ {exc} Use a UTC time like `2026-08-01 18:00`.", ephemeral=True
+            )
+            return
+        try:
             t = await self._backend.create_tournament(
-                ctx, name=name, max_teams=max_teams, game_mode=game_mode, best_of=best_of
+                ctx,
+                name=name,
+                max_teams=max_teams,
+                game_mode=game_mode,
+                best_of=best_of,
+                registration_opens_at=opens_iso,
+                start_at=start_iso,
             )
         except BackendError as exc:
             await interaction.followup.send(embed=error_embed(exc), ephemeral=True)

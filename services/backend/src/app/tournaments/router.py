@@ -10,6 +10,7 @@ header or the JWT claim (these routes key on ``tournament_id``, not a path guild
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -42,6 +43,11 @@ class CreateTournamentRequest(BaseModel):
     best_of: int = Field(default=1, description="Series length: 1, 3, or 5.")
     max_teams: int = Field(default=16, ge=2, le=16)
     ruleset: dict[str, Any] = Field(default_factory=dict)
+    # Scheduling (UTC, both optional). When registration_opens_at is in the future
+    # the tournament is created DRAFT (registration closed) and the scheduler opens
+    # + announces it at that time; start_at is the scheduled kickoff (PLAN.md §3.2).
+    registration_opens_at: datetime | None = None
+    start_at: datetime | None = None
 
 
 class TournamentResponse(BaseModel):
@@ -53,6 +59,8 @@ class TournamentResponse(BaseModel):
     best_of: int
     max_teams: int
     is_shared_to_central: bool
+    registration_opens_at: str | None = None
+    start_at: str | None = None
 
 
 class CreatedTournamentResponse(TournamentResponse):
@@ -121,6 +129,10 @@ def _to_response(t: Tournament) -> TournamentResponse:
         best_of=t.best_of,
         max_teams=t.max_teams,
         is_shared_to_central=t.is_shared_to_central,
+        registration_opens_at=(
+            t.registration_opens_at.isoformat() if t.registration_opens_at else None
+        ),
+        start_at=t.start_at.isoformat() if t.start_at else None,
     )
 
 
@@ -152,6 +164,8 @@ async def create_tournament(
             best_of=body.best_of,
             max_teams=body.max_teams,
             ruleset=body.ruleset,
+            registration_opens_at=body.registration_opens_at,
+            start_at=body.start_at,
         )
     except service.InvalidStateError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -198,6 +212,11 @@ async def join_by_code(
         )
     except service.InvalidJoinCodeError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="invalid join code") from exc
+    except service.RegistrationNotOpenError as exc:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=f"registration opens at {exc} (UTC)",
+        ) from exc
     except service.RegistrationClosedError as exc:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, detail="tournament is not accepting players"

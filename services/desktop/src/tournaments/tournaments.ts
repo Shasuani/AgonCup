@@ -19,6 +19,9 @@ export interface Tournament {
   readonly bestOf: number;
   readonly maxTeams: number;
   readonly isSharedToCentral: boolean;
+  /** ISO UTC scheduling times (null when unscheduled). */
+  readonly registrationOpensAt: string | null;
+  readonly startAt: string | null;
 }
 
 export type ListTournamentsResult =
@@ -64,6 +67,9 @@ function asTournament(raw: unknown): Tournament {
     bestOf: typeof rec["best_of"] === "number" ? rec["best_of"] : 1,
     maxTeams: typeof rec["max_teams"] === "number" ? rec["max_teams"] : 0,
     isSharedToCentral: rec["is_shared_to_central"] === true,
+    registrationOpensAt:
+      typeof rec["registration_opens_at"] === "string" ? rec["registration_opens_at"] : null,
+    startAt: typeof rec["start_at"] === "string" ? rec["start_at"] : null,
   };
 }
 

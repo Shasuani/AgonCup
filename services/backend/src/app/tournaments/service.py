@@ -17,6 +17,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from lol_core.bracket import generate_single_elimination
@@ -91,6 +92,15 @@ class NotTeamCaptainError(TournamentError):
     """A team was named but the redeemer is not its captain (only the leader enrols)."""
 
 
+class RegistrationNotOpenError(TournamentError):
+    """Enrolment was attempted before the scheduled ``registration_opens_at``."""
+
+
+def _utcnow() -> datetime:
+    """Current UTC time (tz-aware). Isolated so tests can monkeypatch it."""
+    return datetime.now(tz=UTC)
+
+
 async def _current_guild(session: AsyncSession) -> uuid.UUID:
     """Read the acting guild from the transaction GUC (set by get_tenant_session)."""
     gid = (
@@ -155,12 +165,31 @@ async def create_tournament(
     best_of: int = 1,
     max_teams: int = MAX_TEAMS_HARD_CAP,
     ruleset: dict[str, Any] | None = None,
+    registration_opens_at: datetime | None = None,
+    start_at: datetime | None = None,
 ) -> Tournament:
-    """Create a DRAFT tournament in the acting guild (5v5 Rift or 1v1 ARAM)."""
+    """Create a DRAFT tournament in the acting guild (5v5 Rift or 1v1 ARAM).
+
+    Unscheduled (both timestamps None) → joinable immediately (as before). Scheduled
+    → ``registration_opens_at`` gates enrolment until then, and the scheduler flips
+    DRAFT→OPEN + announces at that time (PLAN.md §3.2). Times are UTC and must satisfy
+    ``registration_opens_at`` ≤ ``start_at`` (and both in the future).
+    """
     if not 2 <= max_teams <= MAX_TEAMS_HARD_CAP:
         raise InvalidStateError(f"max_teams must be in [2, {MAX_TEAMS_HARD_CAP}]")
     if best_of not in ALLOWED_BEST_OF:
         raise InvalidStateError(f"best_of must be one of {sorted(ALLOWED_BEST_OF)}")
+    now = _utcnow()
+    if registration_opens_at is not None and registration_opens_at < now:
+        raise InvalidStateError("registration_opens_at must be in the future")
+    if start_at is not None and start_at < now:
+        raise InvalidStateError("start_at must be in the future")
+    if (
+        registration_opens_at is not None
+        and start_at is not None
+        and start_at < registration_opens_at
+    ):
+        raise InvalidStateError("start_at must be at/after registration_opens_at")
     guild_id = await _current_guild(session)
     tournament = Tournament(
         guild_id=guild_id,
@@ -170,6 +199,8 @@ async def create_tournament(
         best_of=best_of,
         max_teams=max_teams,
         status=TournamentStatus.DRAFT,
+        registration_opens_at=registration_opens_at,
+        start_at=start_at,
         join_code=generate_join_code(),
         ruleset_json=ruleset or {},
     )
@@ -299,6 +330,13 @@ async def join_by_code(
     tournament = await get_tournament_by_code(session, code=code)
     if tournament.status not in (TournamentStatus.OPEN, TournamentStatus.DRAFT):
         raise RegistrationClosedError(tournament.status.value)
+    # Scheduled-registration gate (PLAN.md §3.2): reject before the window opens,
+    # and once the tournament's scheduled start has passed.
+    now = _utcnow()
+    if tournament.registration_opens_at is not None and now < tournament.registration_opens_at:
+        raise RegistrationNotOpenError(tournament.registration_opens_at.isoformat())
+    if tournament.start_at is not None and now >= tournament.start_at:
+        raise RegistrationClosedError("started")
 
     if tournament.game_mode.team_size == 1:
         return tournament, await _enrol_solo(session, tournament=tournament, user_id=user_id)

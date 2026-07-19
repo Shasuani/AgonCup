@@ -31,6 +31,18 @@
   function clear(el) {
     if (el) while (el.firstChild) el.removeChild(el.firstChild);
   }
+  // Format an ISO-UTC timestamp as a short local date+time (falls back to raw).
+  function fmtWhen(iso) {
+    try {
+      var d = new Date(iso);
+      if (isNaN(d.getTime())) return iso;
+      return d.toLocaleString([], {
+        month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+      });
+    } catch (e) {
+      return iso;
+    }
+  }
 
   // --- view manager --------------------------------------------------------- //
 
@@ -320,6 +332,8 @@
     if (t.gameMode) pill(t.gameMode);
     if (t.bestOf) pill("Bo" + t.bestOf);
     if (t.maxTeams) pill(t.maxTeams + " teams");
+    if (t.registrationOpensAt) pill("opens " + fmtWhen(t.registrationOpensAt));
+    if (t.startAt) pill("starts " + fmtWhen(t.startAt));
     if (t.isSharedToCentral) pill("shared");
     li.appendChild(meta);
 

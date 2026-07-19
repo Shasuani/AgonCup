@@ -342,7 +342,18 @@ class Tournament(GuildScoped, Base):
     # 1 = single game (default); 3 = best-of-three; 5 = best-of-five.
     best_of: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     max_teams: Mapped[int] = mapped_column(Integer, nullable=False, server_default="16")
+    # Scheduling (PLAN.md §3.2). ``registration_opens_at`` gates enrolment (join is
+    # rejected before it) and, once reached, the scheduler flips DRAFT→OPEN and
+    # announces. ``start_at`` is the scheduled kickoff; ``start_announced_at`` is the
+    # once-only guard so the "starting" announcement fires a single time. All UTC,
+    # all nullable (an unscheduled tournament opens immediately and never auto-announces).
+    registration_opens_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     start_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    start_announced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     is_shared_to_central: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=false()
     )

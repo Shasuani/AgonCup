@@ -117,6 +117,8 @@ export interface TournamentBridge {
   bestOf: number;
   maxTeams: number;
   isSharedToCentral: boolean;
+  registrationOpensAt: string | null;
+  startAt: string | null;
 }
 
 export type ListTournamentsBridgeResult =

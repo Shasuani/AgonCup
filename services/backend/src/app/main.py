@@ -7,8 +7,11 @@ Wires structured JSON logging, the observability endpoints (`/healthz`,
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 from fastapi import FastAPI
 from fastapi.responses import PlainTextResponse, Response
@@ -36,6 +39,43 @@ from app.tournaments.router import router as tournaments_router
 metrics_registry = CollectorRegistry()
 
 
+async def _scheduler_loop(interval_seconds: int) -> None:
+    """Periodic scheduled-tournament ticker (PLAN.md §3.2).
+
+    Runs on the OWNER connection (cross-tenant: it must see every guild's rows,
+    which an RLS-bound app_rw session with no GUC could not). Resilient — any tick
+    error is logged and the loop continues.
+    """
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from app.notifications import RedisNotificationPublisher
+    from app.realtime.redis_client import get_redis
+    from app.tournaments.scheduler import run_scheduler_tick
+
+    settings = get_settings()
+    log = get_logger("app.scheduler")
+    engine = create_async_engine(settings.database_url, pool_pre_ping=True, future=True)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        while True:
+            await asyncio.sleep(interval_seconds)
+            try:
+                async with maker() as session, session.begin():
+                    opened, started = await run_scheduler_tick(
+                        session,
+                        RedisNotificationPublisher(get_redis()),
+                        now=datetime.now(tz=UTC),
+                    )
+                if opened or started:
+                    log.info("tournament_scheduler_tick", opened=opened, started=started)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("tournament_scheduler_tick_failed")
+    finally:
+        await engine.dispose()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
@@ -46,7 +86,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         environment=settings.environment,
         version=app.version,
     )
+    scheduler_task: asyncio.Task[None] | None = None
+    if settings.scheduler_enabled:
+        scheduler_task = asyncio.create_task(
+            _scheduler_loop(settings.scheduler_interval_seconds)
+        )
     yield
+    if scheduler_task is not None:
+        scheduler_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await scheduler_task
     # Close the shared realtime Redis pool (command pub/sub + WS gateway).
     from app.realtime.redis_client import aclose_redis
 

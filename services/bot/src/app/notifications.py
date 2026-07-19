@@ -72,9 +72,16 @@ def _build_embed(kind: str, payload: dict[str, Any]) -> dict[str, Any] | None:
         match_result,
         registration_approved,
         registration_verified,
+        tournament_announced,
         tournament_check_in,
     )
 
+    if kind == "tournament_announced":
+        return tournament_announced(
+            tournament_name=payload.get("tournament_name", "A tournament"),
+            headline=payload.get("headline", "Update"),
+            detail=payload.get("detail", ""),
+        )
     if kind == "registration_approved":
         return registration_approved(
             tournament_name=payload.get("tournament_name", "the tournament"),

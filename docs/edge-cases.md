@@ -264,10 +264,10 @@ Status legend: `🔵 open` (συζητάμε) · `🟡 decided` (κλείδωσ�
 αποτέλεσμα μέσω callback** — είναι ο επίσημος δρόμος (Battlefy/Challengermode).
 Το autonomous-LCU που χτίσαμε είναι ο **ToS-ρίσκο** δρόμος (το beta gate).
 
-➡️ Πλήρης ανάλυση + απόφαση + απαιτούμενη ενέργεια: **`docs/decision-tournament-codes.md`**.
+➡️ Πλήρης ανάλυση: **`docs/decision-tournament-codes.md`**.
 
-- **Status:** 🟡 recommended — pivot σε Tournament Codes ως primary path· χρειάζεται
-  ο owner να κάνει apply για Tournament API production access (callback URL).
+- **Status:** ❌ **Rejected από τον owner (2026-07-20) — custom lobbies μόνο.**
+  Μένουμε στο autonomous-LCU. Κρατάμε το doc ως research record· δεν το ξανανοίγουμε.
 
 ---
 

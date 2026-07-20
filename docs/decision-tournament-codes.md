@@ -1,8 +1,10 @@
 # Decision: Riot **Tournament Codes** are the sanctioned match path
 
-**Date:** 2026-07-20 · **Status:** 🟡 recommended (needs one real-world action — see §6)
+**Date:** 2026-07-20 · **Status:** ❌ REJECTED by owner (2026-07-20) — **custom
+lobbies only** (stay on the autonomous-LCU path). Kept as a research record; do NOT
+re-raise the pivot unless the owner reopens it.
 **Author's note:** research-driven decision requested by the project owner
-("κάνε έρευνα και αποφάσισε").
+("κάνε έρευνα και αποφάσισε"). Owner reviewed and chose to **keep custom-only**.
 
 ---
 

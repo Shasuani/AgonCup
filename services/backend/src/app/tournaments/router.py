@@ -10,7 +10,7 @@ header or the JWT claim (these routes key on ``tournament_id``, not a path guild
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -24,9 +24,11 @@ from app.auth.deps import (
     get_tenant_session,
     require_tenant_role,
 )
+from app.logging import get_logger
 from app.models.tables import Registration, Tournament
-from app.tournaments import service
+from app.tournaments import readiness, service
 
+logger = get_logger(__name__)
 router = APIRouter(prefix="/tournaments", tags=["tournaments"])
 
 _ADMIN = require_tenant_role(UserGuildRoleName.GUILD_ADMIN)
@@ -100,6 +102,7 @@ class StartResponse(BaseModel):
 
 
 class BracketMatchResponse(BaseModel):
+    id: str
     round: int
     slot: int
     team_a_id: str | None
@@ -108,6 +111,9 @@ class BracketMatchResponse(BaseModel):
     team_b_name: str | None
     winner_team_id: str | None
     status: str
+    ready_deadline_at: str | None = None
+    team_a_ready: bool = False
+    team_b_ready: bool = False
 
 
 class BracketResponse(BaseModel):
@@ -270,6 +276,7 @@ async def get_bracket(
         tournament=_to_response(tournament),
         matches=[
             BracketMatchResponse(
+                id=str(m.id),
                 round=m.round,
                 slot=m.slot,
                 team_a_id=str(m.team_a_id) if m.team_a_id else None,
@@ -278,10 +285,70 @@ async def get_bracket(
                 team_b_name=m.team_b_name,
                 winner_team_id=str(m.winner_team_id) if m.winner_team_id else None,
                 status=m.status,
+                ready_deadline_at=(
+                    m.ready_deadline_at.isoformat() if m.ready_deadline_at else None
+                ),
+                team_a_ready=m.team_a_ready,
+                team_b_ready=m.team_b_ready,
             )
             for m in matches
         ],
     )
+
+
+class ReadyResponse(BaseModel):
+    match_id: str
+    side: str
+    both_ready: bool
+
+
+@router.post(
+    "/matches/{match_id}/ready",
+    response_model=ReadyResponse,
+    summary="Mark the caller's team ready for a match (team captain)",
+)
+async def ready_up(
+    match_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    session: Annotated[AsyncSession, Depends(get_tenant_session)],
+) -> ReadyResponse:
+    """Team captain presses **ready** for one of the match's two teams.
+
+    The caller must captain ``team_a`` or ``team_b`` (edge-cases §8.5). Idempotent;
+    once both sides ready the match's ready window is disarmed.
+    """
+    try:
+        team_id = await readiness.resolve_ready_team(
+            session, match_id=match_id, user_id=uuid.UUID(principal.user_id)
+        )
+        outcome = await readiness.mark_team_ready(
+            session, match_id=match_id, team_id=team_id, now=datetime.now(UTC)
+        )
+    except readiness.MatchNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="match not found") from exc
+    except readiness.NotTeamCaptainError as exc:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, detail="you do not captain a team in this match"
+        ) from exc
+    except readiness.MatchNotReadyableError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    # Both sides ready → autonomously spin up the lobby (edge-cases §8.1/§8.5).
+    # Best-effort: a realtime/roster hiccup must not fail the ready acknowledgement
+    # (an admin can initialize the lobby manually as a fallback).
+    if outcome.both_ready:
+        from app.orchestration import service as orchestration_service
+
+        try:
+            await orchestration_service.auto_initialize_lobby(
+                session,
+                match_id=match_id,
+                publisher=orchestration_service.make_command_publisher(),
+            )
+        except Exception:  # noqa: BLE001 — best-effort side effect, never blocks ready.
+            logger.exception("ready_up.auto_lobby_failed", match_id=str(match_id))
+
+    return ReadyResponse(match_id=str(match_id), side=outcome.side, both_ready=outcome.both_ready)
 
 
 @router.post(

@@ -468,6 +468,58 @@ def _init_result(lobby: MatchLobby) -> InitResult:
     )
 
 
+def default_lobby_credentials(match_id: uuid.UUID) -> tuple[str, str]:
+    """Backend-owned, per-match lobby name + password (edge-cases §8.1).
+
+    Derived deterministically from the match id so any successor host re-creates the
+    lobby verbatim (PLAN.md §3.6.2). The password is the manual-fallback join string
+    (invite/auto-accept is the primary path); it is not an auth secret.
+    """
+    short = match_id.hex[:8]
+    return f"LoL-{short}", match_id.hex[:6].upper()
+
+
+def make_command_publisher() -> CommandPublisher:
+    """Production real-time publisher (Redis pub/sub onto the WS plane).
+
+    Deferred imports keep orchestration's module load light and avoid import-order
+    coupling with the realtime package (mirrors the orchestration router's seam).
+    """
+    from app.realtime.hub import RedisCommandPublisher  # noqa: PLC0415
+    from app.realtime.redis_client import get_redis  # noqa: PLC0415
+
+    return RedisCommandPublisher(get_redis())
+
+
+async def auto_initialize_lobby(
+    session: AsyncSession,
+    *,
+    match_id: uuid.UUID,
+    publisher: CommandPublisher | None = None,
+    server_secret: str | None = None,
+) -> InitResult | None:
+    """Best-effort lobby init fired when both teams ready up (edge-cases §8.5).
+
+    Generates the backend-owned lobby credentials and delegates to
+    :func:`initialize_lobby`. Returns ``None`` (never raises) when nobody on the
+    checked-in roster opted in to host — the ready still stands and an admin can
+    initialize the lobby manually. Idempotent via ``initialize_lobby``.
+    """
+    name, password = default_lobby_credentials(match_id)
+    try:
+        return await initialize_lobby(
+            session,
+            match_id=match_id,
+            lobby_name=name,
+            lobby_password=password,
+            publisher=publisher,
+            server_secret=server_secret,
+        )
+    except NoEligibleHostError:
+        logger.info("orchestration.auto_init.no_eligible_host", match_id=str(match_id))
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Idempotent host re-designation: conditional UPDATE WHERE expected epoch
 # ---------------------------------------------------------------------------
@@ -598,11 +650,64 @@ async def ingest_lobby_state(
     # Best-effort global presence (the desktop bell). Publish when the match goes
     # in-game; clear when it ends. A Redis/presence failure never fails the ack.
     await _sync_presence(session, match_id=match_id, state=lobby.state)
+    # Best-effort live announcement to the guild's Discord feed (edge-cases §9.2).
+    await _announce_phase(session, match_id=match_id, state=lobby.state)
     return IngestResult(accepted=True, host_epoch=lobby.host_epoch, state=lobby.state)
 
 
 #: Terminal lobby states that should drop a match from the live-presence feed.
 _PRESENCE_CLEAR_STATES = frozenset({LobbyPhase.ENDED, LobbyPhase.ABORTED, LobbyPhase.HOST_LOST})
+
+#: Lobby phases worth announcing to the guild's Discord feed (curated to milestones
+#: — spectators want "lobby up" + "now live", not every internal edge). Result +
+#: ready-up announcements come from their own paths (edge-cases §9.2).
+_ANNOUNCE_PHASES: dict[LobbyPhase, tuple[str, str]] = {
+    LobbyPhase.LOBBY_OPEN: ("lobby open", "The custom lobby is up — players are joining."),
+    LobbyPhase.IN_GAME: ("🔴 now live", "The match has started."),
+}
+
+
+async def _announce_phase(
+    session: AsyncSession, *, match_id: uuid.UUID, state: LobbyPhase
+) -> None:
+    """Publish a live phase announcement to the guild's Discord feed (best-effort).
+
+    Curated to the milestones in :data:`_ANNOUNCE_PHASES`; every failure is swallowed
+    so a Redis/notification hiccup never fails the host ack (edge-cases §9.2).
+    """
+    milestone = _ANNOUNCE_PHASES.get(state)
+    if milestone is None:
+        return
+    try:
+        from app.notifications import (  # noqa: PLC0415 - deferred, best-effort
+            RedisNotificationPublisher,
+            publish_tournament_announced,
+        )
+        from app.realtime.redis_client import get_redis  # noqa: PLC0415
+
+        match = (
+            await session.execute(select(Match).where(Match.id == match_id))
+        ).scalar_one_or_none()
+        if match is None:
+            return
+        tour = (
+            await session.execute(
+                select(Tournament).where(Tournament.id == match.tournament_id)
+            )
+        ).scalar_one_or_none()
+        headline, detail = milestone
+        label = f"Round {match.round + 1} · Match {match.bracket_slot + 1}"
+        await publish_tournament_announced(
+            RedisNotificationPublisher(get_redis()),
+            origin_guild_id=str(match.guild_id),
+            tournament_name=tour.name if tour is not None else "Tournament",
+            headline=f"{label} — {headline}",
+            detail=detail,
+        )
+    except Exception as exc:  # noqa: BLE001 - best-effort side effect, never blocks the ack.
+        logger.warning(
+            "orchestration.announce_phase_failed", match_id=str(match_id), error=str(exc)
+        )
 
 
 async def _sync_presence(session: AsyncSession, *, match_id: uuid.UUID, state: LobbyPhase) -> None:

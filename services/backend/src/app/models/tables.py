@@ -463,6 +463,14 @@ class Match(GuildScoped, Base):
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Match-ready gate (edge-cases §8.5): a 5-minute window armed when both teams
+    # are present; each captain stamps their side's *_ready_at. A side that readied
+    # while the opponent did not wins by walkover at the deadline.
+    ready_deadline_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    team_a_ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    team_b_ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class MatchLobby(GuildScoped, Base):

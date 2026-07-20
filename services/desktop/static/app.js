@@ -290,6 +290,10 @@
   var tourList = byId("tour-list");
   var tourEmpty = byId("tour-empty");
 
+  // Team ids the signed-in user CAPTAINS — powers both the "which team enters"
+  // dropdown and the per-match "Ready" button (only a captain readies a team up).
+  var captainTeamIds = [];
+
   // Populate the "which team enters" dropdown with the teams the user CAPTAINS
   // (only a captain can enrol a team in a 5v5). Keeps the leading "Auto" option.
   function loadCaptainTeamOptions() {
@@ -298,14 +302,14 @@
       // Clear all but the first ("Auto") option.
       while (tourTeam.options.length > 1) tourTeam.remove(1);
       if (res && res.ok) {
-        res.teams
-          .filter(function (t) { return t.role === "captain"; })
-          .forEach(function (t) {
-            var opt = document.createElement("option");
-            opt.value = t.teamId;
-            opt.textContent = t.name;
-            tourTeam.appendChild(opt);
-          });
+        var captained = res.teams.filter(function (t) { return t.role === "captain"; });
+        captainTeamIds = captained.map(function (t) { return t.teamId; });
+        captained.forEach(function (t) {
+          var opt = document.createElement("option");
+          opt.value = t.teamId;
+          opt.textContent = t.name;
+          tourTeam.appendChild(opt);
+        });
       }
     }).catch(function () {});
   }
@@ -365,7 +369,7 @@
         if (!res.matches.length) {
           panel.textContent = "Bracket not generated yet — the tournament hasn't started.";
         } else {
-          renderBracket(panel, res.matches);
+          renderBracket(panel, res.matches, function () { loadBracketInto(t, panel); });
         }
       } else {
         panel.textContent = (res && res.detail) || "Could not load the bracket.";
@@ -400,16 +404,93 @@
     return row;
   }
 
-  function matchCard(m) {
+  // Minutes left until an ISO deadline (>= 0), or null if no/invalid deadline.
+  function minutesLeft(iso) {
+    if (!iso) return null;
+    var ms = new Date(iso).getTime() - Date.now();
+    if (isNaN(ms)) return null;
+    return Math.max(0, Math.ceil(ms / 60000));
+  }
+
+  // The ready gate (edge-cases §8.5): shown only on a playable match (both teams
+  // present, still pending). A captain of either side gets a Ready button; once
+  // their side is ready it flips to a waiting note. Non-captains just see status.
+  function readyRow(m, reload) {
+    var playable = m.status === "pending" && m.teamAId && m.teamBId && !m.winnerTeamId;
+    if (!playable) {
+      // If I captain the one present side, tell me we're waiting for the opponent.
+      var mineTbd =
+        (m.teamAId && captainTeamIds.indexOf(m.teamAId) !== -1 && !m.teamBId) ||
+        (m.teamBId && captainTeamIds.indexOf(m.teamBId) !== -1 && !m.teamAId);
+      if (mineTbd) {
+        var wait = document.createElement("div");
+        wait.className = "bm-ready-note";
+        wait.textContent = "Waiting for the other match's winner…";
+        return wait;
+      }
+      return null;
+    }
+
+    var row = document.createElement("div");
+    row.className = "bm-ready";
+
+    var iCaptainA = captainTeamIds.indexOf(m.teamAId) !== -1;
+    var iCaptainB = captainTeamIds.indexOf(m.teamBId) !== -1;
+    var mySide = iCaptainA ? "a" : iCaptainB ? "b" : null;
+    var myReady = mySide === "a" ? m.teamAReady : mySide === "b" ? m.teamBReady : false;
+
+    var mins = minutesLeft(m.readyDeadlineAt);
+    var status = document.createElement("span");
+    status.className = "bm-ready-status";
+    var aMark = m.teamAReady ? "✓" : "•";
+    var bMark = m.teamBReady ? "✓" : "•";
+    status.textContent = aMark + " / " + bMark + (mins !== null ? "  ·  " + mins + "m left" : "");
+    row.appendChild(status);
+
+    if (mySide && !myReady) {
+      var btn = document.createElement("button");
+      btn.className = "btn-ready";
+      btn.textContent = "Ready up";
+      btn.addEventListener("click", function () {
+        if (!lol || !lol.matchReady) return;
+        btn.disabled = true;
+        btn.textContent = "…";
+        lol.matchReady(m.id).then(function (res) {
+          if (res && res.ok) {
+            if (typeof reload === "function") reload();
+          } else {
+            btn.disabled = false;
+            btn.textContent = "Ready up";
+            var d = (res && res.detail) || "Could not ready up.";
+            status.textContent = d;
+          }
+        }).catch(function () {
+          btn.disabled = false;
+          btn.textContent = "Ready up";
+        });
+      });
+      row.appendChild(btn);
+    } else if (mySide && myReady) {
+      var note = document.createElement("span");
+      note.className = "bm-ready-note";
+      note.textContent = "Ready — waiting for the opponent";
+      row.appendChild(note);
+    }
+    return row;
+  }
+
+  function matchCard(m, reload) {
     var card = document.createElement("div");
     card.className = "bracket-match";
     var w = m.winnerTeamId;
     card.appendChild(teamLine(m.teamAName, !!(w && m.teamAId === w)));
     card.appendChild(teamLine(m.teamBName, !!(w && m.teamBId === w)));
+    var rr = readyRow(m, reload);
+    if (rr) card.appendChild(rr);
     return card;
   }
 
-  function renderBracket(panel, matches) {
+  function renderBracket(panel, matches, reload) {
     var rounds = {};
     matches.forEach(function (m) {
       (rounds[m.round] = rounds[m.round] || []).push(m);
@@ -426,7 +507,7 @@
       h.textContent = roundLabel(rk, maxRound);
       col.appendChild(h);
       rounds[rk].sort(function (a, b) { return a.slot - b.slot; }).forEach(function (m) {
-        col.appendChild(matchCard(m));
+        col.appendChild(matchCard(m, reload));
       });
       wrap.appendChild(col);
     });

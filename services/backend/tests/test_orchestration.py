@@ -29,6 +29,8 @@ from app.models import ClientSession, Match, MatchLobby
 from app.orchestration import service
 from app.orchestration.service import (
     RecordingPublisher,
+    auto_initialize_lobby,
+    default_lobby_credentials,
     derive_server_seed,
     ingest_heartbeat,
     ingest_lobby_state,
@@ -295,6 +297,48 @@ async def test_initialize_lobby_designates_host_and_publishes_create_invite() ->
     assert isinstance(create, CreateLobbyCommand)
     assert create.host_epoch == 0
     assert set(create.spec.invitee_puuids) == set(succession)
+
+
+def test_default_lobby_credentials_are_deterministic() -> None:
+    mid = uuid.uuid4()
+    name, pw = default_lobby_credentials(mid)
+    assert (name, pw) == default_lobby_credentials(mid)  # stable per match
+    assert name.startswith("LoL-")
+    assert pw.isupper() and len(pw) == 6
+    assert default_lobby_credentials(uuid.uuid4())[0] != name  # match-bound
+
+
+@pytest.mark.asyncio
+async def test_auto_initialize_lobby_spins_up_when_host_present() -> None:
+    session, match_id, succession = _seeded_session(opt_ins=3)
+    pub = RecordingPublisher()
+
+    result = await auto_initialize_lobby(
+        session, match_id=match_id, publisher=pub, server_secret=_SECRET
+    )
+
+    assert result is not None
+    assert result.host_puuid == succession[0]
+    assert result.state == LobbyPhase.AWAITING_CREATE
+    assert [e.payload.type for e in pub.published] == [
+        "create_lobby_command",
+        "invite_players_command",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_auto_initialize_lobby_returns_none_without_host() -> None:
+    # Nobody opted in to host → best-effort no-op (ready still stands, no raise).
+    session, match_id, _ = _seeded_session(opt_ins=0, opt_outs=2)
+    pub = RecordingPublisher()
+
+    result = await auto_initialize_lobby(
+        session, match_id=match_id, publisher=pub, server_secret=_SECRET
+    )
+
+    assert result is None
+    assert pub.published == []
+    assert session.store[MatchLobby] == []
 
 
 @pytest.mark.asyncio

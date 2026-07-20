@@ -400,6 +400,20 @@
       .bm-win { background: rgba(200,170,110,0.08); }
       .bm-win .bm-name { color: var(--gold-bright); font-weight: 700; }
       .bm-check { color: var(--gold); font-weight: 900; font-size: 12px; }
+      /* ---------------- match-ready gate (edge-cases §8.5) ---------------- */
+      .bm-ready { display: flex; align-items: center; gap: 8px; padding: 7px 11px;
+        border-top: 1px solid var(--line-soft); background: rgba(200,170,110,0.04); }
+      .bm-ready-status { flex: 1; min-width: 0; color: var(--text-dim, #9aa);
+        font-family: var(--sans, inherit); font-size: 12px;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .bm-ready-note { padding: 6px 11px; border-top: 1px solid var(--line-soft);
+        color: var(--text-dim, #9aa); font-family: var(--sans, inherit); font-size: 12px; font-style: italic; }
+      .btn-ready { flex: none; cursor: pointer; padding: 5px 12px; border-radius: 6px;
+        border: 1px solid var(--gold, #c8aa6e); background: rgba(200,170,110,0.15);
+        color: var(--gold-bright, #f0e6d2); font-weight: 700; font-size: 12px;
+        font-family: var(--sans, inherit); }
+      .btn-ready:hover { background: rgba(200,170,110,0.28); }
+      .btn-ready:disabled { opacity: 0.55; cursor: default; }
 
       /* ---------------- join-code reveal + copy ---------------- */
       .code-reveal {

@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { joinTournamentByCode, listMyTournaments } from "./tournaments.js";
+import { getBracket, joinTournamentByCode, listMyTournaments, markReady } from "./tournaments.js";
 
 test("listMyTournaments: GETs /tournaments/mine with Bearer and maps rows", async () => {
   let captured: { url: string; method: string | undefined; headers: Record<string, string> } | undefined;
@@ -136,4 +136,77 @@ test("network failure maps to status 0", async () => {
   const result = await joinTournamentByCode({ accessToken: "j", code: "x" }, { fetch: spyFetch, backendUrl: "http://x" });
   assert.equal(result.ok, false);
   if (!result.ok) assert.equal(result.status, 0);
+});
+
+test("getBracket: maps match id + ready-gate fields", async () => {
+  const spyFetch: typeof fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        tournament: { id: "t1", name: "Cup", status: "running" },
+        matches: [
+          {
+            id: "m1",
+            round: 0,
+            slot: 0,
+            team_a_id: "A",
+            team_a_name: "Alpha",
+            team_b_id: "B",
+            team_b_name: "Bravo",
+            winner_team_id: null,
+            status: "pending",
+            ready_deadline_at: "2026-08-01T12:05:00+00:00",
+            team_a_ready: true,
+            team_b_ready: false,
+          },
+        ],
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    )) as unknown as typeof fetch;
+
+  const result = await getBracket(
+    { accessToken: "j", tournamentId: "t1" },
+    { fetch: spyFetch, backendUrl: "http://x" },
+  );
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    const m = result.matches[0];
+    assert.ok(m);
+    assert.equal(m.id, "m1");
+    assert.equal(m.readyDeadlineAt, "2026-08-01T12:05:00+00:00");
+    assert.equal(m.teamAReady, true);
+    assert.equal(m.teamBReady, false);
+  }
+});
+
+test("markReady: POSTs /matches/{id}/ready with Bearer and maps both_ready", async () => {
+  let captured: { url: string; method: string | undefined; headers: Record<string, string> } | undefined;
+  const spyFetch: typeof fetch = (async (url: string, init?: RequestInit) => {
+    captured = { url, method: init?.method, headers: (init?.headers ?? {}) as Record<string, string> };
+    return new Response(JSON.stringify({ match_id: "m1", side: "team_a", both_ready: true }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as unknown as typeof fetch;
+
+  const result = await markReady({ accessToken: "jwt", matchId: "m1" }, { fetch: spyFetch, backendUrl: "http://x" });
+
+  assert.equal(captured?.url, "http://x/api/v1/tournaments/matches/m1/ready");
+  assert.equal(captured?.method, "POST");
+  assert.equal(captured?.headers["Authorization"], "Bearer jwt");
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.equal(result.side, "team_a");
+    assert.equal(result.bothReady, true);
+  }
+});
+
+test("markReady: 403 surfaces the not-captain detail", async () => {
+  const spyFetch: typeof fetch = (async () =>
+    new Response(JSON.stringify({ detail: "you do not captain a team in this match" }), {
+      status: 403,
+      headers: { "Content-Type": "application/json" },
+    })) as unknown as typeof fetch;
+  const result = await markReady({ accessToken: "j", matchId: "m1" }, { fetch: spyFetch, backendUrl: "http://x" });
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.status, 403);
 });

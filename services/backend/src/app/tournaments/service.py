@@ -480,6 +480,7 @@ async def list_my_tournaments(session: AsyncSession, *, user_id: uuid.UUID) -> l
 class BracketMatch:
     """One match in a tournament bracket, with team names resolved for display."""
 
+    id: uuid.UUID
     round: int
     slot: int
     team_a_id: uuid.UUID | None
@@ -488,6 +489,9 @@ class BracketMatch:
     team_b_name: str | None
     winner_team_id: uuid.UUID | None
     status: str
+    ready_deadline_at: datetime | None
+    team_a_ready: bool
+    team_b_ready: bool
 
 
 async def get_bracket(session: AsyncSession, *, tournament_id: uuid.UUID) -> list[BracketMatch]:
@@ -510,6 +514,7 @@ async def get_bracket(session: AsyncSession, *, tournament_id: uuid.UUID) -> lis
     }
     return [
         BracketMatch(
+            id=m.id,
             round=m.round,
             slot=m.bracket_slot,
             team_a_id=m.team_a,
@@ -518,6 +523,9 @@ async def get_bracket(session: AsyncSession, *, tournament_id: uuid.UUID) -> lis
             team_b_name=names.get(m.team_b) if m.team_b else None,
             winner_team_id=m.winner_team_id,
             status=m.status.value if hasattr(m.status, "value") else str(m.status),
+            ready_deadline_at=m.ready_deadline_at,
+            team_a_ready=m.team_a_ready_at is not None,
+            team_b_ready=m.team_b_ready_at is not None,
         )
         for m in matches
     ]

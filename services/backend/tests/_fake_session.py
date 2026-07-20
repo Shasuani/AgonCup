@@ -16,6 +16,8 @@ from typing import Any
 
 from app.models import (
     Guild,
+    Match,
+    MatchResult,
     Registration,
     RiotAccount,
     Team,
@@ -39,6 +41,8 @@ _MODELS: tuple[type, ...] = (
     Registration,
     RiotAccount,
     VerificationAttempt,
+    Match,
+    MatchResult,
 )
 
 

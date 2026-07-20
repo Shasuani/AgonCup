@@ -157,6 +157,7 @@ export async function joinTournamentByCode(
 
 /** One match in a tournament bracket. */
 export interface BracketMatch {
+  readonly id: string;
   readonly round: number;
   readonly slot: number;
   readonly teamAName: string | null;
@@ -165,6 +166,10 @@ export interface BracketMatch {
   readonly teamAId: string | null;
   readonly teamBId: string | null;
   readonly status: string;
+  /** ISO-8601 deadline for the 5-min ready window (null when not armed). */
+  readonly readyDeadlineAt: string | null;
+  readonly teamAReady: boolean;
+  readonly teamBReady: boolean;
 }
 
 export type BracketResult =
@@ -175,7 +180,9 @@ function asBracketMatch(raw: unknown): BracketMatch {
   const r = (raw ?? {}) as Record<string, unknown>;
   const s = (k: string): string | null => (typeof r[k] === "string" ? (r[k] as string) : null);
   const n = (k: string): number => (typeof r[k] === "number" ? (r[k] as number) : 0);
+  const b = (k: string): boolean => r[k] === true;
   return {
+    id: s("id") ?? "",
     round: n("round"),
     slot: n("slot"),
     teamAName: s("team_a_name"),
@@ -184,6 +191,55 @@ function asBracketMatch(raw: unknown): BracketMatch {
     teamAId: s("team_a_id"),
     teamBId: s("team_b_id"),
     status: s("status") ?? "pending",
+    readyDeadlineAt: s("ready_deadline_at"),
+    teamAReady: b("team_a_ready"),
+    teamBReady: b("team_b_ready"),
+  };
+}
+
+// --- ready-up (team captain marks their side ready) ------------------------ //
+
+export type ReadyResult =
+  | { readonly ok: true; readonly side: string; readonly bothReady: boolean }
+  | { readonly ok: false; readonly status: number; readonly detail: string };
+
+/** Mark the caller's team ready for a match (POST /matches/{id}/ready). */
+export async function markReady(
+  args: AuthedArgs & { matchId: string },
+  deps: HttpDeps = {},
+): Promise<ReadyResult> {
+  const doFetch = deps.fetch ?? fetch;
+  const backendUrl = resolveBackendUrl(deps.backendUrl);
+
+  let res: Response;
+  try {
+    res = await doFetch(
+      `${backendUrl}/api/v1/tournaments/matches/${encodeURIComponent(args.matchId)}/ready`,
+      { method: "POST", headers: { Authorization: `Bearer ${args.accessToken}` } },
+    );
+  } catch (err) {
+    return { ok: false, status: 0, detail: `Backend unreachable: ${String(err)}` };
+  }
+
+  let json: unknown;
+  try {
+    json = await res.json();
+  } catch {
+    json = undefined;
+  }
+
+  if (res.ok) {
+    const rec = (json ?? {}) as Record<string, unknown>;
+    return {
+      ok: true,
+      side: typeof rec["side"] === "string" ? (rec["side"] as string) : "",
+      bothReady: rec["both_ready"] === true,
+    };
+  }
+  return {
+    ok: false,
+    status: res.status,
+    detail: detailOf(json, `Could not ready up (HTTP ${res.status}).`),
   };
 }
 

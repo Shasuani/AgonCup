@@ -46,7 +46,12 @@ import { readCurrentSummoner } from "./lcu/readSummoner.js";
 import { verifyDesktop, type VerifyResult } from "./lcu/verify.js";
 import { listMyAccounts, type ListAccountsResult } from "./accounts/listAccounts.js";
 import { unlinkAccount } from "./accounts/unlinkAccount.js";
-import { getBracket, joinTournamentByCode, listMyTournaments } from "./tournaments/tournaments.js";
+import {
+  getBracket,
+  joinTournamentByCode,
+  listMyTournaments,
+  markReady,
+} from "./tournaments/tournaments.js";
 import {
   approveJoinRequest,
   createTeam,
@@ -666,6 +671,11 @@ async function bootstrap(): Promise<void> {
         { accessToken: t, tournamentId: args.tournamentId },
         { backendUrl: backendBaseUrl() },
       ),
+    ),
+  );
+  ipcMain.handle("lol:match-ready", (_event, args: { matchId: string }) =>
+    withSession((t) =>
+      markReady({ accessToken: t, matchId: args.matchId }, { backendUrl: backendBaseUrl() }),
     ),
   );
 

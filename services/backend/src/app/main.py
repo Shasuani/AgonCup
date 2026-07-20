@@ -50,6 +50,7 @@ async def _scheduler_loop(interval_seconds: int) -> None:
 
     from app.notifications import RedisNotificationPublisher
     from app.realtime.redis_client import get_redis
+    from app.tournaments.readiness import run_readiness_tick
     from app.tournaments.scheduler import run_scheduler_tick
 
     settings = get_settings()
@@ -59,19 +60,32 @@ async def _scheduler_loop(interval_seconds: int) -> None:
     try:
         while True:
             await asyncio.sleep(interval_seconds)
+            now = datetime.now(tz=UTC)
+            publisher = RedisNotificationPublisher(get_redis())
             try:
                 async with maker() as session, session.begin():
-                    opened, started = await run_scheduler_tick(
-                        session,
-                        RedisNotificationPublisher(get_redis()),
-                        now=datetime.now(tz=UTC),
-                    )
+                    opened, started = await run_scheduler_tick(session, publisher, now=now)
                 if opened or started:
                     log.info("tournament_scheduler_tick", opened=opened, started=started)
             except asyncio.CancelledError:
                 raise
             except Exception:
                 log.exception("tournament_scheduler_tick_failed")
+            # Match-ready gate (edge-cases §8.5): arm ready windows + forfeit no-shows.
+            try:
+                async with maker() as session, session.begin():
+                    armed, forfeited = await run_readiness_tick(
+                        session,
+                        publisher,
+                        now=now,
+                        window_seconds=settings.ready_window_seconds,
+                    )
+                if armed or forfeited:
+                    log.info("match_readiness_tick", armed=armed, forfeited=forfeited)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("match_readiness_tick_failed")
     finally:
         await engine.dispose()
 

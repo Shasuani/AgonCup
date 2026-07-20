@@ -66,6 +66,11 @@ class Settings(BaseSettings):
         default=30,
         description="Seconds between scheduler passes.",
     )
+    ready_window_seconds: int = Field(
+        default=300,
+        description="Match-ready window (edge-cases §8.5): seconds a team has to ready "
+        "up once both teams are present, before an unready side forfeits by walkover.",
+    )
 
     # --- Auth: JWT ----------------------------------------------------------
     # NOTE: placeholder secret only. Provided via the secrets manager in real

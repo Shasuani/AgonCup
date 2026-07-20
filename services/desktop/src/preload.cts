@@ -131,6 +131,7 @@ export type JoinTournamentBridgeResult =
 
 /** One bracket match (team names resolved). */
 export interface BracketMatchBridge {
+  id: string;
   round: number;
   slot: number;
   teamAName: string | null;
@@ -139,10 +140,17 @@ export interface BracketMatchBridge {
   teamAId: string | null;
   teamBId: string | null;
   status: string;
+  readyDeadlineAt: string | null;
+  teamAReady: boolean;
+  teamBReady: boolean;
 }
 
 export type BracketBridgeResult =
   | { ok: true; tournament: TournamentBridge; matches: BracketMatchBridge[] }
+  | { ok: false; status: number; detail: string };
+
+export type ReadyBridgeResult =
+  | { ok: true; side: string; bothReady: boolean }
   | { ok: false; status: number; detail: string };
 
 /** A team as `createTeam` returns it (includes the shareable join code). */
@@ -249,6 +257,8 @@ export interface LolBridge {
   joinTournament(code: string, teamId?: string): Promise<JoinTournamentBridgeResult>;
   /** The tournament's bracket (matches with team names). */
   tournamentBracket(tournamentId: string): Promise<BracketBridgeResult>;
+  /** Mark the caller's team ready for a match (team captain). */
+  matchReady(matchId: string): Promise<ReadyBridgeResult>;
   /** Create a team (acting user becomes captain; response carries the join code). */
   createTeam(name: string): Promise<CreateTeamBridgeResult>;
   /** Join a team by its code. */
@@ -297,6 +307,8 @@ const bridge: LolBridge = {
     ipcRenderer.invoke("lol:tournament-join", { code, teamId }) as Promise<JoinTournamentBridgeResult>,
   tournamentBracket: (tournamentId) =>
     ipcRenderer.invoke("lol:tournament-bracket", { tournamentId }) as Promise<BracketBridgeResult>,
+  matchReady: (matchId) =>
+    ipcRenderer.invoke("lol:match-ready", { matchId }) as Promise<ReadyBridgeResult>,
   createTeam: (name) =>
     ipcRenderer.invoke("lol:team-create", { name }) as Promise<CreateTeamBridgeResult>,
   joinTeam: (code) =>

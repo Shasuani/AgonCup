@@ -127,3 +127,73 @@ async def test_join_is_idempotent_no_duplicate_request() -> None:
 
     joiner_rows = [m for m in session.store[TeamMember] if m.user_id == joiner]
     assert len(joiner_rows) == 1
+
+
+# --- transfer_captain (edge-cases §1.4) ------------------------------------
+def _role_of(session: FakeSession, team_id: uuid.UUID, user_id: uuid.UUID) -> TeamMemberRole:
+    return next(
+        m.role
+        for m in session.store[TeamMember]
+        if m.team_id == team_id and m.user_id == user_id
+    )
+
+
+async def test_transfer_captain_swaps_roles_and_repoints_team() -> None:
+    captain = uuid.uuid4()
+    session, team = _session_with_team(captain=captain)
+    heir = uuid.uuid4()
+    session.store[TeamMember].append(
+        TeamMember(team_id=team.id, user_id=heir, guild_id=_GUILD,
+                   role=TeamMemberRole.PLAYER, status=TeamMemberStatus.ACTIVE)
+    )
+
+    result = await service.transfer_captain(session, team_id=team.id, new_captain_user_id=heir)
+
+    assert result.captain_user_id == heir
+    assert _role_of(session, team.id, heir) == TeamMemberRole.CAPTAIN
+    assert _role_of(session, team.id, captain) == TeamMemberRole.PLAYER
+
+
+async def test_transfer_lets_old_captain_leave() -> None:
+    captain = uuid.uuid4()
+    session, team = _session_with_team(captain=captain)
+    heir = uuid.uuid4()
+    session.store[TeamMember].append(
+        TeamMember(team_id=team.id, user_id=heir, guild_id=_GUILD,
+                   role=TeamMemberRole.PLAYER, status=TeamMemberStatus.ACTIVE)
+    )
+    # Before transfer the captain is protected from leaving.
+    with pytest.raises(service.CaptainProtectedError):
+        await service.leave_team(session, team_id=team.id, user_id=captain)
+
+    await service.transfer_captain(session, team_id=team.id, new_captain_user_id=heir)
+    await service.leave_team(session, team_id=team.id, user_id=captain)  # now allowed
+
+    assert not [m for m in session.store[TeamMember] if m.user_id == captain]
+
+
+async def test_transfer_to_non_member_rejected() -> None:
+    session, team = _session_with_team(captain=uuid.uuid4())
+    with pytest.raises(service.NewCaptainNotEligibleError):
+        await service.transfer_captain(
+            session, team_id=team.id, new_captain_user_id=uuid.uuid4()
+        )
+
+
+async def test_transfer_to_pending_member_rejected() -> None:
+    session, team = _session_with_team(captain=uuid.uuid4())
+    pending = uuid.uuid4()
+    session.store[TeamMember].append(
+        TeamMember(team_id=team.id, user_id=pending, guild_id=_GUILD,
+                   role=TeamMemberRole.PLAYER, status=TeamMemberStatus.PENDING)
+    )
+    with pytest.raises(service.NewCaptainNotEligibleError):
+        await service.transfer_captain(session, team_id=team.id, new_captain_user_id=pending)
+
+
+async def test_transfer_to_current_captain_is_noop() -> None:
+    captain = uuid.uuid4()
+    session, team = _session_with_team(captain=captain)
+    result = await service.transfer_captain(session, team_id=team.id, new_captain_user_id=captain)
+    assert result.captain_user_id == captain
+    assert _role_of(session, team.id, captain) == TeamMemberRole.CAPTAIN

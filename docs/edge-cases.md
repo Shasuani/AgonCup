@@ -50,30 +50,35 @@ Status legend: `🔵 open` (συζητάμε) · `🟡 decided` (κλείδωσ�
 
 ### 1.1 Join request σε γεμάτη ομάδα (5/5)
 - **Σενάριο:** παίκτης βάζει code για team που είναι ήδη 5/5.
-- **Σήμερα:** `TeamFullError` στο `join_by_code` + στο `approve_join_request`.
-- **Απόφαση:** _TBD_
-- **Status:** 🔵 open
+- **Απόφαση:** ήδη καλυμμένο — `TeamFullError` στο `join_by_code` + `approve_join_request`.
+- **Status:** 🟢 done (υπήρχε)
 
 ### 1.2 Ίδιος παίκτης κάνει join request 2 φορές στην ίδια ομάδα
 - **Σενάριο:** ξαναβάζει το code ενώ έχει ήδη PENDING request (ή είναι ήδη ACTIVE).
-- **Σήμερα:** _TBD (να το ελέγξουμε)_
-- **Απόφαση:** _TBD_
-- **Status:** 🔵 open
+- **Απόφαση:** ήδη καλυμμένο — `join_by_code` είναι **idempotent**, επιστρέφει το
+  υπάρχον row (κανένα διπλό request). Test: `test_join_is_idempotent...`.
+- **Status:** 🟢 done (υπήρχε)
 
 ### 1.3 Leader κάνει disband ενώ υπάρχουν PENDING requests
-- **Σενάριο:** η ομάδα διαλύεται· τι γίνονται τα εκκρεμή requests / τα notifications.
-- **Απόφαση:** _TBD_
-- **Status:** 🔵 open
+- **Σενάριο:** η ομάδα διαλύεται· τι γίνονται τα εκκρεμή requests.
+- **Απόφαση:** ήδη καλυμμένο — `ON DELETE CASCADE` στα `team_members` +
+  `registrations` καθαρίζει roster + pending + εγγραφές μαζί με το team.
+- **Status:** 🟢 done (υπήρχε)
 
 ### 1.4 Leader φεύγει / γίνεται remove ο εαυτός του
 - **Σενάριο:** ο μοναδικός leader θέλει να φύγει. Μεταβίβαση captaincy; ή disband;
-- **Απόφαση:** _TBD_
-- **Status:** 🔵 open
+- **Απόφαση:** **Transfer captaincy** — νέο `POST /teams/{id}/transfer-captain`
+  (`transfer_captain`): ο captain δίνει την αρχηγία σε άλλο **ACTIVE** μέλος (παλιός
+  → player), μετά μπορεί να φύγει· αλλιώς disband. Ο guard `CaptainProtectedError`
+  μένει (δεν φεύγει captain χωρίς transfer). Tests: `test_transfer_*`.
+- **Status:** 🟢 done (σήμερα)
 
 ### 1.5 Παίκτης σε πολλές ομάδες + tournament σύγκρουση
 - **Σενάριο:** είσαι σε 2 ομάδες που δηλώνονται στο ίδιο tournament.
-- **Απόφαση:** _TBD_
-- **Status:** 🔵 open
+- **Απόφαση:** Επιτρέπεται (roster ρευστό, §0.1). Οι εγγραφές είναι per-team· ένας
+  παίκτης μπορεί να ανήκει σε 2 δηλωμένες ομάδες — παίζει για όποια συμπληρώσει το
+  lobby. Ο περιορισμός «ίδιος παίκτης 2 φορές στο ίδιο lobby» επιβάλλεται στο play.
+- **Status:** 🟡 decided (allow, enforce at play)
 
 ---
 
@@ -81,100 +86,112 @@ Status legend: `🔵 open` (συζητάμε) · `🟡 decided` (κλείδωσ�
 
 ### 2.1 Join σε tournament που είναι ήδη γεμάτο (max_teams)
 - **Σενάριο:** το bracket γέμισε, μπαίνει άλλο ένα team/solo.
-- **Απόφαση:** _TBD_
-- **Status:** 🔵 open
+- **Απόφαση:** ήδη καλυμμένο — `TournamentFullError` (count ≥ `max_teams`) → **409**
+  στο join-by-code.
+- **Status:** 🟢 done (υπήρχε)
 
 ### 2.2 Team κάνει join, μετά χάνει μέλη → κάτω από 5
 - **Σενάριο:** δηλώθηκε 5/5, πριν το start κάποιος έφυγε → 4 παίκτες.
-- **Απόφαση:** _TBD_
-- **Status:** 🔵 open
+- **Απόφαση:** Επιτρέπεται η εγγραφή ανεξαρτήτως μεγέθους (roster ρευστό, §0.1). Η
+  απαίτηση «5 για 5v5» επιβάλλεται όταν **τρέχει** το match (χρειάζεται 10 παίκτες
+  στο lobby)· ο ready-gate + presence είναι το backstop. Δεν μπλοκάρουμε στο join.
+- **Status:** 🟡 decided (allow, enforce at play)
 
 ### 2.3 Scheduled: registration_opens μετά το start (λάθος admin input)
 - **Σενάριο:** ο admin βάζει ασυνεπείς ώρες.
-- **Σήμερα:** validation στο `create_tournament` (να επιβεβαιώσουμε τι ακριβώς).
-- **Απόφαση:** _TBD_
-- **Status:** 🔵 open
+- **Απόφαση:** ήδη καλυμμένο — validation στο `create_tournament` απορρίπτει
+  ασυνεπές schedule (400).
+- **Status:** 🟢 done (υπήρχε)
 
 ### 2.4 Admin κάνει manual start πριν το scheduled start_at
 - **Σενάριο:** override του χρονοδιαγράμματος.
-- **Απόφαση:** _TBD_
-- **Status:** 🔵 open
+- **Απόφαση:** Επιτρέπεται — ο admin έχει πάντα χειροκίνητο start (το `start_at`
+  είναι announce-only, ο admin ξεκινά το bracket). Καμία αλλαγή.
+- **Status:** 🟡 decided
 
 ### 2.5 Μηδέν / 1 συμμετοχή τη στιγμή του start
 - **Σενάριο:** ανοίγει το bracket με 0 ή 1 teams.
-- **Απόφαση:** _TBD_
-- **Status:** 🔵 open
+- **Απόφαση:** ήδη καλυμμένο — `NotEnoughTeamsError` (< 2) → 400 στο start.
+- **Status:** 🟢 done (υπήρχε)
 
 ---
 
 ## 3. Account verification / identity
 
 ### 3.1 Δύο Discord users δηλώνουν το ίδιο Riot account (PUUID)
-- **Σήμερα:** dedupe στο PUUID → 409 αν ανήκει σε άλλον user.
-- **Απόφαση:** _TBD_
-- **Status:** 🔵 open
+- **Απόφαση:** ήδη καλυμμένο — dedupe στο canonical PUUID → **409** αν ανήκει σε
+  άλλον user (update-in-place, ποτέ 2ο row).
+- **Status:** 🟢 done (υπήρχε)
 
 ### 3.2 Λήξη / re-use του one-time code
-- **Σενάριο:** 15-min TTL, single-use, superseded on re-register.
-- **Απόφαση:** _TBD_
-- **Status:** 🔵 open
+- **Απόφαση:** ήδη καλυμμένο — 15-min TTL, single-use, superseded on re-register.
+- **Status:** 🟢 done (υπήρχε)
 
 ### 3.3 Riot API down όταν γίνεται verify
 - **Σενάριο:** Account-V1 timeout/5xx.
-- **Απόφαση:** _TBD_
-- **Status:** 🔵 open
+- **Απόφαση:** Account-V1 (η ταυτότητα) είναι REQUIRED — 404/σφάλμα απορρίπτει το
+  link. Το League-V4 rank είναι **best-effort** (αποτυχία δεν χαλάει το link). OK.
+- **Status:** 🟡 decided (υπήρχε)
 
 ---
 
 ## 4. Lobby orchestration / desktop client (LCU)
 
 ### 4.1 Host player φεύγει offline στη μέση
-- **Σενάριο:** watchdog failover σε άλλον host.
-- **Απόφαση:** _TBD_
-- **Status:** 🔵 open
+- **Απόφαση:** ήδη καλυμμένο — `lobby_watchdog` (worker) + `decide_failover`:
+  missed heartbeats → **PROMOTE** στον επόμενο της succession (epoch-fenced) ή
+  **ABORT_TO_MANUAL**. In-game host loss → NOOP (το παιχνίδι συνεχίζει).
+- **Status:** 🟢 done (υπήρχε)
 
 ### 4.2 Παίκτης δεν κάνει accept το invite
-- **Απόφαση:** _TBD_
-- **Status:** 🔵 open
+- **Απόφαση:** το lobby μένει σε FILLING· ο host/watchdog δεν προχωρά χωρίς
+  παρουσία. Backstop: admin abort. (Fine-grained per-invitee timeout = open add-on.)
+- **Status:** 🟡 decided
 
 ### 4.3 Client κλείνει / χάνει σύνδεση στη μέση
-- **Απόφαση:** _TBD_
-- **Status:** 🔵 open
+- **Απόφαση:** ήδη καλυμμένο — heartbeat grace + failover (host) / presence sync
+  (guests)· epoch fencing απορρίπτει stale/flapping clients.
+- **Status:** 🟢 done (υπήρχε)
 
 ---
 
 ## 5. Results / corroboration
 
 ### 5.1 Οι 10 παίκτες στέλνουν αντικρουόμενα αποτελέσματα
-- **Σήμερα:** quorum + anomaly + admin override.
-- **Απόφαση:** _TBD_
-- **Status:** 🔵 open
+- **Απόφαση:** ήδη καλυμμένο — `adjudicate_match` (quorum + anomaly): ACCEPT →
+  `record_winner(QUORUM)`· DISPUTE → `mark_disputed` (no advance) → admin override.
+- **Status:** 🟢 done (υπήρχε)
 
 ### 5.2 Λιγότερα από quorum reports
-- **Απόφαση:** _TBD_
-- **Status:** 🔵 open
+- **Απόφαση:** ήδη καλυμμένο — χωρίς quorum δεν κλείνει· μένει pending/disputed για
+  admin override. Το bracket **δεν** προχωρά με ανεπαρκή στοιχεία.
+- **Status:** 🟢 done (υπήρχε)
 
 ---
 
 ## 6. Notifications / Discord
 
 ### 6.1 Το notify channel δεν υπάρχει / no permissions
-- **Απόφαση:** _TBD_
-- **Status:** 🔵 open
+- **Απόφαση:** ήδη καλυμμένο — ο bot subscriber κάνει resolve το channel· foreign
+  guild / missing channel → **drop + log** (δεν κρασάρει). Τα announcements είναι
+  best-effort.
+- **Status:** 🟢 done (υπήρχε)
 
 ### 6.2 Bot offline όταν γίνεται publish notification
 - **Σενάριο:** το envelope πάει στο Redis αλλά κανείς δεν το διαβάζει.
-- **Απόφαση:** _TBD_
-- **Status:** 🔵 open
+- **Απόφαση:** Αποδεκτό — τα notifications είναι **ephemeral/best-effort** (live
+  feed, όχι queue). Το backend δεν μπλοκάρει ποτέ. Το state (bracket/results)
+  διαβάζεται πάντα από το API όταν ο bot ξανάρθει.
+- **Status:** 🟡 decided
 
 ---
 
 ## 7. Multi-tenant / RLS
 
 ### 7.1 Cross-guild join code
-- **Σήμερα:** guard στο `_register_team_idempotent` → 404 αν διαφορετικό guild.
-- **Απόφαση:** _TBD_
-- **Status:** 🔵 open
+- **Απόφαση:** ήδη καλυμμένο — guard στο `_register_team_idempotent` → **404** αν
+  διαφορετικό guild· + δομικά το RLS + composite same-guild FKs το κάνουν αδύνατο.
+- **Status:** 🟢 done (υπήρχε)
 
 ---
 

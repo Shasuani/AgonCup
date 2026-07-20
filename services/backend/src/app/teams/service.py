@@ -30,7 +30,10 @@ from sqlalchemy import String, cast, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.joincodes import generate_join_code, normalize_join_code
+from app.logging import get_logger
 from app.models import Team, TeamMember, User
+
+logger = get_logger(__name__)
 
 # Roles a member may be *added* with (the captain is created implicitly, never
 # re-assigned via add_member).
@@ -71,6 +74,10 @@ class InvalidJoinCodeError(TeamError):
 
 class TeamFullError(TeamError):
     """The team is already at its ACTIVE-member cap (``MAX_TEAM_SIZE``)."""
+
+
+class NewCaptainNotEligibleError(TeamError):
+    """Captaincy can only be transferred to an existing ACTIVE member of the team."""
 
 
 #: Max ACTIVE members per team — a 5v5 roster (the captain counts as one of the 5).
@@ -591,3 +598,54 @@ async def remove_member(session: AsyncSession, *, team_id: uuid.UUID, user_id: u
 async def leave_team(session: AsyncSession, *, team_id: uuid.UUID, user_id: uuid.UUID) -> None:
     """A member removes themselves. Same captain guard as :func:`remove_member`."""
     await remove_member(session, team_id=team_id, user_id=user_id)
+
+
+async def transfer_captain(
+    session: AsyncSession, *, team_id: uuid.UUID, new_captain_user_id: uuid.UUID
+) -> Team:
+    """Hand team captaincy to another ACTIVE member (edge-cases §1.4).
+
+    Resolves the CaptainProtectedError dead-end: a captain who wants to leave
+    (without disbanding) transfers captaincy first. The old captain is demoted to
+    ``player`` (still a member) and the new captain's membership is promoted; the
+    team's ``captain_user_id`` is repointed. Idempotent — transferring to the
+    current captain is a no-op.
+
+    Raises:
+        TeamNotFoundError: no such team in the acting guild.
+        NewCaptainNotEligibleError: the target is not an ACTIVE member of the team.
+    """
+    team = await get_team(session, team_id=team_id)
+    if team.captain_user_id == new_captain_user_id:
+        return team  # already the captain — no-op.
+
+    new_member = (
+        await session.execute(
+            select(TeamMember).where(
+                TeamMember.team_id == team_id,
+                TeamMember.user_id == new_captain_user_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if new_member is None or new_member.status != TeamMemberStatus.ACTIVE:
+        raise NewCaptainNotEligibleError(str(new_captain_user_id))
+
+    old_member = (
+        await session.execute(
+            select(TeamMember).where(
+                TeamMember.team_id == team_id,
+                TeamMember.user_id == team.captain_user_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if old_member is not None:
+        old_member.role = TeamMemberRole.PLAYER
+    new_member.role = TeamMemberRole.CAPTAIN
+    team.captain_user_id = new_captain_user_id
+    await session.flush()
+    logger.info(
+        "team.captain_transferred",
+        team_id=str(team_id),
+        new_captain=str(new_captain_user_id),
+    )
+    return team

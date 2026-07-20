@@ -387,6 +387,39 @@ async def leave_team(
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
+@router.post(
+    "/{team_id}/transfer-captain",
+    response_model=TeamResponse,
+    summary="Transfer team captaincy to another active member (captain)",
+)
+async def transfer_captain(
+    team_id: uuid.UUID,
+    body: MemberRef,
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    session: Annotated[AsyncSession, Depends(get_tenant_session)],
+) -> TeamResponse:
+    """Hand captaincy to another ACTIVE member (edge-cases §1.4).
+
+    Lets a captain who wants to leave pass the team on instead of disbanding: the
+    old captain becomes a ``player`` and can then leave. Captain-only.
+    """
+    try:
+        team = await service.get_team(session, team_id=team_id)
+    except service.TeamNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="team not found") from exc
+    _ensure_team_captain(team, principal)
+    try:
+        team = await service.transfer_captain(
+            session, team_id=team_id, new_captain_user_id=body.user_id
+        )
+    except service.NewCaptainNotEligibleError as exc:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="captaincy can only pass to an active member of the team",
+        ) from exc
+    return _to_response(team)
+
+
 # ---------------------------------------------------------------------------
 # Team-leader approval flow: pending join requests (PLAN.md §3.1)
 # ---------------------------------------------------------------------------

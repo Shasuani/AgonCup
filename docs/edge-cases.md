@@ -256,5 +256,20 @@ Status legend: `🔵 open` (συζητάμε) · `🟡 decided` (κλείδωσ�
 
 ---
 
+## 10. ⚠️ Στρατηγικό: Tournament Codes vs autonomous-LCU
+
+Έρευνα (Reddit/Riot DevRel/tournament platforms) έδειξε ότι η θεμελιώδης υπόθεση
+«δεν υπάρχει Riot Tournament API» είναι **λανθασμένη**: τα **Tournament Codes**
+(Tournament-V5) αυτο-δημιουργούν το custom lobby και επιστρέφουν **authoritative
+αποτέλεσμα μέσω callback** — είναι ο επίσημος δρόμος (Battlefy/Challengermode).
+Το autonomous-LCU που χτίσαμε είναι ο **ToS-ρίσκο** δρόμος (το beta gate).
+
+➡️ Πλήρης ανάλυση + απόφαση + απαιτούμενη ενέργεια: **`docs/decision-tournament-codes.md`**.
+
+- **Status:** 🟡 recommended — pivot σε Tournament Codes ως primary path· χρειάζεται
+  ο owner να κάνει apply για Tournament API production access (callback URL).
+
+---
+
 ## Παρακάτω: δικά σου cases
 <!-- Πρόσθεσε εδώ ό,τι θέλεις — τα οργανώνουμε μαζί -->

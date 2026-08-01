@@ -23,6 +23,61 @@ set -euo pipefail
 cd "$(dirname "$0")"
 APP_DIR="$PWD"
 EDGE_DIR="$(cd .. && pwd)/edge"
+SECRETS_FILE="$APP_DIR/.secrets.env"
+
+# -----------------------------------------------------------------------------
+# Self-managed secrets
+# -----------------------------------------------------------------------------
+# These six have no external issuer — they just need to be random and stable —
+# so there is nothing to be gained by making a human paste them into GitLab.
+# Generated here on first deploy, persisted in .secrets.env (chmod 600), reused
+# verbatim on every later deploy. A CI variable of the same name still wins
+# (delivered in .overrides.env), so any of them can be pinned or rotated later.
+#
+# .secrets.env IS THE CROWN JEWELS. Losing it means: the app can no longer
+# authenticate to its own database, every session is invalidated, and — because
+# PII_ENCRYPTION_KEY encrypts OAuth tokens and verification state at rest —
+# previously stored PII becomes undecryptable. Back it up with ./data.
+MANAGED_SECRETS="POSTGRES_PASSWORD APP_DB_PASSWORD JWT_SECRET PII_ENCRYPTION_KEY BOT_SERVICE_TOKEN LIFECYCLE_SERVICE_TOKEN"
+
+# URL-safe base64, '=' stripped: safe inside a compose .env and inside a DSN.
+_gen_token() { head -c 32 /dev/urandom | base64 | tr -d '\n=' | tr '+/' '-_'; }
+# Fernet requires urlsafe_b64encode(32 bytes) EXACTLY — keep the '=' padding.
+_gen_fernet() { head -c 32 /dev/urandom | base64 | tr -d '\n' | tr '+/' '-_'; }
+
+_read_key() { sed -n "s/^$1=//p" "$2" 2>/dev/null | head -1; }
+
+touch "$SECRETS_FILE"
+chmod 600 "$SECRETS_FILE"
+[ -f .overrides.env ] || : > .overrides.env
+
+for _key in $MANAGED_SECRETS; do
+    _value="$(_read_key "$_key" .overrides.env)"
+    if [ -n "$_value" ]; then
+        echo "--- $_key: using the CI-provided override"
+    else
+        _value="$(_read_key "$_key" "$SECRETS_FILE")"
+        if [ -z "$_value" ]; then
+            case "$_key" in
+                PII_ENCRYPTION_KEY) _value="$(_gen_fernet)" ;;
+                *) _value="$(_gen_token)" ;;
+            esac
+            printf '%s=%s\n' "$_key" "$_value" >> "$SECRETS_FILE"
+            echo "--- $_key: generated (first deploy)"
+        fi
+    fi
+    printf '%s=%s\n' "$_key" "$_value" >> ./.env
+done
+
+# The DSNs embed the passwords resolved above, so they are composed here rather
+# than in CI. Owner DSN = migrations (a superuser BYPASSES RLS); app_rw DSN =
+# the request path, where FORCE-RLS actually binds.
+_pg_pw="$(_read_key POSTGRES_PASSWORD ./.env)"
+_app_pw="$(_read_key APP_DB_PASSWORD ./.env)"
+{
+    echo "DATABASE_URL=postgresql+asyncpg://lol:${_pg_pw}@postgres:5432/lol"
+    echo "APP_DATABASE_URL=postgresql+asyncpg://app_rw:${_app_pw}@postgres:5432/lol"
+} >> ./.env
 
 # Values come from a compose .env: no spaces, no '#', no '$' in secrets.
 set -a

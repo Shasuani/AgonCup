@@ -90,6 +90,14 @@ Also required:
 **Settings → CI/CD → Variables.** Mark everything secret as **Masked**, and
 **Protected** (then only protected branches like `devel` can read it).
 
+**You need to create 6.** Everything else either has a sensible default or is
+generated on the server (§4a). Realistically make it **9** — add `RIOT_API_KEY`
+and the two `DISCORD_CLIENT_*` or the app cannot verify accounts or log anyone
+in. With one environment, leave every variable's scope at **All (default)**.
+
+Minimum set: `SSH_PRIVATE_KEY`, `DEPLOY_HOST`, `DEPLOY_USER`,
+`REGISTRY_DEPLOY_USER`, `REGISTRY_DEPLOY_TOKEN`, `ACME_EMAIL`.
+
 Values are written into a compose `.env` on the server, which is both the
 interpolation source and the container environment. So: **no spaces, no `#`, and
 no `$` inside any secret.** `secrets.token_urlsafe()` output is always safe.
@@ -130,14 +138,15 @@ name when a second environment appears.
 
 ### Application secrets
 
-| Variable | Required | Generate with |
-|----------|----------|---------------|
-| `POSTGRES_PASSWORD` | ✅ | `python3 -c "import secrets;print(secrets.token_urlsafe(24))"` |
-| `APP_DB_PASSWORD` | ✅ | same — the `app_rw` role's password (see §5) |
-| `JWT_SECRET` | ✅ | `python3 -c "import secrets;print(secrets.token_urlsafe(48))"` |
-| `PII_ENCRYPTION_KEY` | ✅ | `python3 -c "from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())"` |
-| `BOT_SERVICE_TOKEN` | ✅ | `token_urlsafe(32)` — bot → backend bridge auth |
-| `LIFECYCLE_SERVICE_TOKEN` | ✅ | `token_urlsafe(32)` — lifecycle/purge auth |
+Six secrets are **not** in this list on purpose — `POSTGRES_PASSWORD`,
+`APP_DB_PASSWORD`, `JWT_SECRET`, `PII_ENCRYPTION_KEY`, `BOT_SERVICE_TOKEN` and
+`LIFECYCLE_SERVICE_TOKEN`. Nobody issues them; they just have to be random and
+stable, so `infra/deploy.sh` generates them on the server on the first deploy and
+persists them in `<APP_DIR>/.secrets.env` (chmod 600), reusing them verbatim
+afterwards. See §4a.
+
+| Variable | Required | Note |
+|----------|----------|------|
 | `RIOT_API_KEY` | ✅¹ | developer.riotgames.com personal key |
 | `RIOT_REGION` | — | default `europe` |
 | `DISCORD_CLIENT_ID` | —² | Discord developer portal |
@@ -165,6 +174,8 @@ Discord developer portal.
 /home/lol/lol/
 ├── devel/                       # one directory per stack (STACK=devel)
 │   ├── .env                     # generated per deploy, chmod 600
+│   ├── .secrets.env             # SELF-MANAGED SECRETS — back this up (§4a)
+│   ├── .overrides.env           # CI-provided overrides, usually empty
 │   ├── .registry.env            # deploy token, chmod 600
 │   ├── docker-compose.prod.yml
 │   ├── deploy.sh
@@ -189,6 +200,48 @@ WebSocket at `/api/v1/realtime/ws` rides the same `/api/*` rule — Caddy passes
 upgrades through untouched.
 
 ---
+
+## 4a. Self-managed secrets
+
+On the first deploy `infra/deploy.sh` generates these and writes them to
+`<APP_DIR>/.secrets.env`:
+
+| Secret | Used for |
+|--------|----------|
+| `POSTGRES_PASSWORD` | owner/migration DSN |
+| `APP_DB_PASSWORD` | the non-`BYPASSRLS` `app_rw` role the request path uses |
+| `JWT_SECRET` | access-token signing |
+| `PII_ENCRYPTION_KEY` | Fernet key for OAuth tokens + verification state at rest |
+| `BOT_SERVICE_TOKEN` | bot → backend `/integrations/discord` bridge |
+| `LIFECYCLE_SERVICE_TOKEN` | lifecycle / purge endpoints |
+
+Every later deploy reuses them byte-for-byte. Values are URL-safe base64 with the
+padding stripped, so they are safe both inside a compose `.env` and embedded in a
+DSN. `DATABASE_URL` and `APP_DATABASE_URL` are composed on the server from the
+resolved passwords.
+
+> ⚠️ **`.secrets.env` is the crown jewels.** Lose it and the app can no longer
+> authenticate to its own database, every session is invalidated, and previously
+> stored PII becomes **undecryptable** — `PII_ENCRYPTION_KEY` is the only thing
+> that can read it back. Back it up together with `data/`.
+
+**Overriding.** Setting a CI variable with the same name wins: the deploy job
+ships it in `.overrides.env` and `deploy.sh` prefers it. The generated value
+stays in `.secrets.env`, so removing the override reverts to it.
+
+Two caveats when overriding:
+
+- **`POSTGRES_PASSWORD` does not re-key an existing cluster.** The password is
+  baked into the data directory at `initdb` time; changing the variable only
+  changes what the app *tries* to connect with. To actually rotate it:
+  `docker compose exec postgres psql -U lol -c "ALTER ROLE lol PASSWORD '...'"`
+  and then set the variable to match.
+- **Rotating `PII_ENCRYPTION_KEY` needs both keys.** The field accepts a
+  comma-separated list, newest first — put the new key first and keep the old one
+  so existing rows stay readable.
+
+`APP_DB_PASSWORD` is the exception: `migrate.sh` runs `ALTER ROLE app_rw` on every
+deploy, so changing it takes effect immediately.
 
 ## 5. Migrations
 

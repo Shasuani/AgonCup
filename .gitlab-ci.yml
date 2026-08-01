@@ -314,6 +314,15 @@ security:images:
     - export EDGE_DIR="$DEPLOY_ROOT/edge"
 
     # --- the application .env (compose interpolation AND container env) -------
+    #
+    # The six INTERNAL secrets (postgres/app_rw passwords, JWT, PII key, the two
+    # service tokens) are deliberately NOT listed here. They have no external
+    # counterpart — nobody issues them, you just need *some* random value — so
+    # deploy.sh generates them on the server on first deploy and persists them in
+    # .secrets.env. Setting a CI variable of the same name still overrides.
+    # deploy.sh also composes DATABASE_URL / APP_DATABASE_URL, since those embed
+    # the passwords it resolves.
+    #
     # NB: every value lands in a compose .env, so a literal `$` in a secret would
     # be interpreted as interpolation. Generate secrets with token_urlsafe.
     - |
@@ -333,31 +342,33 @@ security:images:
       LOG_LEVEL=${LOG_LEVEL:-INFO}
 
       POSTGRES_USER=lol
-      POSTGRES_PASSWORD=$POSTGRES_PASSWORD
       POSTGRES_DB=lol
-      # Owner DSN — migrations only (a superuser BYPASSES RLS).
-      DATABASE_URL=postgresql+asyncpg://lol:$POSTGRES_PASSWORD@postgres:5432/lol
-      # Request-path DSN — the non-BYPASSRLS app_rw role, so FORCE-RLS binds.
-      APP_DATABASE_URL=postgresql+asyncpg://app_rw:$APP_DB_PASSWORD@postgres:5432/lol
-      # Consumed by scripts/migrate.sh to rotate app_rw off the migration default.
-      APP_DB_PASSWORD=$APP_DB_PASSWORD
       REDIS_URL=redis://redis:6379/0
-
-      JWT_SECRET=$JWT_SECRET
-      PII_ENCRYPTION_KEY=$PII_ENCRYPTION_KEY
 
       DISCORD_CLIENT_ID=${DISCORD_CLIENT_ID:-}
       DISCORD_CLIENT_SECRET=${DISCORD_CLIENT_SECRET:-}
       DISCORD_REDIRECT_URI=https://$APP_DOMAIN/api/v1/auth/callback
       DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:-}
-      BOT_SERVICE_TOKEN=$BOT_SERVICE_TOKEN
-      LIFECYCLE_SERVICE_TOKEN=$LIFECYCLE_SERVICE_TOKEN
       # The bot reaches the API over the stack's internal network.
       BACKEND_BASE_URL=http://backend:8000
 
       RIOT_API_KEY=${RIOT_API_KEY:-}
       RIOT_REGION=${RIOT_REGION:-europe}
       EOF
+
+    # --- optional overrides for the server-generated secrets ------------------
+    # Empty file unless you deliberately set one of these as a CI variable (to
+    # pin or rotate a value). deploy.sh prefers whatever is in here over what it
+    # generated. Rotating POSTGRES_PASSWORD this way does NOT re-key an already
+    # initialised cluster — see docs/gitlab-cicd.md.
+    - |
+      : > /tmp/overrides.env
+      for key in POSTGRES_PASSWORD APP_DB_PASSWORD JWT_SECRET PII_ENCRYPTION_KEY \
+                 BOT_SERVICE_TOKEN LIFECYCLE_SERVICE_TOKEN; do
+        eval "value=\${$key:-}"
+        [ -n "$value" ] && echo "$key=$value" >> /tmp/overrides.env
+      done
+      echo "CI-provided secret overrides: $(wc -l < /tmp/overrides.env)"
 
     # --- registry credentials, kept OUT of the app .env ----------------------
     # A read_registry Deploy Token, so the server can still pull after a reboot
@@ -410,6 +421,7 @@ security:images:
     # --- ship it -------------------------------------------------------------
     - ssh -p "$SSH_PORT" "$SSH_TARGET" "mkdir -p '$APP_DIR/data/postgres' '$APP_DIR/data/redis' '$APP_DIR/backups' '$EDGE_DIR/sites' '$EDGE_DIR/data/caddy' '$EDGE_DIR/config/caddy'"
     - scp -P "$SSH_PORT" /tmp/app.env "$SSH_TARGET:$APP_DIR/.env"
+    - scp -P "$SSH_PORT" /tmp/overrides.env "$SSH_TARGET:$APP_DIR/.overrides.env"
     - scp -P "$SSH_PORT" /tmp/registry.env "$SSH_TARGET:$APP_DIR/.registry.env"
     - scp -P "$SSH_PORT" infra/docker-compose.prod.yml "$SSH_TARGET:$APP_DIR/docker-compose.prod.yml"
     - scp -P "$SSH_PORT" infra/deploy.sh "$SSH_TARGET:$APP_DIR/deploy.sh"
@@ -418,7 +430,7 @@ security:images:
     - scp -P "$SSH_PORT" infra/Caddyfile "$SSH_TARGET:$EDGE_DIR/Caddyfile"
     # Only THIS environment's site file — the other stack's stays untouched.
     - scp -P "$SSH_PORT" /tmp/site.caddy "$SSH_TARGET:$EDGE_DIR/sites/$STACK.caddy"
-    - ssh -p "$SSH_PORT" "$SSH_TARGET" "chmod 600 '$APP_DIR/.env' '$APP_DIR/.registry.env' && chmod +x '$APP_DIR/deploy.sh'"
+    - ssh -p "$SSH_PORT" "$SSH_TARGET" "chmod 600 '$APP_DIR/.env' '$APP_DIR/.overrides.env' '$APP_DIR/.registry.env' && chmod +x '$APP_DIR/deploy.sh'"
 
     # --- run the deployment on the server ------------------------------------
     - ssh -p "$SSH_PORT" "$SSH_TARGET" "bash '$APP_DIR/deploy.sh'"

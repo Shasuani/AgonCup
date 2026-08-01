@@ -266,8 +266,9 @@ pipeline if the migrated schema and the models have drifted.
 
 `migrate.sh` also rotates the **`app_rw` password**. The baseline hardcodes a dev
 password (`app_rw`/`app_rw`) that is public in the repo, and `app_rw` is the
-non-`BYPASSRLS` role the request path authenticates as. Setting `APP_DB_PASSWORD`
-makes the deploy `ALTER ROLE` it on every run.
+non-`BYPASSRLS` role the request path authenticates as. Every deploy `ALTER ROLE`s
+it to `APP_DB_PASSWORD`, which is generated and persisted on the server (§4a) —
+so the public default never survives the first deploy.
 
 ---
 

@@ -27,6 +27,7 @@ directories:
 # Ship the compiled JS + production deps only (no src / tests).
 files:
   - "dist/**/*"
+  - "dist-renderer/**/*"
   - "static/**/*"
   - "package.json"
   - "!**/*.map"

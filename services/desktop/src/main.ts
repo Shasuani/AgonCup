@@ -439,6 +439,7 @@ async function bootstrap(): Promise<void> {
   const { app, BrowserWindow, ipcMain, safeStorage } = await import("electron");
   const path = await import("node:path");
   const fsp = await import("node:fs/promises");
+  const fs = await import("node:fs");
 
   const log = (event: string, detail: Record<string, unknown> = {}): void => {
     console.log(`[desktop] ${event}`, detail);
@@ -787,10 +788,12 @@ async function bootstrap(): Promise<void> {
 
   const createWindow = (): import("electron").BrowserWindow => {
     const win = new BrowserWindow({
-      width: 1024,
-      height: 720,
+      width: 1280,
+      height: 820,
+      minWidth: 1120,
+      minHeight: 720,
       title: "LeagueOfLeagues — Desktop",
-      backgroundColor: "#0a0b0f",
+      backgroundColor: "#010a13",
       webPreferences: {
         contextIsolation: true,
         nodeIntegration: false,
@@ -801,7 +804,13 @@ async function bootstrap(): Promise<void> {
         preload: path.join(app.getAppPath(), "dist", "preload.cjs"),
       },
     });
-    void win.loadFile(path.join(app.getAppPath(), "static", "index.html"));
+    // Prefer the React (Vite) renderer built to dist-renderer/ by `npm run build`;
+    // fall back to the legacy vanilla renderer if that build is absent.
+    const reactRenderer = path.join(app.getAppPath(), "dist-renderer", "index.html");
+    const legacyRenderer = path.join(app.getAppPath(), "static", "index.html");
+    const rendererPath = fs.existsSync(reactRenderer) ? reactRenderer : legacyRenderer;
+    log("renderer.load", { path: rendererPath, react: rendererPath === reactRenderer });
+    void win.loadFile(rendererPath);
     return win;
   };
 

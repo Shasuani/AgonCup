@@ -41,7 +41,7 @@ PY_SERVICE_DIRS := \
 PY_PKG_DIRS := $(PY_LIB_DIRS) $(PY_SERVICE_DIRS)
 
 .PHONY: help up down build-bases test test-db lint format typecheck gen-clients fixtures \
-	dev dev-backend dev-frontend dev-bot dev-desktop sim-join
+	dev dev-backend dev-frontend dev-bot dev-desktop sim-join infra-up infra-down db-migrate
 
 # --- DB / RLS integration test config ----------------------------------------
 # Local equivalent of the CI `db-rls` job. Assumes a REACHABLE Postgres (e.g.
@@ -68,6 +68,24 @@ up: build-bases ## Build base images, then bring the stack up (detached, built).
 
 down: ## Stop the stack and remove containers/networks (keeps named volumes).
 	$(COMPOSE_CMD) down
+
+# --- Datastores only (for HOST dev: app tiers run on the host, DB in docker) --
+# Non-default host ports: 5432/6379 are usually taken by other stacks on the same
+# daemon. These MUST match the DSNs in services/<svc>/.env. Compose pins
+# `name: lol`, so the containers are lol-postgres-1 / lol-redis-1.
+DEV_POSTGRES_PORT ?= 5442
+DEV_REDIS_PORT    ?= 6389
+
+infra-up: ## Start ONLY postgres + redis (host dev; ports 5442/6389).
+	POSTGRES_PORT=$(DEV_POSTGRES_PORT) REDIS_PORT=$(DEV_REDIS_PORT) \
+		$(COMPOSE_CMD) up -d postgres redis
+
+infra-down: ## Stop the postgres + redis dev containers.
+	$(COMPOSE_CMD) stop postgres redis
+
+db-migrate: ## Apply migrations to the dev DB (works on an empty database too).
+	cd services/backend && set -a && . ./.env && set +a && \
+		PYTHONPATH=src $(UV) run alembic upgrade head
 
 # --- Local host dev (NO docker) ----------------------------------------------
 # The SPA "Dev login" needs BOTH processes up: the backend on :8000 AND the Vite
@@ -130,11 +148,15 @@ lint: ## Lint all Python code with ruff (check only).
 format: ## Auto-format all Python code with ruff.
 	$(UV) run ruff format .
 
-typecheck: ## Type-check all Python packages with mypy.
+typecheck: ## Type-check all Python packages with mypy (each package's own config).
+# NB: no --config-file. Each package's [tool.mypy] loads the pydantic plugin and
+# sets mypy_path=src; forcing the repo-root mypy.ini (which has neither) produces
+# 41 phantom "Class cannot subclass Base" errors. Run inside the package so its
+# config and its synced venv are the ones in effect.
 	@for d in $(PY_PKG_DIRS); do \
 		if [ -d "$$d/src" ]; then \
 			echo "==> mypy $$d/src"; \
-			$(UV) run mypy --config-file mypy.ini "$$d/src" || exit $$?; \
+			$(UV) run --directory "$$d" mypy src || exit $$?; \
 		else \
 			echo "==> skip (no src) $$d"; \
 		fi; \

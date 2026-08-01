@@ -4,8 +4,18 @@
 # The base image provides Python 3.12, uv, build essentials, and a non-root
 # "app" user. Build the base first:  docker build -t lol/python-base:dev infra/images/python-base
 
+# CI builds the base image into the GitLab registry (there is no local
+# `lol/python-base:dev` inside a fresh dind daemon), so the base reference is a
+# build-arg. The default keeps `make up` / local builds working unchanged.
+ARG PYTHON_BASE_IMAGE=lol/python-base:dev
+
 # ---------- builder ----------------------------------------------------------
-FROM lol/python-base:dev AS builder
+FROM ${PYTHON_BASE_IMAGE} AS builder
+
+# The base image drops to the unprivileged runtime user, but the BUILD stage has
+# to write outside its home (the venv at /opt/venv, the /repo tree). Build as root;
+# the runtime stage below switches back to the non-root user.
+USER root
 
 WORKDIR /build
 
@@ -13,6 +23,10 @@ WORKDIR /build
 # resolve, then the backend project. (Build context is the repo root.)
 COPY libs/lol-schemas /build/libs/lol-schemas
 COPY libs/lol-core /build/libs/lol-core
+# Keep this list in sync with [tool.uv.sources] in services/backend/pyproject.toml —
+# a missing path dep fails the build with "Distribution not found at: file:///...".
+COPY libs/lol-realtime /build/libs/lol-realtime
+COPY libs/lol-riot /build/libs/lol-riot
 COPY services/backend/pyproject.toml /build/services/backend/pyproject.toml
 COPY services/backend/README.md /build/services/backend/README.md
 COPY services/backend/src /build/services/backend/src
@@ -25,7 +39,7 @@ RUN uv venv /opt/venv \
     && uv pip install --python /opt/venv/bin/python .
 
 # ---------- runtime ----------------------------------------------------------
-FROM lol/python-base:dev AS runtime
+FROM ${PYTHON_BASE_IMAGE} AS runtime
 
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
@@ -39,6 +53,10 @@ COPY --from=builder /opt/venv /opt/venv
 COPY --chown=app:app services/backend/alembic.ini /app/alembic.ini
 COPY --chown=app:app services/backend/alembic /app/alembic
 COPY --chown=app:app services/backend/src /app/src
+# Deploy-time migration entrypoint ONLY. The rest of services/backend/scripts/
+# is dev tooling (the tournament simulator can DELETE data) and is deliberately
+# NOT shipped in the runtime image.
+COPY --chown=app:app services/backend/scripts/migrate.sh /app/scripts/migrate.sh
 
 # src/ layout: make app importable.
 ENV PYTHONPATH=/app/src

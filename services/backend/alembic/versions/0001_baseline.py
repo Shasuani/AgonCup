@@ -1,37 +1,52 @@
-"""baseline: minimal guilds table + RLS posture marker
+"""baseline: full v3 schema, the app_rw role and per-guild RLS
 
 Revision ID: 0001_baseline
 Revises:
-Create Date: 2026-06-20
+Create Date: 2026-08-01
 
-PHASE-0 BASELINE
-================
-This migration is intentionally minimal. It creates the global ``guilds`` table
-(the tenant anchor, PLAN.md §2) plus a ``schema_migrations_marker`` row sentinel,
-so the stack has *something* real to migrate against and the async Alembic env is
-exercised end-to-end.
+SQUASHED BASELINE
+=================
+This single migration replaces the former 0001..0012 chain. That chain could not
+be replayed on an empty database: migration 0002 built its tables from the LIVE
+ORM metadata (``Base.metadata.sorted_tables``), so against a fresh database it
+already produced the fully-evolved schema, and 0004..0012 — plain ``ADD COLUMN``
+steps — then aborted with::
 
-RLS / ROLE POSTURE — TO BE EXPANDED IN PHASE 1 (PLAN.md §1, §2, §7)
-------------------------------------------------------------------
-The full multi-tenant isolation lands with the first *guild-scoped* migration:
+    DuplicateColumnError: column "code" of relation
+    "verification_attempts" already exists
 
-  * ``ALTER TABLE <t> ENABLE ROW LEVEL SECURITY``  and  ``... FORCE ROW LEVEL
-    SECURITY`` on every guild-scoped table (FORCE so even the table owner is
-    subject to policy).
-  * A dedicated **non-BYPASSRLS** application role (``app_rw``) that the backend
-    and worker connect as; a *separate* privileged role for migrations and the
-    federation/platform-operator path.
-  * Per-table policies keyed on the request GUC, e.g.::
+Every environment therefore needed a bespoke bootstrap. Squashing was safe
+because no database had been deployed yet.
 
-        CREATE POLICY guild_isolation ON <t>
-            USING (guild_id = current_setting('app.current_guild')::uuid);
+RULE THIS ENCODES: **a migration must never derive DDL from ``app.models``.**
+Migrations are immutable historical records; models keep moving. The table
+definitions below are static, and so is ``_GUILD_ISOLATED_TABLES`` — importing
+the live tuple would make this migration retroactively try to police tables it
+never created.
 
-    paired with ``SET LOCAL app.current_guild`` per transaction (see app/db.py).
+What it does:
 
-``guilds`` itself is a *global* entity (not guild-scoped — it IS the tenant), so
-it is NOT placed under guild_id RLS here. This migration only establishes the
-table; the policy/role wiring is deferred to keep Phase 0 import-safe and free of
-environment-specific role assumptions.
+1. **Tables** — the whole v3 schema, statically defined (PLAN.md §2).
+2. **Non-BYPASSRLS application role** (``app_rw``) — what the backend and worker
+   connect as. It is not the table owner and is ``NOBYPASSRLS``, so ``FORCE ROW
+   LEVEL SECURITY`` actually binds to it. Migrations run as the owner, which
+   bypasses RLS — hence the separate ``APP_DATABASE_URL`` (see app/db.py).
+   The password here is a DEV default; deployments rotate it (``APP_DB_PASSWORD``
+   in scripts/migrate.sh).
+3. **Per-guild RLS** on every guild-scoped table: ``ENABLE`` + ``FORCE`` + a
+   ``guild_isolation`` policy keyed on ``current_setting('app.current_guild',
+   true)``. The ``NULLIF(..., '')::uuid`` cast makes an UNSET tenant read as NULL,
+   so ``guild_id = NULL`` is never true and the policy **fails closed**.
+4. **``self_role_read``** on ``user_guild_roles`` — login/refresh must read a
+   user's own role rows ACROSS guilds before any acting guild is chosen, so a
+   second SELECT-only policy is OR'd in, keyed on ``app.current_user``.
+
+The federation tables (``central_feed_items``, ``audit_log``,
+``player_central_visibility``, ``verification_attempts``) are deliberately NOT
+under the per-guild policy — they are global by design.
+
+Dropped along the way: ``schema_migrations_marker``, a Phase-0 sentinel table
+that no code ever read.
 """
 
 from __future__ import annotations
@@ -40,6 +55,7 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "0001_baseline"
@@ -48,70 +64,973 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
+# The application role the backend/worker connect as (NOBYPASSRLS).
+APP_ROLE = "app_rw"
+# DEV-only password. Deployments rotate it via APP_DB_PASSWORD (scripts/migrate.sh).
+_DEV_APP_ROLE_PASSWORD = "app_rw"
+
+# Guild-scoped tables that get the per-guild isolation policy.
+#
+# STATIC ON PURPOSE. The live tuple lives in app.models.tables as
+# GUILD_ISOLATED_TABLES, but importing it here would couple this immutable
+# migration to a moving target: add a guild-scoped table tomorrow and this
+# migration would try to police a table it never created. New tables bring their
+# own migration, which applies their own policy.
+_GUILD_ISOLATED_TABLES = (
+    "user_guild_roles",
+    "teams",
+    "team_members",
+    "tournaments",
+    "tournament_participants",
+    "registrations",
+    "matches",
+    "match_lobbies",
+    "client_sessions",
+    "result_reports",
+    "match_results",
+    "result_nonces",
+)
+
+_GUILD_ISOLATION_POLICY = """
+    CREATE POLICY guild_isolation ON {table}
+        USING (guild_id = NULLIF(current_setting('app.current_guild', true), '')::uuid)
+        WITH CHECK (guild_id = NULLIF(current_setting('app.current_guild', true), '')::uuid)
+"""
+
+
 def upgrade() -> None:
+    # ### commands auto generated by Alembic - please adjust! ###
     op.create_table(
         "guilds",
-        sa.Column(
-            "id",
-            sa.dialects.postgresql.UUID(as_uuid=True),
-            primary_key=True,
-            server_default=sa.text("gen_random_uuid()"),
-        ),
-        sa.Column("discord_guild_id", sa.BigInteger(), nullable=False, unique=True),
+        sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
+        sa.Column("discord_guild_id", sa.BigInteger(), nullable=False),
         sa.Column("name", sa.Text(), nullable=False),
         sa.Column(
             "settings",
-            sa.dialects.postgresql.JSONB(),
-            nullable=False,
+            postgresql.JSONB(astext_type=sa.Text()),
             server_default=sa.text("'{}'::jsonb"),
-        ),
-        sa.Column(
-            "is_central",
-            sa.Boolean(),
             nullable=False,
-            server_default=sa.text("false"),
         ),
+        sa.Column("is_central", sa.Boolean(), server_default=sa.text("false"), nullable=False),
         sa.Column(
             "status",
-            sa.Text(),
+            sa.Enum("active", "suspended", "removed", name="guild_status", native_enum=False),
+            server_default="active",
             nullable=False,
-            server_default=sa.text("'active'"),
         ),
         sa.Column(
             "invited_at",
-            sa.TIMESTAMP(timezone=True),
-            nullable=False,
+            sa.DateTime(timezone=True),
             server_default=sa.text("now()"),
+            nullable=False,
         ),
-        sa.Column("removed_at", sa.TIMESTAMP(timezone=True), nullable=True),
+        sa.Column("removed_at", sa.DateTime(timezone=True), nullable=True),
         sa.CheckConstraint(
-            "status in ('active','suspended','removed')",
-            name="ck_guilds_status",
+            "status in ('active','suspended','removed')", name=op.f("ck_guilds_status")
         ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_guilds")),
+        sa.UniqueConstraint("discord_guild_id", name=op.f("uq_guilds_discord_guild_id")),
+    )
+    op.create_table(
+        "users",
+        sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
+        sa.Column("discord_user_id", sa.BigInteger(), nullable=False),
+        sa.Column("display_name", sa.Text(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_users")),
+        sa.UniqueConstraint("discord_user_id", name=op.f("uq_users_discord_user_id")),
+    )
+    op.create_table(
+        "audit_log",
+        sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
+        sa.Column("actor_id", sa.UUID(), nullable=True),
+        sa.Column("actor_kind", sa.Text(), nullable=False),
+        sa.Column("guild_id", sa.UUID(), nullable=True),
+        sa.Column("action", sa.Text(), nullable=False),
+        sa.Column("entity", sa.Text(), nullable=True),
+        sa.Column("before", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+        sa.Column("after", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+        sa.Column(
+            "ts", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False
+        ),
+        sa.CheckConstraint(
+            "actor_kind in ('platform','guild','system')",
+            name=op.f("ck_audit_log_actor_kind_allowed"),
+        ),
+        sa.ForeignKeyConstraint(
+            ["guild_id"],
+            ["guilds.id"],
+            name=op.f("fk_audit_log_guild_id_guilds"),
+            ondelete="SET NULL",
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_audit_log")),
+    )
+    op.create_index(op.f("ix_audit_log_guild_id"), "audit_log", ["guild_id"], unique=False)
+    op.create_table(
+        "central_feed_items",
+        sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
+        sa.Column("source_guild_id", sa.UUID(), nullable=False),
+        sa.Column("tournament_id", sa.UUID(), nullable=False),
+        sa.Column(
+            "projected_fields",
+            postgresql.JSONB(astext_type=sa.Text()),
+            server_default=sa.text("'{}'::jsonb"),
+            nullable=False,
+        ),
+        sa.Column("published_by", sa.UUID(), nullable=True),
+        sa.Column("published_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("approved_by", sa.UUID(), nullable=True),
+        sa.Column("approved_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
+        sa.ForeignKeyConstraint(
+            ["source_guild_id"],
+            ["guilds.id"],
+            name=op.f("fk_central_feed_items_source_guild_id_guilds"),
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_central_feed_items")),
+    )
+    op.create_index(
+        op.f("ix_central_feed_items_source_guild_id"),
+        "central_feed_items",
+        ["source_guild_id"],
+        unique=False,
+    )
+    op.create_table(
+        "oauth_credentials",
+        sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
+        sa.Column("user_id", sa.UUID(), nullable=False),
+        sa.Column("provider", sa.Text(), nullable=False),
+        sa.Column("access_token_enc", sa.Text(), nullable=False),
+        sa.Column("refresh_token_enc", sa.Text(), nullable=True),
+        sa.Column(
+            "scopes",
+            postgresql.ARRAY(sa.Text()),
+            server_default=sa.text("'{}'::text[]"),
+            nullable=False,
+        ),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),
+        sa.ForeignKeyConstraint(
+            ["user_id"],
+            ["users.id"],
+            name=op.f("fk_oauth_credentials_user_id_users"),
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_oauth_credentials")),
+        sa.UniqueConstraint("user_id", "provider", name="uq_oauth_credentials_user_provider"),
+    )
+    op.create_index(
+        op.f("ix_oauth_credentials_user_id"), "oauth_credentials", ["user_id"], unique=False
+    )
+    op.create_table(
+        "player_central_visibility",
+        sa.Column("user_id", sa.UUID(), nullable=False),
+        sa.Column("tournament_id", sa.UUID(), nullable=False),
+        sa.Column("visibility", sa.Text(), server_default="team_only", nullable=False),
+        sa.CheckConstraint(
+            "visibility in ('team_only','show_riot_id')",
+            name=op.f("ck_player_central_visibility_visibility_allowed"),
+        ),
+        sa.ForeignKeyConstraint(
+            ["user_id"],
+            ["users.id"],
+            name=op.f("fk_player_central_visibility_user_id_users"),
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint(
+            "user_id", "tournament_id", name=op.f("pk_player_central_visibility")
+        ),
+    )
+    op.create_table(
+        "refresh_tokens",
+        sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
+        sa.Column("user_id", sa.UUID(), nullable=False),
+        sa.Column("token_hash", sa.Text(), nullable=False),
+        sa.Column("family_id", sa.UUID(), nullable=False),
+        sa.Column(
+            "issued_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False
+        ),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("revoked", sa.Boolean(), server_default=sa.text("false"), nullable=False),
+        sa.Column("rotated_from_id", sa.UUID(), nullable=True),
+        sa.Column("device_label", sa.Text(), nullable=True),
+        sa.Column("device_id", sa.Text(), nullable=True),
+        sa.ForeignKeyConstraint(
+            ["rotated_from_id"],
+            ["refresh_tokens.id"],
+            name=op.f("fk_refresh_tokens_rotated_from_id_refresh_tokens"),
+            ondelete="SET NULL",
+        ),
+        sa.ForeignKeyConstraint(
+            ["user_id"],
+            ["users.id"],
+            name=op.f("fk_refresh_tokens_user_id_users"),
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_refresh_tokens")),
+        sa.UniqueConstraint("token_hash", name="uq_refresh_tokens_token_hash"),
+    )
+    op.create_index(
+        op.f("ix_refresh_tokens_family_id"), "refresh_tokens", ["family_id"], unique=False
+    )
+    op.create_index(op.f("ix_refresh_tokens_user_id"), "refresh_tokens", ["user_id"], unique=False)
+    op.create_table(
+        "riot_accounts",
+        sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
+        sa.Column("user_id", sa.UUID(), nullable=False),
+        sa.Column("puuid", sa.Text(), nullable=False),
+        sa.Column("summoner_id", sa.Text(), nullable=True),
+        sa.Column("riot_id_game_name", sa.Text(), nullable=True),
+        sa.Column("riot_id_tag_line", sa.Text(), nullable=True),
+        sa.Column("region", sa.Text(), nullable=True),
+        sa.Column("verified", sa.Boolean(), server_default=sa.text("false"), nullable=False),
+        sa.Column("verified_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("origin_guild_id", sa.UUID(), nullable=True),
+        sa.Column("lcu_puuid", sa.Text(), nullable=True),
+        sa.Column("rank_tier", sa.Text(), nullable=True),
+        sa.Column("rank_division", sa.Text(), nullable=True),
+        sa.Column("rank_lp", sa.Integer(), nullable=True),
+        sa.Column("rank_queue", sa.Text(), nullable=True),
+        sa.Column("rank_checked_at", sa.DateTime(timezone=True), nullable=True),
+        sa.ForeignKeyConstraint(
+            ["origin_guild_id"],
+            ["guilds.id"],
+            name=op.f("fk_riot_accounts_origin_guild_id_guilds"),
+            ondelete="SET NULL",
+        ),
+        sa.ForeignKeyConstraint(
+            ["user_id"],
+            ["users.id"],
+            name=op.f("fk_riot_accounts_user_id_users"),
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_riot_accounts")),
+        sa.UniqueConstraint("puuid", name=op.f("uq_riot_accounts_puuid")),
+    )
+    op.create_index(
+        op.f("ix_riot_accounts_origin_guild_id"), "riot_accounts", ["origin_guild_id"], unique=False
+    )
+    op.create_index(op.f("ix_riot_accounts_user_id"), "riot_accounts", ["user_id"], unique=False)
+    op.create_table(
+        "teams",
+        sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
+        sa.Column("name", sa.Text(), nullable=False),
+        sa.Column("captain_user_id", sa.UUID(), nullable=False),
+        sa.Column("join_code", sa.Text(), nullable=True),
+        sa.Column("guild_id", sa.UUID(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.ForeignKeyConstraint(
+            ["captain_user_id"],
+            ["users.id"],
+            name=op.f("fk_teams_captain_user_id_users"),
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["guild_id"], ["guilds.id"], name=op.f("fk_teams_guild_id_guilds"), ondelete="CASCADE"
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_teams")),
+        sa.UniqueConstraint("id", "guild_id", name="uq_teams_id_guild"),
+        sa.UniqueConstraint("join_code", name=op.f("uq_teams_join_code")),
+    )
+    op.create_index(op.f("ix_teams_guild_id"), "teams", ["guild_id"], unique=False)
+    op.create_table(
+        "tournaments",
+        sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
+        sa.Column("name", sa.Text(), nullable=False),
+        sa.Column(
+            "status",
+            sa.Enum(
+                "draft",
+                "open",
+                "check_in",
+                "running",
+                "completed",
+                "cancelled",
+                name="tournament_status",
+                native_enum=False,
+            ),
+            server_default="draft",
+            nullable=False,
+        ),
+        sa.Column(
+            "format",
+            sa.Enum(
+                "single_elimination",
+                "double_elimination",
+                name="tournament_format",
+                native_enum=False,
+            ),
+            server_default="single_elimination",
+            nullable=False,
+        ),
+        sa.Column(
+            "game_mode",
+            sa.Enum("summoners_rift_5v5", "aram_1v1", name="game_mode", native_enum=False),
+            server_default="summoners_rift_5v5",
+            nullable=False,
+        ),
+        sa.Column("best_of", sa.Integer(), server_default="1", nullable=False),
+        sa.Column("max_teams", sa.Integer(), server_default="16", nullable=False),
+        sa.Column("registration_opens_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("start_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("start_announced_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column(
+            "is_shared_to_central", sa.Boolean(), server_default=sa.text("false"), nullable=False
+        ),
+        sa.Column("join_code", sa.Text(), nullable=True),
+        sa.Column(
+            "ruleset_json",
+            postgresql.JSONB(astext_type=sa.Text()),
+            server_default=sa.text("'{}'::jsonb"),
+            nullable=False,
+        ),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column("guild_id", sa.UUID(), nullable=False),
+        sa.CheckConstraint(
+            "max_teams > 0 AND max_teams <= 16", name=op.f("ck_tournaments_max_teams_bound")
+        ),
+        sa.ForeignKeyConstraint(
+            ["guild_id"],
+            ["guilds.id"],
+            name=op.f("fk_tournaments_guild_id_guilds"),
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_tournaments")),
+        sa.UniqueConstraint("id", "guild_id", name="uq_tournaments_id_guild"),
+        sa.UniqueConstraint("join_code", name=op.f("uq_tournaments_join_code")),
+    )
+    op.create_index(op.f("ix_tournaments_guild_id"), "tournaments", ["guild_id"], unique=False)
+    op.create_table(
+        "user_guild_roles",
+        sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
+        sa.Column("user_id", sa.UUID(), nullable=False),
+        sa.Column(
+            "role",
+            sa.Enum(
+                "platform_operator",
+                "guild_admin",
+                "captain",
+                "player",
+                name="user_guild_role_name",
+                native_enum=False,
+            ),
+            nullable=False,
+        ),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column("guild_id", sa.UUID(), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["guild_id"],
+            ["guilds.id"],
+            name=op.f("fk_user_guild_roles_guild_id_guilds"),
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["user_id"],
+            ["users.id"],
+            name=op.f("fk_user_guild_roles_user_id_users"),
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_user_guild_roles")),
+        sa.UniqueConstraint(
+            "user_id", "guild_id", "role", name="uq_user_guild_roles_user_guild_role"
+        ),
+    )
+    op.create_index(
+        op.f("ix_user_guild_roles_guild_id"), "user_guild_roles", ["guild_id"], unique=False
+    )
+    op.create_index(
+        op.f("ix_user_guild_roles_user_id"), "user_guild_roles", ["user_id"], unique=False
+    )
+    op.create_table(
+        "verification_attempts",
+        sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
+        sa.Column("user_id", sa.UUID(), nullable=False),
+        sa.Column("puuid", sa.Text(), nullable=True),
+        sa.Column("nonce", sa.Text(), nullable=True),
+        sa.Column("target_icon_id", sa.Integer(), nullable=True),
+        sa.Column("code", sa.String(length=12), nullable=True),
+        sa.Column("verify_kind", sa.String(length=16), server_default="icon", nullable=False),
+        sa.Column("origin_guild_id", sa.UUID(), nullable=True),
+        sa.Column("status", sa.Text(), server_default="pending", nullable=False),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.CheckConstraint(
+            "status in ('pending','verified','expired','failed')",
+            name=op.f("ck_verification_attempts_status_allowed"),
+        ),
+        sa.CheckConstraint(
+            "verify_kind in ('icon','desktop_code')",
+            name=op.f("ck_verification_attempts_verify_kind_allowed"),
+        ),
+        sa.ForeignKeyConstraint(
+            ["origin_guild_id"],
+            ["guilds.id"],
+            name=op.f("fk_verification_attempts_origin_guild_id_guilds"),
+            ondelete="SET NULL",
+        ),
+        sa.ForeignKeyConstraint(
+            ["user_id"],
+            ["users.id"],
+            name=op.f("fk_verification_attempts_user_id_users"),
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_verification_attempts")),
+        sa.UniqueConstraint("nonce", name=op.f("uq_verification_attempts_nonce")),
+    )
+    op.create_index(
+        op.f("ix_verification_attempts_origin_guild_id"),
+        "verification_attempts",
+        ["origin_guild_id"],
+        unique=False,
+    )
+    op.create_index(
+        op.f("ix_verification_attempts_user_id"), "verification_attempts", ["user_id"], unique=False
+    )
+    op.create_index(
+        "uq_verification_attempts_code_active",
+        "verification_attempts",
+        ["code"],
+        unique=True,
+        postgresql_where=sa.text("code IS NOT NULL AND status = 'pending'"),
+    )
+    op.create_table(
+        "matches",
+        sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
+        sa.Column("tournament_id", sa.UUID(), nullable=False),
+        sa.Column("round", sa.Integer(), nullable=False),
+        sa.Column("bracket_slot", sa.Integer(), nullable=False),
+        sa.Column("team_a", sa.UUID(), nullable=True),
+        sa.Column("team_b", sa.UUID(), nullable=True),
+        sa.Column("winner_team_id", sa.UUID(), nullable=True),
+        sa.Column(
+            "status",
+            sa.Enum(
+                "pending",
+                "scheduled",
+                "in_progress",
+                "completed",
+                "walkover",
+                "forfeit",
+                name="match_status",
+                native_enum=False,
+            ),
+            server_default="pending",
+            nullable=False,
+        ),
+        sa.Column("wins_a", sa.Integer(), server_default="0", nullable=False),
+        sa.Column("wins_b", sa.Integer(), server_default="0", nullable=False),
+        sa.Column(
+            "scored_game_ids",
+            postgresql.JSONB(astext_type=sa.Text()),
+            server_default=sa.text("'[]'::jsonb"),
+            nullable=False,
+        ),
+        sa.Column("scheduled_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("ready_deadline_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("team_a_ready_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("team_b_ready_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("guild_id", sa.UUID(), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["guild_id"], ["guilds.id"], name=op.f("fk_matches_guild_id_guilds"), ondelete="CASCADE"
+        ),
+        sa.ForeignKeyConstraint(
+            ["tournament_id", "guild_id"],
+            ["tournaments.id", "tournaments.guild_id"],
+            name="fk_matches_tournament_guild",
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_matches")),
+        sa.UniqueConstraint("id", "guild_id", name="uq_matches_id_guild"),
+    )
+    op.create_index(op.f("ix_matches_guild_id"), "matches", ["guild_id"], unique=False)
+    op.create_table(
+        "registrations",
+        sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
+        sa.Column("tournament_id", sa.UUID(), nullable=False),
+        sa.Column("team_id", sa.UUID(), nullable=False),
+        sa.Column(
+            "status",
+            sa.Enum(
+                "pending", "approved", "checked_in", name="registration_status", native_enum=False
+            ),
+            server_default="pending",
+            nullable=False,
+        ),
+        sa.Column("guild_id", sa.UUID(), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["guild_id"],
+            ["guilds.id"],
+            name=op.f("fk_registrations_guild_id_guilds"),
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["team_id", "guild_id"],
+            ["teams.id", "teams.guild_id"],
+            name="fk_registrations_team_guild",
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["tournament_id", "guild_id"],
+            ["tournaments.id", "tournaments.guild_id"],
+            name="fk_registrations_tournament_guild",
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_registrations")),
+        sa.UniqueConstraint("tournament_id", "team_id", name="uq_registrations_tournament_team"),
+    )
+    op.create_index(op.f("ix_registrations_guild_id"), "registrations", ["guild_id"], unique=False)
+    op.create_table(
+        "team_members",
+        sa.Column("team_id", sa.UUID(), nullable=False),
+        sa.Column("user_id", sa.UUID(), nullable=False),
+        sa.Column("guild_id", sa.UUID(), nullable=False),
+        sa.Column(
+            "role",
+            sa.Enum("captain", "player", "sub", name="team_member_role", native_enum=False),
+            nullable=False,
+        ),
+        sa.Column(
+            "status",
+            sa.Enum("pending", "active", name="team_member_status", native_enum=False),
+            server_default="active",
+            nullable=False,
+        ),
+        sa.ForeignKeyConstraint(
+            ["guild_id"],
+            ["guilds.id"],
+            name=op.f("fk_team_members_guild_id_guilds"),
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["team_id", "guild_id"],
+            ["teams.id", "teams.guild_id"],
+            name="fk_team_members_team_guild",
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["user_id"],
+            ["users.id"],
+            name=op.f("fk_team_members_user_id_users"),
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("team_id", "user_id", name=op.f("pk_team_members")),
+    )
+    op.create_index(op.f("ix_team_members_guild_id"), "team_members", ["guild_id"], unique=False)
+    op.create_table(
+        "tournament_participants",
+        sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
+        sa.Column("tournament_id", sa.UUID(), nullable=False),
+        sa.Column("user_id", sa.UUID(), nullable=False),
+        sa.Column("team_id", sa.UUID(), nullable=True),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column("guild_id", sa.UUID(), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["guild_id"],
+            ["guilds.id"],
+            name=op.f("fk_tournament_participants_guild_id_guilds"),
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["tournament_id", "guild_id"],
+            ["tournaments.id", "tournaments.guild_id"],
+            name="fk_tournament_participants_tournament_guild",
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["user_id"],
+            ["users.id"],
+            name=op.f("fk_tournament_participants_user_id_users"),
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_tournament_participants")),
+        sa.UniqueConstraint(
+            "tournament_id", "user_id", name="uq_tournament_participants_tournament_user"
+        ),
+    )
+    op.create_index(
+        op.f("ix_tournament_participants_guild_id"),
+        "tournament_participants",
+        ["guild_id"],
+        unique=False,
+    )
+    op.create_index(
+        op.f("ix_tournament_participants_user_id"),
+        "tournament_participants",
+        ["user_id"],
+        unique=False,
+    )
+    op.create_table(
+        "client_sessions",
+        sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
+        sa.Column("user_id", sa.UUID(), nullable=False),
+        sa.Column("puuid", sa.Text(), nullable=False),
+        sa.Column("match_id", sa.UUID(), nullable=True),
+        sa.Column("lcu_reachable", sa.Boolean(), server_default=sa.text("false"), nullable=False),
+        sa.Column("gameflow_phase", sa.Text(), nullable=True),
+        sa.Column("schema_version", sa.Text(), nullable=True),
+        sa.Column("last_heartbeat_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("consent_version", sa.Text(), nullable=True),
+        sa.Column("consent_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("host_opt_in", sa.Boolean(), server_default=sa.text("false"), nullable=False),
+        sa.Column("guild_id", sa.UUID(), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["guild_id"],
+            ["guilds.id"],
+            name=op.f("fk_client_sessions_guild_id_guilds"),
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["match_id"],
+            ["matches.id"],
+            name=op.f("fk_client_sessions_match_id_matches"),
+            ondelete="SET NULL",
+        ),
+        sa.ForeignKeyConstraint(
+            ["user_id"],
+            ["users.id"],
+            name=op.f("fk_client_sessions_user_id_users"),
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_client_sessions")),
+    )
+    op.create_index(
+        op.f("ix_client_sessions_guild_id"), "client_sessions", ["guild_id"], unique=False
+    )
+    op.create_index(
+        op.f("ix_client_sessions_user_id"), "client_sessions", ["user_id"], unique=False
+    )
+    op.create_table(
+        "match_lobbies",
+        sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
+        sa.Column("match_id", sa.UUID(), nullable=False),
+        sa.Column("host_puuid", sa.Text(), nullable=True),
+        sa.Column(
+            "host_succession",
+            postgresql.ARRAY(sa.Text()),
+            server_default=sa.text("'{}'::text[]"),
+            nullable=False,
+        ),
+        sa.Column("host_epoch", sa.Integer(), server_default="0", nullable=False),
+        sa.Column("lobby_name", sa.Text(), nullable=True),
+        sa.Column("lobby_password", sa.Text(), nullable=True),
+        sa.Column("lcu_lobby_id", sa.Text(), nullable=True),
+        sa.Column("lcu_game_id", sa.Text(), nullable=True),
+        sa.Column(
+            "state",
+            sa.Enum(
+                "assigned_host",
+                "awaiting_create",
+                "lobby_open",
+                "filling",
+                "ready",
+                "starting",
+                "in_game",
+                "result_pending",
+                "ended",
+                "aborted",
+                "host_lost",
+                name="lobby_phase",
+                native_enum=False,
+            ),
+            server_default="assigned_host",
+            nullable=False,
+        ),
+        sa.Column("last_host_heartbeat_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("ended_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("guild_id", sa.UUID(), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["guild_id"],
+            ["guilds.id"],
+            name=op.f("fk_match_lobbies_guild_id_guilds"),
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["match_id", "guild_id"],
+            ["matches.id", "matches.guild_id"],
+            name="fk_match_lobbies_match_guild",
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_match_lobbies")),
+        sa.UniqueConstraint("match_id", name="uq_match_lobbies_match"),
+    )
+    op.create_index(op.f("ix_match_lobbies_guild_id"), "match_lobbies", ["guild_id"], unique=False)
+    op.create_table(
+        "match_results",
+        sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
+        sa.Column("match_id", sa.UUID(), nullable=False),
+        sa.Column("tournament_id", sa.UUID(), nullable=False),
+        sa.Column("lobby_id", sa.UUID(), nullable=True),
+        sa.Column("agreed_game_id", sa.Text(), nullable=True),
+        sa.Column("winner_team_id", sa.UUID(), nullable=True),
+        sa.Column(
+            "decided_by",
+            sa.Enum(
+                "quorum",
+                "admin_override",
+                "walkover",
+                "forfeit",
+                name="result_decided_by",
+                native_enum=False,
+            ),
+            nullable=True,
+        ),
+        sa.Column("quorum_detail", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+        sa.Column("admin_override_by", sa.UUID(), nullable=True),
+        sa.Column("admin_override_reason", sa.Text(), nullable=True),
+        sa.Column(
+            "state",
+            sa.Enum(
+                "provisional", "confirmed", "disputed", name="match_result_state", native_enum=False
+            ),
+            server_default="disputed",
+            nullable=False,
+        ),
+        sa.Column("decided_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("guild_id", sa.UUID(), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["guild_id"],
+            ["guilds.id"],
+            name=op.f("fk_match_results_guild_id_guilds"),
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["match_id", "guild_id"],
+            ["matches.id", "matches.guild_id"],
+            name="fk_match_results_match_guild",
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_match_results")),
+        sa.UniqueConstraint("match_id", name="uq_match_results_match"),
+    )
+    op.create_index(op.f("ix_match_results_guild_id"), "match_results", ["guild_id"], unique=False)
+    op.create_table(
+        "result_nonces",
+        sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
+        sa.Column("match_id", sa.UUID(), nullable=False),
+        sa.Column("puuid", sa.Text(), nullable=False),
+        sa.Column("nonce", sa.Text(), nullable=False),
+        sa.Column("lcu_game_id", sa.Text(), nullable=True),
+        sa.Column(
+            "issued_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False
+        ),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("used_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("guild_id", sa.UUID(), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["guild_id"],
+            ["guilds.id"],
+            name=op.f("fk_result_nonces_guild_id_guilds"),
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["match_id"],
+            ["matches.id"],
+            name=op.f("fk_result_nonces_match_id_matches"),
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_result_nonces")),
+        sa.UniqueConstraint("nonce", name="uq_result_nonces_nonce"),
+    )
+    op.create_index(op.f("ix_result_nonces_guild_id"), "result_nonces", ["guild_id"], unique=False)
+    op.create_table(
+        "result_reports",
+        sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
+        sa.Column("match_id", sa.UUID(), nullable=False),
+        sa.Column("lobby_id", sa.UUID(), nullable=True),
+        sa.Column("lcu_game_id", sa.Text(), nullable=False),
+        sa.Column("reporter_puuid", sa.Text(), nullable=False),
+        sa.Column(
+            "source",
+            sa.Enum("eog_stats_block", "live_client_data", name="result_source", native_enum=False),
+            nullable=False,
+        ),
+        sa.Column("claimed_winner_team", sa.UUID(), nullable=True),
+        sa.Column("reported_kda", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+        sa.Column("kill_stream", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+        sa.Column("schema_version", sa.Text(), nullable=True),
+        sa.Column("nonce", sa.Text(), nullable=True),
+        sa.Column("raw_payload", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+        sa.Column(
+            "anomaly_flags",
+            postgresql.JSONB(astext_type=sa.Text()),
+            server_default=sa.text("'[]'::jsonb"),
+            nullable=False,
+        ),
+        sa.Column(
+            "received_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column("guild_id", sa.UUID(), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["guild_id"],
+            ["guilds.id"],
+            name=op.f("fk_result_reports_guild_id_guilds"),
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["lobby_id"],
+            ["match_lobbies.id"],
+            name=op.f("fk_result_reports_lobby_id_match_lobbies"),
+            ondelete="SET NULL",
+        ),
+        sa.ForeignKeyConstraint(
+            ["match_id", "guild_id"],
+            ["matches.id", "matches.guild_id"],
+            name="fk_result_reports_match_guild",
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_result_reports")),
+        sa.UniqueConstraint(
+            "lcu_game_id", "reporter_puuid", "source", name="uq_result_reports_game_reporter_source"
+        ),
+    )
+    op.create_index(
+        op.f("ix_result_reports_guild_id"), "result_reports", ["guild_id"], unique=False
+    )
+    # ### end Alembic commands ###
+
+    # --- non-BYPASSRLS application role + privileges --------------------------
+    op.execute(
+        f"""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{APP_ROLE}') THEN
+                CREATE ROLE {APP_ROLE} LOGIN PASSWORD '{_DEV_APP_ROLE_PASSWORD}' NOBYPASSRLS;
+            END IF;
+        END
+        $$;
+        """
+    )
+    op.execute(f"GRANT USAGE ON SCHEMA public TO {APP_ROLE}")
+    op.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {APP_ROLE}")
+    # Tables created later by the migration owner are auto-granted to the app role.
+    op.execute(
+        f"ALTER DEFAULT PRIVILEGES IN SCHEMA public "
+        f"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {APP_ROLE}"
     )
 
-    # Lightweight marker table: a deterministic place for a future
-    # data-presence/seed sentinel without coupling to feature tables yet.
-    op.create_table(
-        "schema_migrations_marker",
-        sa.Column("key", sa.Text(), primary_key=True),
-        sa.Column("note", sa.Text(), nullable=False),
-    )
-    op.bulk_insert(
-        sa.table(
-            "schema_migrations_marker",
-            sa.column("key", sa.Text),
-            sa.column("note", sa.Text),
-        ),
-        [
-            {
-                "key": "baseline",
-                "note": "Phase-0 baseline; RLS/roles land in Phase 1 (see module docstring).",
-            }
-        ],
+    # --- per-guild RLS --------------------------------------------------------
+    for table_name in _GUILD_ISOLATED_TABLES:
+        op.execute(f"ALTER TABLE {table_name} ENABLE ROW LEVEL SECURITY")
+        op.execute(f"ALTER TABLE {table_name} FORCE ROW LEVEL SECURITY")
+        op.execute(f"DROP POLICY IF EXISTS guild_isolation ON {table_name}")
+        op.execute(_GUILD_ISOLATION_POLICY.format(table=table_name))
+
+    # --- self-read on user_guild_roles ---------------------------------------
+    # Login/refresh reads a user's OWN role rows across guilds before an acting
+    # guild exists, so guild_isolation alone would return zero rows under FORCE
+    # RLS. SELECT-only, so writes stay guild-scoped.
+    op.execute("DROP POLICY IF EXISTS self_role_read ON user_guild_roles")
+    op.execute(
+        """
+        CREATE POLICY self_role_read ON user_guild_roles
+            FOR SELECT
+            USING (user_id = NULLIF(current_setting('app.current_user', true), '')::uuid)
+        """
     )
 
 
 def downgrade() -> None:
-    op.drop_table("schema_migrations_marker")
+    # ### commands auto generated by Alembic - please adjust! ###
+    op.execute("DROP POLICY IF EXISTS self_role_read ON user_guild_roles")
+    for table_name in _GUILD_ISOLATED_TABLES:
+        op.execute(f"DROP POLICY IF EXISTS guild_isolation ON {table_name}")
+        op.execute(f"ALTER TABLE {table_name} NO FORCE ROW LEVEL SECURITY")
+        op.execute(f"ALTER TABLE {table_name} DISABLE ROW LEVEL SECURITY")
+    # The role is cluster-wide and may back other databases: revoke, never drop.
+    op.execute(
+        f"REVOKE SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public FROM {APP_ROLE}"
+    )
+
+    op.drop_index(op.f("ix_result_reports_guild_id"), table_name="result_reports")
+    op.drop_table("result_reports")
+    op.drop_index(op.f("ix_result_nonces_guild_id"), table_name="result_nonces")
+    op.drop_table("result_nonces")
+    op.drop_index(op.f("ix_match_results_guild_id"), table_name="match_results")
+    op.drop_table("match_results")
+    op.drop_index(op.f("ix_match_lobbies_guild_id"), table_name="match_lobbies")
+    op.drop_table("match_lobbies")
+    op.drop_index(op.f("ix_client_sessions_user_id"), table_name="client_sessions")
+    op.drop_index(op.f("ix_client_sessions_guild_id"), table_name="client_sessions")
+    op.drop_table("client_sessions")
+    op.drop_index(op.f("ix_tournament_participants_user_id"), table_name="tournament_participants")
+    op.drop_index(op.f("ix_tournament_participants_guild_id"), table_name="tournament_participants")
+    op.drop_table("tournament_participants")
+    op.drop_index(op.f("ix_team_members_guild_id"), table_name="team_members")
+    op.drop_table("team_members")
+    op.drop_index(op.f("ix_registrations_guild_id"), table_name="registrations")
+    op.drop_table("registrations")
+    op.drop_index(op.f("ix_matches_guild_id"), table_name="matches")
+    op.drop_table("matches")
+    op.drop_index(
+        "uq_verification_attempts_code_active",
+        table_name="verification_attempts",
+        postgresql_where=sa.text("code IS NOT NULL AND status = 'pending'"),
+    )
+    op.drop_index(op.f("ix_verification_attempts_user_id"), table_name="verification_attempts")
+    op.drop_index(
+        op.f("ix_verification_attempts_origin_guild_id"), table_name="verification_attempts"
+    )
+    op.drop_table("verification_attempts")
+    op.drop_index(op.f("ix_user_guild_roles_user_id"), table_name="user_guild_roles")
+    op.drop_index(op.f("ix_user_guild_roles_guild_id"), table_name="user_guild_roles")
+    op.drop_table("user_guild_roles")
+    op.drop_index(op.f("ix_tournaments_guild_id"), table_name="tournaments")
+    op.drop_table("tournaments")
+    op.drop_index(op.f("ix_teams_guild_id"), table_name="teams")
+    op.drop_table("teams")
+    op.drop_index(op.f("ix_riot_accounts_user_id"), table_name="riot_accounts")
+    op.drop_index(op.f("ix_riot_accounts_origin_guild_id"), table_name="riot_accounts")
+    op.drop_table("riot_accounts")
+    op.drop_index(op.f("ix_refresh_tokens_user_id"), table_name="refresh_tokens")
+    op.drop_index(op.f("ix_refresh_tokens_family_id"), table_name="refresh_tokens")
+    op.drop_table("refresh_tokens")
+    op.drop_table("player_central_visibility")
+    op.drop_index(op.f("ix_oauth_credentials_user_id"), table_name="oauth_credentials")
+    op.drop_table("oauth_credentials")
+    op.drop_index(op.f("ix_central_feed_items_source_guild_id"), table_name="central_feed_items")
+    op.drop_table("central_feed_items")
+    op.drop_index(op.f("ix_audit_log_guild_id"), table_name="audit_log")
+    op.drop_table("audit_log")
+    op.drop_table("users")
     op.drop_table("guilds")
+    # ### end Alembic commands ###

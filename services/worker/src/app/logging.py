@@ -64,4 +64,8 @@ def configure_logging(log_level: str = "INFO") -> None:
 
 def get_logger(*args: object, **kwargs: object) -> structlog.stdlib.BoundLogger:
     """Return a bound structlog logger."""
-    return structlog.get_logger(*args, **kwargs)
+    # Bind to an annotated local rather than returning directly: structlog's
+    # get_logger is typed as returning Any, which trips mypy's warn_return_any.
+    # Mirrors services/backend/src/app/logging.py.
+    logger: structlog.stdlib.BoundLogger = structlog.get_logger(*args, **kwargs)
+    return logger

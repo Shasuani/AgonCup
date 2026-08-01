@@ -667,9 +667,7 @@ _ANNOUNCE_PHASES: dict[LobbyPhase, tuple[str, str]] = {
 }
 
 
-async def _announce_phase(
-    session: AsyncSession, *, match_id: uuid.UUID, state: LobbyPhase
-) -> None:
+async def _announce_phase(session: AsyncSession, *, match_id: uuid.UUID, state: LobbyPhase) -> None:
     """Publish a live phase announcement to the guild's Discord feed (best-effort).
 
     Curated to the milestones in :data:`_ANNOUNCE_PHASES`; every failure is swallowed
@@ -691,9 +689,7 @@ async def _announce_phase(
         if match is None:
             return
         tour = (
-            await session.execute(
-                select(Tournament).where(Tournament.id == match.tournament_id)
-            )
+            await session.execute(select(Tournament).where(Tournament.id == match.tournament_id))
         ).scalar_one_or_none()
         headline, detail = milestone
         label = f"Round {match.round + 1} · Match {match.bracket_slot + 1}"

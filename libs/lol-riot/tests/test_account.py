@@ -227,9 +227,7 @@ async def test_league_entries_by_puuid_uses_platform_host_and_maps() -> None:
     client = _client(handler, route=ContinentalRoute.EUROPE)
     entries = await client.get_league_entries_by_puuid("PUUID-78", PlatformRoute.EUN1)
 
-    assert seen["url"] == (
-        "https://eun1.api.riotgames.com/lol/league/v4/entries/by-puuid/PUUID-78"
-    )
+    assert seen["url"] == ("https://eun1.api.riotgames.com/lol/league/v4/entries/by-puuid/PUUID-78")
     assert len(entries) == 2
     assert isinstance(entries[0], LeagueEntryDTO)
     solo = next(e for e in entries if e.queue_type == "RANKED_SOLO_5x5")

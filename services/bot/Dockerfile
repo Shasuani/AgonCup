@@ -4,7 +4,17 @@
 #   docker build -t lol/python-base:dev infra/images/python-base   (or `make build-bases`)
 
 # ---------- builder ----------------------------------------------------------
-FROM lol/python-base:dev AS builder
+# CI builds the base image into the GitLab registry (a fresh dind daemon has no
+# local `lol/python-base:dev`), so the base reference is a build-arg. The default keeps
+# `make up` / local builds working unchanged.
+ARG PYTHON_BASE_IMAGE=lol/python-base:dev
+
+FROM ${PYTHON_BASE_IMAGE} AS builder
+
+# The base image drops to the unprivileged runtime user, but the BUILD stage has
+# to write outside its home (the venv at /opt/venv, the /repo tree). Build as root;
+# the runtime stage below switches back to the non-root user.
+USER root
 
 WORKDIR /build
 
@@ -21,7 +31,7 @@ RUN uv venv /opt/venv \
     && uv pip install --python /opt/venv/bin/python .
 
 # ---------- runtime ----------------------------------------------------------
-FROM lol/python-base:dev AS runtime
+FROM ${PYTHON_BASE_IMAGE} AS runtime
 
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \

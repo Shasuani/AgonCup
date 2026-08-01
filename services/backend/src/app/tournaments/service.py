@@ -381,9 +381,7 @@ async def _resolve_captain_team(
     many → :class:`AmbiguousCaptainTeamError` (they must name a team).
     """
     if team_id is not None:
-        team = (
-            await session.execute(select(Team).where(Team.id == team_id))
-        ).scalar_one_or_none()
+        team = (await session.execute(select(Team).where(Team.id == team_id))).scalar_one_or_none()
         if team is None:
             raise InvalidStateError("team not found in this guild")
         if team.captain_user_id != user_id:
@@ -391,9 +389,7 @@ async def _resolve_captain_team(
         return team
 
     captained = list(
-        (
-            await session.execute(select(Team).where(Team.captain_user_id == user_id))
-        ).scalars()
+        (await session.execute(select(Team).where(Team.captain_user_id == user_id))).scalars()
     )
     if not captained:
         raise NoCaptainTeamError(str(user_id))
@@ -503,12 +499,16 @@ async def get_bracket(session: AsyncSession, *, tournament_id: uuid.UUID) -> lis
     """
     await get_tournament(session, tournament_id=tournament_id)
     matches = (
-        await session.execute(
-            select(Match)
-            .where(Match.tournament_id == tournament_id)
-            .order_by(Match.round, Match.bracket_slot)
+        (
+            await session.execute(
+                select(Match)
+                .where(Match.tournament_id == tournament_id)
+                .order_by(Match.round, Match.bracket_slot)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     names: dict[uuid.UUID, str] = {
         r[0]: r[1] for r in (await session.execute(select(Team.id, Team.name))).all()
     }

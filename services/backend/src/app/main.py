@@ -102,9 +102,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     scheduler_task: asyncio.Task[None] | None = None
     if settings.scheduler_enabled:
-        scheduler_task = asyncio.create_task(
-            _scheduler_loop(settings.scheduler_interval_seconds)
-        )
+        scheduler_task = asyncio.create_task(_scheduler_loop(settings.scheduler_interval_seconds))
     yield
     if scheduler_task is not None:
         scheduler_task.cancel()

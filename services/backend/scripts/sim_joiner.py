@@ -20,13 +20,13 @@ import asyncio
 import secrets
 import sys
 
+from lol_schemas.enums import UserGuildRoleName
 from sqlalchemy import select, text
 
 from app.db import SessionLocal
 from app.joincodes import normalize_join_code
 from app.models import Team, User, UserGuildRole
 from app.teams import service
-from lol_schemas.enums import UserGuildRoleName
 
 
 async def main() -> None:
@@ -39,9 +39,7 @@ async def main() -> None:
 
     async with SessionLocal() as s, s.begin():
         # Find the team by its join code (owner session bypasses RLS locally).
-        team = (
-            await s.execute(select(Team).where(Team.join_code == code))
-        ).scalar_one_or_none()
+        team = (await s.execute(select(Team).where(Team.join_code == code))).scalar_one_or_none()
         if team is None:
             print(f"no team with code {code!r} — create the team first, then copy its code")
             raise SystemExit(1)
@@ -55,9 +53,7 @@ async def main() -> None:
         s.add(joiner)
         await s.flush()
         s.add(
-            UserGuildRole(
-                user_id=joiner.id, guild_id=team.guild_id, role=UserGuildRoleName.PLAYER
-            )
+            UserGuildRole(user_id=joiner.id, guild_id=team.guild_id, role=UserGuildRoleName.PLAYER)
         )
         await s.flush()
 

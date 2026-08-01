@@ -25,12 +25,18 @@ _CODE = "TEAMKD23"  # 8 chars, all in the non-ambiguous join-code alphabet
 def _session_with_team(*, captain: uuid.UUID) -> tuple[FakeSession, Team]:
     session = FakeSession()
     session.current_guild = str(_GUILD)
-    team = Team(id=uuid.uuid4(), guild_id=_GUILD, name="SKT T1", captain_user_id=captain,
-                join_code=_CODE)
+    team = Team(
+        id=uuid.uuid4(), guild_id=_GUILD, name="SKT T1", captain_user_id=captain, join_code=_CODE
+    )
     session.store[Team].append(team)
     session.store[TeamMember].append(
-        TeamMember(team_id=team.id, user_id=captain, guild_id=_GUILD,
-                   role=TeamMemberRole.CAPTAIN, status=TeamMemberStatus.ACTIVE)
+        TeamMember(
+            team_id=team.id,
+            user_id=captain,
+            guild_id=_GUILD,
+            role=TeamMemberRole.CAPTAIN,
+            status=TeamMemberStatus.ACTIVE,
+        )
     )
     return session, team
 
@@ -39,8 +45,13 @@ def _fill_active(session: FakeSession, team: Team, n: int) -> None:
     """Add ``n`` extra ACTIVE members to a team (beyond the captain)."""
     for _ in range(n):
         session.store[TeamMember].append(
-            TeamMember(team_id=team.id, user_id=uuid.uuid4(), guild_id=_GUILD,
-                       role=TeamMemberRole.PLAYER, status=TeamMemberStatus.ACTIVE)
+            TeamMember(
+                team_id=team.id,
+                user_id=uuid.uuid4(),
+                guild_id=_GUILD,
+                role=TeamMemberRole.PLAYER,
+                status=TeamMemberStatus.ACTIVE,
+            )
         )
 
 
@@ -57,8 +68,13 @@ async def test_cannot_approve_beyond_max_team_size() -> None:
     _fill_active(session, team, 4)  # roster already at the cap (5)
     joiner = uuid.uuid4()
     session.store[TeamMember].append(
-        TeamMember(team_id=team.id, user_id=joiner, guild_id=_GUILD,
-                   role=TeamMemberRole.PLAYER, status=TeamMemberStatus.PENDING)
+        TeamMember(
+            team_id=team.id,
+            user_id=joiner,
+            guild_id=_GUILD,
+            role=TeamMemberRole.PLAYER,
+            status=TeamMemberStatus.PENDING,
+        )
     )
     with pytest.raises(service.TeamFullError):
         await service.approve_join_request(session, team_id=team.id, user_id=joiner)
@@ -132,9 +148,7 @@ async def test_join_is_idempotent_no_duplicate_request() -> None:
 # --- transfer_captain (edge-cases §1.4) ------------------------------------
 def _role_of(session: FakeSession, team_id: uuid.UUID, user_id: uuid.UUID) -> TeamMemberRole:
     return next(
-        m.role
-        for m in session.store[TeamMember]
-        if m.team_id == team_id and m.user_id == user_id
+        m.role for m in session.store[TeamMember] if m.team_id == team_id and m.user_id == user_id
     )
 
 
@@ -143,8 +157,13 @@ async def test_transfer_captain_swaps_roles_and_repoints_team() -> None:
     session, team = _session_with_team(captain=captain)
     heir = uuid.uuid4()
     session.store[TeamMember].append(
-        TeamMember(team_id=team.id, user_id=heir, guild_id=_GUILD,
-                   role=TeamMemberRole.PLAYER, status=TeamMemberStatus.ACTIVE)
+        TeamMember(
+            team_id=team.id,
+            user_id=heir,
+            guild_id=_GUILD,
+            role=TeamMemberRole.PLAYER,
+            status=TeamMemberStatus.ACTIVE,
+        )
     )
 
     result = await service.transfer_captain(session, team_id=team.id, new_captain_user_id=heir)
@@ -159,8 +178,13 @@ async def test_transfer_lets_old_captain_leave() -> None:
     session, team = _session_with_team(captain=captain)
     heir = uuid.uuid4()
     session.store[TeamMember].append(
-        TeamMember(team_id=team.id, user_id=heir, guild_id=_GUILD,
-                   role=TeamMemberRole.PLAYER, status=TeamMemberStatus.ACTIVE)
+        TeamMember(
+            team_id=team.id,
+            user_id=heir,
+            guild_id=_GUILD,
+            role=TeamMemberRole.PLAYER,
+            status=TeamMemberStatus.ACTIVE,
+        )
     )
     # Before transfer the captain is protected from leaving.
     with pytest.raises(service.CaptainProtectedError):
@@ -175,17 +199,20 @@ async def test_transfer_lets_old_captain_leave() -> None:
 async def test_transfer_to_non_member_rejected() -> None:
     session, team = _session_with_team(captain=uuid.uuid4())
     with pytest.raises(service.NewCaptainNotEligibleError):
-        await service.transfer_captain(
-            session, team_id=team.id, new_captain_user_id=uuid.uuid4()
-        )
+        await service.transfer_captain(session, team_id=team.id, new_captain_user_id=uuid.uuid4())
 
 
 async def test_transfer_to_pending_member_rejected() -> None:
     session, team = _session_with_team(captain=uuid.uuid4())
     pending = uuid.uuid4()
     session.store[TeamMember].append(
-        TeamMember(team_id=team.id, user_id=pending, guild_id=_GUILD,
-                   role=TeamMemberRole.PLAYER, status=TeamMemberStatus.PENDING)
+        TeamMember(
+            team_id=team.id,
+            user_id=pending,
+            guild_id=_GUILD,
+            role=TeamMemberRole.PLAYER,
+            status=TeamMemberStatus.PENDING,
+        )
     )
     with pytest.raises(service.NewCaptainNotEligibleError):
         await service.transfer_captain(session, team_id=team.id, new_captain_user_id=pending)

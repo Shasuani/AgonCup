@@ -95,6 +95,76 @@ Use `make -n <target>` to dry-run any target, and `make help` to list them.
 
 ---
 
+## Run & Debug in VS Code (host dev)
+
+The app tiers run **on the host** (breakpoints, hot reload, native LCU access);
+only **Postgres + Redis** run in Docker. Everything is wired in
+[`.vscode/launch.json`](./.vscode/launch.json) +
+[`.vscode/tasks.json`](./.vscode/tasks.json).
+
+### First time (three tasks, `Ctrl+Shift+P` → *Tasks: Run Task*)
+
+| # | Task | What it does |
+|---|------|--------------|
+| 1 | `deps: all` | `uv sync` for backend/worker/bot + `npm install` for frontend/desktop + builds `libs/lol-lcu`. |
+| 2 | `infra: up (postgres + redis)` | Starts `lol-postgres-1` / `lol-redis-1` via `infra/docker-compose.yml`. |
+| 3 | `db: migrate (alembic upgrade head)` | Applies migrations: schema + FORCE-RLS policies + the `app_rw` role. |
+
+### Then: F5
+
+| Launch config | Runs |
+|---------------|------|
+| `Backend: FastAPI :8000` | uvicorn under debugpy — reliable breakpoints. |
+| `Backend: FastAPI :8000 (--reload)` | Same + autoreload (the reloader forks, so breakpoints get flaky). |
+| `Frontend: Vite dev :5173` | Vite dev server; opens the SPA in your browser when ready. |
+| `Desktop: Electron (main)` | Builds `dist/` + `dist-renderer/`, then launches Electron. |
+| `Desktop: attach renderer (:9223)` | Attach to the renderer to breakpoint in `renderer/*.tsx`. |
+| `Worker: arq` / `Bot: Discord` | The background tiers (the bot needs a real `DISCORD_BOT_TOKEN`). |
+| `Dev: simulate tournament` | Plays a whole tournament with fake players (dev-only). |
+
+Compounds (top of the Run & Debug dropdown): **▶ Dev: Backend + Frontend**,
+**▶ Dev: Backend + Desktop client**, **▶ Dev: Backend + Frontend + Desktop**,
+**▶ Dev: Everything**.
+
+Log into the SPA with the **Dev login** button (`POST /auth/dev-login`,
+development only) — no Discord OAuth app needed.
+
+### Ports
+
+The dev DSNs use **non-default ports** because the usual ones are taken by other
+stacks on the same Docker daemon. They must match `services/<svc>/.env`.
+
+| Port | Used by | Note |
+|------|---------|------|
+| `5442` | this project's Postgres | `:5432` is taken (`ewhms-postgres`), `:5451` by `miniwms`. |
+| `6389` | this project's Redis | `:6379` system redis, `:6380` `ewhms`, `:6398` `miniwms`. |
+| `8000` | backend (host) | Also the Vite proxy target and the desktop's `BACKEND_URL`. |
+| `5173` | frontend (host) | Vite falls forward to `5174…` if busy. |
+| `9223` | Electron remote debugging | Renderer attach. |
+
+### Env files — two of them, on purpose
+
+`services/<svc>/.env` carries **localhost** DSNs (host dev, git-ignored, created
+for you with dev-only secrets). The repo-root `.env` carries **docker-compose
+hostnames** and is for containers only. VS Code's Python extension auto-loads
+the root one by default, which would send host runs at `postgres:5432` and fail
+with `socket.gaierror` — [`.vscode/settings.json`](./.vscode/settings.json)
+repins `python.envFile`, and every launch config sets its own `envFile`.
+
+Fill in `RIOT_API_KEY` (required for account verification) and the `DISCORD_*`
+values when you need those flows.
+
+### Notes
+
+- **Desktop + LCU under WSL:** the client must reach the League client on
+  `127.0.0.1` — inside WSL that is WSL's loopback, not Windows'. Pairing,
+  tournaments and teams work anywhere; for real LCU work run the desktop
+  natively on the machine running League (or enable WSL2 mirrored networking).
+- `libs/lol-lcu` ships no `dist/`, so `build: lcu lib` must run before the
+  desktop build (`deps: all` and `build: desktop` both handle it).
+
+---
+
 ## Repository map
 
 ```

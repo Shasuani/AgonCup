@@ -44,6 +44,15 @@ import random
 import secrets
 import uuid
 
+from lol_schemas.enums import (
+    GameMode,
+    MatchStatus,
+    RegistrationStatus,
+    TeamMemberRole,
+    TeamMemberStatus,
+    TournamentFormat,
+    UserGuildRoleName,
+)
 from sqlalchemy import delete, func, select, text
 
 from app.db import SessionLocal
@@ -59,15 +68,6 @@ from app.models import (
 )
 from app.results import service as results
 from app.tournaments import service as ts
-from lol_schemas.enums import (
-    GameMode,
-    MatchStatus,
-    RegistrationStatus,
-    TeamMemberRole,
-    TeamMemberStatus,
-    TournamentFormat,
-    UserGuildRoleName,
-)
 
 # Markers that make simulator data identifiable + cleanly removable.
 SIM_TEAM_PREFIX = "\U0001f916 "  # 🤖
@@ -76,12 +76,34 @@ SIM_PUUID_PREFIX = "SIM-"
 SIM_DISCORD_BASE = 9_100_000_000_000_000_000  # reserved high range, never a real Discord id
 
 BOT_NAMES = [
-    "Frostguard", "Noxus Reborn", "Demacia Elite", "Ionia Blades", "Shadow Isles",
-    "Piltover Prime", "Zaun Chaos", "Freljord Wolves", "Bilgewater Corsairs", "Targon Peak",
-    "Shurima Sun", "Void Spawn", "Bandle Crew", "Mount Rift", "Blue Sentinels", "Red Brambles",
+    "Frostguard",
+    "Noxus Reborn",
+    "Demacia Elite",
+    "Ionia Blades",
+    "Shadow Isles",
+    "Piltover Prime",
+    "Zaun Chaos",
+    "Freljord Wolves",
+    "Bilgewater Corsairs",
+    "Targon Peak",
+    "Shurima Sun",
+    "Void Spawn",
+    "Bandle Crew",
+    "Mount Rift",
+    "Blue Sentinels",
+    "Red Brambles",
 ]
 CHAMPS = [
-    "Ashe", "Darius", "Lux", "Yasuo", "Jinx", "Thresh", "Lee Sin", "Ahri", "Garen", "Zed",
+    "Ashe",
+    "Darius",
+    "Lux",
+    "Yasuo",
+    "Jinx",
+    "Thresh",
+    "Lee Sin",
+    "Ahri",
+    "Garen",
+    "Zed",
 ]
 
 
@@ -93,68 +115,136 @@ async def _set_guild(s, guild_id: uuid.UUID) -> None:
 async def cleanup(s) -> None:
     await s.execute(text("SET app.current_guild = ''"))
     # Tournaments flagged sim (cascades matches/registrations/results/lobbies).
-    sim_tids = (await s.execute(select(Tournament.id).where(Tournament.ruleset_json["sim"].astext == "true"))).scalars().all()
+    sim_tids = (
+        (
+            await s.execute(
+                select(Tournament.id).where(Tournament.ruleset_json["sim"].astext == "true")
+            )
+        )
+        .scalars()
+        .all()
+    )
     for tid in sim_tids:
         await s.execute(delete(Tournament).where(Tournament.id == tid))
     # Bot teams (cascades team_members incl. your real membership row — you stay).
     await s.execute(delete(Team).where(Team.name.like(f"{SIM_TEAM_PREFIX}%")))
     # Bot users + their accounts/roles.
-    sim_uids = (await s.execute(select(User.id).where(User.discord_user_id >= SIM_DISCORD_BASE))).scalars().all()
+    sim_uids = (
+        (await s.execute(select(User.id).where(User.discord_user_id >= SIM_DISCORD_BASE)))
+        .scalars()
+        .all()
+    )
     if sim_uids:
         await s.execute(delete(RiotAccount).where(RiotAccount.user_id.in_(sim_uids)))
         await s.execute(delete(UserGuildRole).where(UserGuildRole.user_id.in_(sim_uids)))
         await s.execute(delete(User).where(User.id.in_(sim_uids)))
     await s.commit()
-    print(f"✓ cleanup: removed {len(sim_tids)} sim tournament(s), bot teams, and {len(sim_uids)} bot user(s). Real data untouched.")
+    print(
+        f"✓ cleanup: removed {len(sim_tids)} sim tournament(s), bot teams, and {len(sim_uids)} bot user(s). Real data untouched."
+    )
 
 
-async def build(s, *, guild_id: uuid.UUID, name: str, mode: GameMode, fmt: TournamentFormat, teams: int, best_of: int, me_user_id: uuid.UUID | None) -> Tournament:
+async def build(
+    s,
+    *,
+    guild_id: uuid.UUID,
+    name: str,
+    mode: GameMode,
+    fmt: TournamentFormat,
+    teams: int,
+    best_of: int,
+    me_user_id: uuid.UUID | None,
+) -> Tournament:
     await _set_guild(s, guild_id)
 
     tour = await ts.create_tournament(
-        s, name=name, format=fmt, game_mode=mode, best_of=best_of, max_teams=max(teams, 2),
+        s,
+        name=name,
+        format=fmt,
+        game_mode=mode,
+        best_of=best_of,
+        max_teams=max(teams, 2),
     )
     tour.ruleset_json = {"sim": True}
     await s.flush()
-    print(f"✓ created tournament {name!r}  (id={str(tour.id)[:8]}  code={tour.join_code}  mode={mode.value}  {fmt.value}  Bo{best_of})")
+    print(
+        f"✓ created tournament {name!r}  (id={str(tour.id)[:8]}  code={tour.join_code}  mode={mode.value}  {fmt.value}  Bo{best_of})"
+    )
 
     size = mode.team_size  # 5 for 5v5, 1 for 1v1
     # Continue bot discord ids above any that already exist so re-runs never collide.
-    max_disc = (await s.execute(select(func.max(User.discord_user_id)).where(User.discord_user_id >= SIM_DISCORD_BASE))).scalar()
+    max_disc = (
+        await s.execute(
+            select(func.max(User.discord_user_id)).where(User.discord_user_id >= SIM_DISCORD_BASE)
+        )
+    ).scalar()
     counter = (max_disc - SIM_DISCORD_BASE) if max_disc else 0
     for ti in range(teams):
         base = BOT_NAMES[ti % len(BOT_NAMES)]
         team_name = f"{SIM_TEAM_PREFIX}{base}" + ("" if ti < len(BOT_NAMES) else f" {ti}")
         # Members (bots) — first is captain.
         member_users: list[User] = []
-        for mi in range(size):
+        for _ in range(size):
             counter += 1
             champ = random.choice(CHAMPS)
-            u = User(discord_user_id=SIM_DISCORD_BASE + counter, display_name=f"{SIM_USER_PREFIX} {champ}-{secrets.token_hex(2)}")
+            u = User(
+                discord_user_id=SIM_DISCORD_BASE + counter,
+                display_name=f"{SIM_USER_PREFIX} {champ}-{secrets.token_hex(2)}",
+            )
             s.add(u)
             await s.flush()
-            s.add(RiotAccount(
-                user_id=u.id, puuid=f"{SIM_PUUID_PREFIX}{uuid.uuid4()}", summoner_id=secrets.token_hex(8),
-                riot_id_game_name=champ, riot_id_tag_line=base[:3].upper(), region="euw1",
-                verified=True, origin_guild_id=guild_id,
-            ))
+            s.add(
+                RiotAccount(
+                    user_id=u.id,
+                    puuid=f"{SIM_PUUID_PREFIX}{uuid.uuid4()}",
+                    summoner_id=secrets.token_hex(8),
+                    riot_id_game_name=champ,
+                    riot_id_tag_line=base[:3].upper(),
+                    region="euw1",
+                    verified=True,
+                    origin_guild_id=guild_id,
+                )
+            )
             s.add(UserGuildRole(user_id=u.id, guild_id=guild_id, role=UserGuildRoleName.PLAYER))
             member_users.append(u)
         captain = member_users[0]
-        team = Team(guild_id=guild_id, name=team_name, captain_user_id=captain.id, join_code=generate_join_code())
+        team = Team(
+            guild_id=guild_id,
+            name=team_name,
+            captain_user_id=captain.id,
+            join_code=generate_join_code(),
+        )
         s.add(team)
         await s.flush()
         for j, u in enumerate(member_users):
-            s.add(TeamMember(
-                team_id=team.id, user_id=u.id, guild_id=guild_id,
-                role=TeamMemberRole.CAPTAIN if j == 0 else TeamMemberRole.PLAYER,
-                status=TeamMemberStatus.ACTIVE,
-            ))
+            s.add(
+                TeamMember(
+                    team_id=team.id,
+                    user_id=u.id,
+                    guild_id=guild_id,
+                    role=TeamMemberRole.CAPTAIN if j == 0 else TeamMemberRole.PLAYER,
+                    status=TeamMemberStatus.ACTIVE,
+                )
+            )
         # Add YOUR real account to the first team so it shows in your desktop.
         if ti == 0 and me_user_id is not None:
-            exists = (await s.execute(select(TeamMember).where(TeamMember.team_id == team.id, TeamMember.user_id == me_user_id))).scalar_one_or_none()
+            exists = (
+                await s.execute(
+                    select(TeamMember).where(
+                        TeamMember.team_id == team.id, TeamMember.user_id == me_user_id
+                    )
+                )
+            ).scalar_one_or_none()
             if exists is None:
-                s.add(TeamMember(team_id=team.id, user_id=me_user_id, guild_id=guild_id, role=TeamMemberRole.PLAYER, status=TeamMemberStatus.ACTIVE))
+                s.add(
+                    TeamMember(
+                        team_id=team.id,
+                        user_id=me_user_id,
+                        guild_id=guild_id,
+                        role=TeamMemberRole.PLAYER,
+                        status=TeamMemberStatus.ACTIVE,
+                    )
+                )
                 print(f"  ↳ added your account to {team_name!r} (so it appears in your desktop)")
         await s.flush()
 
@@ -167,24 +257,55 @@ async def build(s, *, guild_id: uuid.UUID, name: str, mode: GameMode, fmt: Tourn
 
     res = await ts.start_tournament(s, tournament_id=tour.id)
     await s.commit()
-    print(f"✓ started — bracket: {res.matches_created} matches, {res.rounds} rounds, {res.byes} byes")
+    print(
+        f"✓ started — bracket: {res.matches_created} matches, {res.rounds} rounds, {res.byes} byes"
+    )
 
     # Auto-advance any first-round byes (walkovers).
     await _set_guild(s, guild_id)
-    byes = (await s.execute(select(Match).where(Match.tournament_id == tour.id, Match.status == MatchStatus.WALKOVER))).scalars().all()
+    byes = (
+        (
+            await s.execute(
+                select(Match).where(
+                    Match.tournament_id == tour.id, Match.status == MatchStatus.WALKOVER
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
     for m in byes:
         await results.advance_bye_chain(s, m)
     await s.commit()
     return tour
 
 
-async def play(s, *, tour_id: uuid.UUID, guild_id: uuid.UUID, me_user_id: uuid.UUID | None, delay: float) -> None:
+async def play(
+    s, *, tour_id: uuid.UUID, guild_id: uuid.UUID, me_user_id: uuid.UUID | None, delay: float
+) -> None:
     print("\n▶ playing out the bracket (winners decided by admin-override; bracket advances):\n")
     round_seen = 0
     while True:
         await _set_guild(s, guild_id)
-        matches = (await s.execute(select(Match).where(Match.tournament_id == tour_id).order_by(Match.round, Match.bracket_slot))).scalars().all()
-        decidable = [m for m in matches if m.team_a and m.team_b and m.winner_team_id is None and m.status not in (MatchStatus.COMPLETED, MatchStatus.WALKOVER)]
+        matches = (
+            (
+                await s.execute(
+                    select(Match)
+                    .where(Match.tournament_id == tour_id)
+                    .order_by(Match.round, Match.bracket_slot)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        decidable = [
+            m
+            for m in matches
+            if m.team_a
+            and m.team_b
+            and m.winner_team_id is None
+            and m.status not in (MatchStatus.COMPLETED, MatchStatus.WALKOVER)
+        ]
         if not decidable:
             break
         m = decidable[0]
@@ -194,8 +315,11 @@ async def play(s, *, tour_id: uuid.UUID, guild_id: uuid.UUID, me_user_id: uuid.U
         winner = random.choice([m.team_a, m.team_b])
         # record_winner defaults decided_by=ADMIN_OVERRIDE and advances the bracket.
         await results.record_winner(
-            s, match_id=m.id, winner_team_id=winner,
-            admin_override_by=me_user_id, admin_override_reason="simulator",
+            s,
+            match_id=m.id,
+            winner_team_id=winner,
+            admin_override_by=me_user_id,
+            admin_override_reason="simulator",
         )
         await s.commit()
         a, b = await _team_name(s, m.team_a), await _team_name(s, m.team_b)
@@ -205,7 +329,17 @@ async def play(s, *, tour_id: uuid.UUID, guild_id: uuid.UUID, me_user_id: uuid.U
 
     # Champion = winner of the highest-round completed match.
     await _set_guild(s, guild_id)
-    finals = (await s.execute(select(Match).where(Match.tournament_id == tour_id, Match.winner_team_id.isnot(None)).order_by(Match.round.desc()))).scalars().all()
+    finals = (
+        (
+            await s.execute(
+                select(Match)
+                .where(Match.tournament_id == tour_id, Match.winner_team_id.isnot(None))
+                .order_by(Match.round.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
     if finals:
         champ = await _team_name(s, finals[0].winner_team_id)
         print(f"\n🏆 CHAMPION: {champ}\n")
@@ -220,19 +354,33 @@ async def _team_name(s, team_id: uuid.UUID | None) -> str:
 
 async def _resolve_guild(s, name: str):
     from app.models import Guild
+
     return (await s.execute(select(Guild).where(Guild.name == name))).scalar_one_or_none()
 
 
 async def _resolve_me(s, guild_id: uuid.UUID, display_name: str | None):
     from app.models import Guild  # noqa: F401
+
     # Prefer an explicit display name; else the (single) real linked account's user.
     if display_name:
-        u = (await s.execute(select(User).where(User.display_name == display_name, User.discord_user_id < SIM_DISCORD_BASE))).scalar_one_or_none()
+        u = (
+            await s.execute(
+                select(User).where(
+                    User.display_name == display_name, User.discord_user_id < SIM_DISCORD_BASE
+                )
+            )
+        ).scalar_one_or_none()
         if u:
             return u.id
-    row = (await s.execute(
-        select(RiotAccount.user_id).where(~RiotAccount.puuid.like(f"{SIM_PUUID_PREFIX}%"))
-    )).scalars().first()
+    row = (
+        (
+            await s.execute(
+                select(RiotAccount.user_id).where(~RiotAccount.puuid.like(f"{SIM_PUUID_PREFIX}%"))
+            )
+        )
+        .scalars()
+        .first()
+    )
     return row
 
 
@@ -245,7 +393,11 @@ async def main() -> None:
     p.add_argument("--teams", type=int, default=8)
     p.add_argument("--best-of", type=int, default=1)
     p.add_argument("--delay", type=float, default=4.0)
-    p.add_argument("--me", default="Shasuani", help="your display name (added to team 1 so it shows in your desktop)")
+    p.add_argument(
+        "--me",
+        default="Shasuani",
+        help="your display name (added to team 1 so it shows in your desktop)",
+    )
     p.add_argument("--no-me", action="store_true", help="don't add your real account to a team")
     p.add_argument("--no-play", action="store_true", help="set up only; don't auto-play matches")
     p.add_argument("--cleanup", action="store_true", help="remove all simulator data and exit")
@@ -260,22 +412,35 @@ async def main() -> None:
         if guild is None:
             print(f"guild {args.guild!r} not found. Available guilds:")
             from app.models import Guild
+
             for g in (await s.execute(select(Guild))).scalars():
                 print(f"  - {g.name}")
             raise SystemExit(1)
 
         me_id = None if args.no_me else await _resolve_me(s, guild.id, args.me)
         mode = GameMode.SUMMONERS_RIFT_5V5 if args.mode == "5v5" else GameMode.ARAM_1V1
-        fmt = TournamentFormat.SINGLE_ELIMINATION if args.format == "single" else TournamentFormat.DOUBLE_ELIMINATION
+        fmt = (
+            TournamentFormat.SINGLE_ELIMINATION
+            if args.format == "single"
+            else TournamentFormat.DOUBLE_ELIMINATION
+        )
         name = args.name or f"Sim Cup {secrets.token_hex(2)}"
 
         tour = await build(
-            s, guild_id=guild.id, name=name, mode=mode, fmt=fmt,
-            teams=args.teams, best_of=args.best_of, me_user_id=me_id,
+            s,
+            guild_id=guild.id,
+            name=name,
+            mode=mode,
+            fmt=fmt,
+            teams=args.teams,
+            best_of=args.best_of,
+            me_user_id=me_id,
         )
 
         if args.no_play:
-            print("\n(set-up only) Open your desktop → Tournaments → expand it to watch. Run again without --no-play to auto-play.")
+            print(
+                "\n(set-up only) Open your desktop → Tournaments → expand it to watch. Run again without --no-play to auto-play."
+            )
             return
 
         await play(s, tour_id=tour.id, guild_id=guild.id, me_user_id=me_id, delay=args.delay)

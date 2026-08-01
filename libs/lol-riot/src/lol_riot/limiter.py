@@ -41,7 +41,7 @@ class TokenBucketLimiter:
         self._lock = asyncio.Lock()
 
     def _clock(self) -> float:
-        return float(self._now())  # type: ignore[operator]
+        return float(self._now())
 
     @property
     def rate(self) -> float:

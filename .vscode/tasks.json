@@ -1,0 +1,216 @@
+{
+  // LeagueOfLeagues — dev tasks. Ctrl+Shift+P -> "Tasks: Run Task".
+  // The "deps:"/"build:" tasks are wired as preLaunchTask in launch.json, so a
+  // plain F5 bootstraps whatever the chosen config needs.
+  "version": "2.0.0",
+  "tasks": [
+    // ---------------------------------------------------------------- infra --
+    {
+      // Dev Postgres + Redis for THIS project only. Containers are named
+      // lol-postgres-1 / lol-redis-1 (compose `name: lol`), so they are easy to
+      // tell apart from the other stacks on this Docker daemon.
+      //
+      // NON-DEFAULT host ports on purpose — on this box :5432 belongs to
+      // ewhms-postgres, :5451 to miniwms, :6379 to the system redis, :6380 to
+      // ewhms-redis, :6398 to miniwms-redis. 5442/6389 are free. They MUST match
+      // the DSNs in services/<svc>/.env.
+      "label": "infra: up (postgres + redis)",
+      "type": "shell",
+      "command": "docker compose -f infra/docker-compose.yml up -d postgres redis",
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": { "POSTGRES_PORT": "5442", "REDIS_PORT": "6389" }
+      },
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "infra: down",
+      "type": "shell",
+      "command": "docker compose -f infra/docker-compose.yml down",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "infra: logs",
+      "type": "shell",
+      "command": "docker compose -f infra/docker-compose.yml logs -f postgres redis",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "isBackground": true
+    },
+    {
+      // Works on an empty database and an existing one alike. Runs as the OWNER
+      // DSN (DATABASE_URL); the request path uses app_rw so FORCE-RLS binds.
+      // Migration 0001 creates that role.
+      "label": "db: migrate (alembic upgrade head)",
+      "type": "shell",
+      "command": "set -a && . ./.env && set +a && PYTHONPATH=src uv run alembic upgrade head",
+      "options": { "cwd": "${workspaceFolder}/services/backend" },
+      "dependsOn": ["deps: backend"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "db: psql (dev shell)",
+      "type": "shell",
+      "command": "PGPASSWORD=lol psql -h 127.0.0.1 -p 5442 -U lol -d lol",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+
+    // ----------------------------------------------------------------- deps --
+    {
+      "label": "deps: backend",
+      "type": "shell",
+      "command": "uv sync --extra dev",
+      "options": { "cwd": "${workspaceFolder}/services/backend" },
+      "problemMatcher": [],
+      "presentation": { "reveal": "silent", "panel": "shared", "clear": true }
+    },
+    {
+      "label": "deps: worker",
+      "type": "shell",
+      "command": "uv sync --extra dev",
+      "options": { "cwd": "${workspaceFolder}/services/worker" },
+      "problemMatcher": [],
+      "presentation": { "reveal": "silent", "panel": "shared", "clear": true }
+    },
+    {
+      "label": "deps: bot",
+      "type": "shell",
+      "command": "uv sync --extra dev",
+      "options": { "cwd": "${workspaceFolder}/services/bot" },
+      "problemMatcher": [],
+      "presentation": { "reveal": "silent", "panel": "shared", "clear": true }
+    },
+    {
+      "label": "deps: frontend",
+      "type": "shell",
+      "command": "npm install --no-fund --no-audit",
+      "options": { "cwd": "${workspaceFolder}/services/frontend" },
+      "problemMatcher": [],
+      "presentation": { "reveal": "silent", "panel": "shared", "clear": true }
+    },
+    {
+      "label": "deps: desktop",
+      "type": "shell",
+      "command": "npm install --no-fund --no-audit",
+      "options": { "cwd": "${workspaceFolder}/services/desktop" },
+      "problemMatcher": [],
+      "presentation": { "reveal": "silent", "panel": "shared", "clear": true }
+    },
+    {
+      "label": "deps: all",
+      "dependsOn": [
+        "deps: backend",
+        "deps: worker",
+        "deps: bot",
+        "deps: frontend",
+        "deps: desktop",
+        "build: lcu lib"
+      ],
+      "dependsOrder": "parallel",
+      "problemMatcher": []
+    },
+
+    // ---------------------------------------------------------------- build --
+    {
+      // @lol/lcu is a file: dep whose package `types`/`main` point at ./dist,
+      // which is NOT in git. Without this the desktop build fails with a dozen
+      // "TS2307: Cannot find module '@lol/lcu'".
+      "label": "build: lcu lib",
+      "type": "shell",
+      "command": "npm install --no-fund --no-audit && npm run build",
+      "options": { "cwd": "${workspaceFolder}/libs/lol-lcu" },
+      "problemMatcher": ["$tsc"],
+      "presentation": { "reveal": "silent", "panel": "shared", "clear": true }
+    },
+    {
+      // tsc (main process -> dist/) + vite (React renderer -> dist-renderer/).
+      // Electron's main is dist/main.js, so this MUST run before launching it.
+      "label": "build: desktop",
+      "type": "shell",
+      "command": "npm run build",
+      "options": { "cwd": "${workspaceFolder}/services/desktop" },
+      "dependsOn": ["deps: desktop", "build: lcu lib"],
+      "dependsOrder": "sequence",
+      "problemMatcher": ["$tsc"],
+      "presentation": { "reveal": "silent", "panel": "shared", "clear": true }
+    },
+    {
+      "label": "build: frontend",
+      "type": "shell",
+      "command": "npm run build",
+      "options": { "cwd": "${workspaceFolder}/services/frontend" },
+      "dependsOn": ["deps: frontend"],
+      "problemMatcher": ["$tsc"]
+    },
+
+    // ---------------------------------------------------------------- checks --
+    {
+      "label": "test: all (make test)",
+      "type": "shell",
+      "command": "make test",
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "test: backend",
+      "type": "shell",
+      "command": "PYTHONPATH=src uv run pytest -q",
+      "options": { "cwd": "${workspaceFolder}/services/backend" },
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "test: frontend (vitest)",
+      "type": "shell",
+      "command": "npm test",
+      "options": { "cwd": "${workspaceFolder}/services/frontend" },
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "test: desktop",
+      "type": "shell",
+      "command": "npm test",
+      "options": { "cwd": "${workspaceFolder}/services/desktop" },
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "lint (ruff)",
+      "type": "shell",
+      "command": "make lint",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "format (ruff)",
+      "type": "shell",
+      "command": "make format",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "typecheck (mypy)",
+      "type": "shell",
+      "command": "make typecheck",
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": []
+    },
+
+    // ------------------------------------------------------------------ dev --
+    {
+      "label": "dev: simulate tournament (cleanup)",
+      "type": "shell",
+      "command": "set -a && . ./.env && set +a && PYTHONPATH=src uv run python scripts/simulate_tournament.py --cleanup",
+      "options": { "cwd": "${workspaceFolder}/services/backend" },
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    }
+  ]
+}

@@ -1,0 +1,154 @@
+# infra/docker-compose.prod.yml
+#
+# Deployed application stack (one per environment). CI/CD scp's this file plus a
+# generated `.env` to the server and runs:
+#
+#     docker compose -f docker-compose.prod.yml up -d
+#
+# Everything here uses PRE-BUILT images from the GitLab Container Registry — the
+# server never builds. `.env` (written by the deploy job) supplies the image
+# names, the tag, and every secret.
+#
+# TWO STACKS, ONE HOST
+# --------------------
+# devel and production can share a server. They are kept apart by:
+#   * COMPOSE_PROJECT_NAME (lol-devel / lol-prod) — set in the generated .env
+#   * separate deploy directories (data/ lives beside this file)
+#   * explicit container_name values, so the shared Caddy can address a specific
+#     stack's backend/frontend by DNS name
+#
+# NETWORKING
+# ----------
+# No host ports at all. The only thing listening on the public interface is the
+# Caddy edge stack (docker-compose.edge.yml), which reaches these containers over
+# the shared external `lol-edge` network. Postgres and Redis stay on the internal
+# network and are unreachable from outside the host.
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL — the RLS-enforcing datastore. Data lives in ./data/postgres so a
+  # backup is a directory copy.
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: lol-${STACK}-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+      - ./backups:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks: [internal]
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "5" }
+
+  # ---------------------------------------------------------------------------
+  # Redis — cache, WS pub/sub fan-out, arq broker. AOF on for queue durability.
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7.4-alpine
+    container_name: lol-${STACK}-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - ./data/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [internal]
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # ---------------------------------------------------------------------------
+  # Backend — FastAPI. Joined to `edge` so Caddy can reach it; still no host port.
+  # ---------------------------------------------------------------------------
+  backend:
+    image: ${BACKEND_IMAGE}:${IMAGE_TAG}
+    container_name: lol-${STACK}-backend
+    restart: unless-stopped
+    env_file: [.env]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    # --proxy-headers so request.url reflects the https scheme Caddy terminated.
+    # forwarded-allow-ips=* is safe ONLY because no host port is published: the
+    # sole possible peer is Caddy on the edge network.
+    command:
+      - uvicorn
+      - app.main:app
+      - --host=0.0.0.0
+      - --port=8000
+      - --proxy-headers
+      - --forwarded-allow-ips=*
+    networks: [internal, edge]
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "5" }
+
+  # ---------------------------------------------------------------------------
+  # Worker — arq. Lobby watchdog / failover, verification poll, corroboration.
+  # ---------------------------------------------------------------------------
+  worker:
+    image: ${WORKER_IMAGE}:${IMAGE_TAG}
+    container_name: lol-${STACK}-worker
+    restart: unless-stopped
+    env_file: [.env]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    networks: [internal]
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "5" }
+
+  # ---------------------------------------------------------------------------
+  # Discord bot. Behind the `bot` compose profile: without a real
+  # DISCORD_BOT_TOKEN the process exits immediately ("cannot start the bot"), so
+  # the deploy only enables this profile when the token variable is set.
+  # ---------------------------------------------------------------------------
+  bot:
+    image: ${BOT_IMAGE}:${IMAGE_TAG}
+    container_name: lol-${STACK}-bot
+    profiles: ["bot"]
+    restart: unless-stopped
+    env_file: [.env]
+    depends_on:
+      redis: { condition: service_healthy }
+    networks: [internal]
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "5" }
+
+  # ---------------------------------------------------------------------------
+  # Admin SPA — static bundle on nginx (SPA fallback + CSP live in nginx.conf).
+  # ---------------------------------------------------------------------------
+  frontend:
+    image: ${FRONTEND_IMAGE}:${IMAGE_TAG}
+    container_name: lol-${STACK}-frontend
+    restart: unless-stopped
+    networks: [edge]
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+networks:
+  # Private to this stack: Postgres/Redis are reachable only from here.
+  internal:
+    driver: bridge
+  # Shared with the Caddy edge stack. Created once on the host:
+  #   docker network create lol-edge
+  edge:
+    external: true
+    name: lol-edge

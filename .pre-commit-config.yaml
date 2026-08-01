@@ -21,7 +21,10 @@ repos:
       - id: check-case-conflict
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.6.9
+    # Keep in lockstep with RUFF_VERSION in .gitlab-ci.yml — ruff's formatter
+    # output changes between minors, so a version skew here means CI's
+    # `ruff format --check` fails on files the hook just "fixed".
+    rev: v0.15.18
     hooks:
       # Lint (with autofix), then format.
       - id: ruff

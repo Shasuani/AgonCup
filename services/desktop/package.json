@@ -6,7 +6,9 @@
   "description": "LeagueOfLeagues desktop client (Electron + TypeScript). Autonomous LCU lobby orchestrator + result reporter. Runs natively; built/signed per-OS in CI.",
   "main": "dist/main.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && npm run build:renderer",
+    "build:renderer": "vite build --config renderer/vite.config.ts",
+    "dev:renderer": "vite --config renderer/vite.config.ts",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
     "test": "node scripts/run-tests.mjs",
@@ -18,12 +20,18 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "electron": "^31.0.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^18.3.5",
+    "@types/react-dom": "^18.3.0",
+    "@types/ws": "^8.5.10",
+    "@vitejs/plugin-react": "^4.3.1",
+    "electron": "^43.2.0",
     "electron-builder": "^24.13.3",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "tsx": "^4.16.0",
     "typescript": "^5.5.0",
-    "@types/node": "^22.0.0",
-    "@types/ws": "^8.5.10"
+    "vite": "^5.4.2"
   },
   "engines": {
     "node": ">=22"

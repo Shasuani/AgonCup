@@ -3,3 +3,6 @@
 **/node_modules
 *.bak
 .env
+# Deploy keys live here (gitignored). The service builds use the repo root as
+# their context, so keep them out of every image layer too.
+secrets/

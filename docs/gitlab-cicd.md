@@ -54,28 +54,39 @@ to its pipelines).
 The runner and the app live on the same machine here, but the deploy still goes
 over SSH so nothing changes if they are split later.
 
+**The actual host is `rust.gameras.gr` (144.76.88.206) and the deploy user is
+`loltournament`.** Note the SSH target and the served domain are *different
+names for the same machine*: you connect to `rust.gameras.gr`, Caddy serves
+`lol.gameras.gr`. Both A records already point at the same IP.
+
 ```bash
 # Docker + compose plugin
 curl -fsSL https://get.docker.com | sh
 
-# Deploy user, in the docker group
-useradd -m -s /bin/bash lol
-usermod -aG docker lol
+# Deploy user, in the docker group (the user already exists here — only the
+# group membership and the key are new)
+useradd -m -s /bin/bash loltournament   # skip if present
+usermod -aG docker loltournament
 
 # Deploy key (generate it on your workstation, see §3)
-mkdir -p /home/lol/.ssh
-echo "<public key>" >> /home/lol/.ssh/authorized_keys
-chmod 700 /home/lol/.ssh
-chmod 600 /home/lol/.ssh/authorized_keys
-chown -R lol:lol /home/lol/.ssh
+mkdir -p /home/loltournament/.ssh
+echo "<public key>" >> /home/loltournament/.ssh/authorized_keys
+chmod 700 /home/loltournament/.ssh
+chmod 600 /home/loltournament/.ssh/authorized_keys
+chown -R loltournament:loltournament /home/loltournament/.ssh
 ```
 
 Also required:
 
 - **DNS**: `lol.gameras.gr` → this server's public IP, resolving *before* the
   first deploy. Caddy's ACME challenge fails otherwise and there is no certificate.
-- **Ports 80 and 443 free.** Caddy binds both. If nginx/apache/another stack
-  already holds them, the edge container will not start.
+  (Already satisfied: both `lol.` and `rust.gameras.gr` resolve to 144.76.88.206.)
+- **Ports 80 and 443 free *and reachable from the internet*.** Caddy binds both.
+  If nginx/apache/another stack already holds them the edge container will not
+  start — and if a host or cloud firewall blocks them, ACME cannot complete and
+  there is no certificate. As of this writing neither port answers from outside;
+  verify with `ss -lntp | grep -E ':(80|443)\b'` and check the Hetzner cloud
+  firewall before the first deploy.
 - Nothing else to install — no Python, no Node, no repo clone. The server only
   pulls images.
 
@@ -89,6 +100,13 @@ Also required:
 
 **Settings → CI/CD → Variables.** Mark everything secret as **Masked**, and
 **Protected** (then only protected branches like `devel` can read it).
+
+> **Protected variables break `deploy:review`.** An MR pipeline runs on the
+> *source* branch, so an MR from an unprotected feature branch cannot read a
+> protected variable — the manual review deploy then fails on an empty
+> `DEPLOY_HOST`. Tests and builds are unaffected (they need no secrets). If you
+> want the review button to work, either protect the feature branches too
+> (wildcard, e.g. `feat-*`) or leave the deploy variables unprotected.
 
 **You need to create 6.** Everything else either has a sensible default or is
 generated on the server (§4a). Realistically make it **9** — add `RIOT_API_KEY`
@@ -104,13 +122,27 @@ no `$` inside any secret.** `secrets.token_urlsafe()` output is always safe.
 
 ### Server access
 
+`SSH_PRIVATE_KEY` is a **dedicated, passphrase-less** deploy key — never a
+personal one. It is stored in a CI variable, so every job and every Maintainer
+can read it; a passphrase is impossible because the deploy job just writes the
+key to a file (no agent). Generate it with:
+
+```bash
+ssh-keygen -t ed25519 -C "gitlab-ci@loltournament" -f secrets/lol_deploy_ci -N ""
+```
+
+`secrets/` is gitignored *and* dockerignored (the service builds use the repo
+root as their build context). The `.pub` half goes in the server's
+`authorized_keys` (§2); the private half goes in the variable below. The job
+writes it to `~/.ssh/id_rsa` — that is only a filename, an ed25519 key works.
+
 | Variable | Required | Example / note |
 |----------|----------|----------------|
 | `SSH_PRIVATE_KEY` | ✅ | Full private key including the BEGIN/END lines. Do **not** mask (multiline). |
-| `DEPLOY_HOST` | ✅ | `lol.gameras.gr` or the server IP — never `127.0.0.1` |
-| `DEPLOY_USER` | ✅ | `lol` |
+| `DEPLOY_HOST` | ✅ | `rust.gameras.gr` (or `144.76.88.206`) — the SSH target, **not** the served domain. Never `127.0.0.1` |
+| `DEPLOY_USER` | ✅ | `loltournament` |
 | `DEPLOY_SSH_PORT` | — | default `22` |
-| `DEPLOY_PATH` | — | default `/home/$DEPLOY_USER/lol` |
+| `DEPLOY_PATH` | — | default `/home/$DEPLOY_USER/lol` → `/home/loltournament/lol`. Leave unset |
 
 ### Registry pull (server side)
 
@@ -171,7 +203,7 @@ Discord developer portal.
 ## 4. What lands on the server
 
 ```
-/home/lol/lol/
+/home/loltournament/lol/
 ├── devel/                       # one directory per stack (STACK=devel)
 │   ├── .env                     # generated per deploy, chmod 600
 │   ├── .secrets.env             # SELF-MANAGED SECRETS — back this up (§4a)
@@ -277,8 +309,8 @@ so the public default never survives the first deploy.
 Images are tagged with the commit SHA, so any past build can be re-run:
 
 ```bash
-ssh lol@lol.gameras.gr
-cd /home/lol/lol/devel
+ssh loltournament@rust.gameras.gr
+cd /home/loltournament/lol/devel
 sed -i 's/^IMAGE_TAG=.*/IMAGE_TAG=<older-short-sha>/' .env
 docker compose -f docker-compose.prod.yml up -d
 ```
@@ -293,7 +325,7 @@ Note this rolls back **code only** — a migration that already ran is not undon
 
 **`Permission denied (publickey)`** — the public half of `SSH_PRIVATE_KEY` is not
 in the deploy user's `authorized_keys`, or `DEPLOY_USER` is wrong. Test:
-`ssh -i <key> -p <port> lol@lol.gameras.gr`.
+`ssh -i <key> -p <port> loltournament@rust.gameras.gr`.
 
 **Deploy hangs / `Connection refused` to the host** — with a docker executor,
 `DEPLOY_HOST=127.0.0.1` addresses the job container. Use the real hostname/IP.

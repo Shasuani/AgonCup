@@ -12,14 +12,25 @@
 
 FROM python:3.12-slim-bookworm
 
-# --- OS toolchain (build essentials + curl for healthchecks / uv install) --------
-# Keep this layer small but real: build-essential is needed for any package that
-# compiles C extensions; curl is used by healthchecks and to fetch uv if needed.
+# --- OS toolchain ----------------------------------------------------------------
+# Deliberately NO build-essential. The service Dockerfiles use this image for BOTH
+# their builder AND their runtime stage, so anything installed here ships to
+# production — and the toolchain (gcc, cpp, binutils, perl, dpkg-dev) accounted for
+# 189 of the 213 HIGH/CRITICAL findings `security:images` reported, on top of the
+# 24 the upstream python:3.12-slim image carries on its own.
+#
+# It is not needed: every dependency of backend, worker and bot resolves to a
+# manylinux wheel, verified by running `uv sync --frozen` for all three in a bare
+# python:3.12-slim container with no compiler present. If a future dependency ships
+# only an sdist the build will fail loudly here — add build-essential to that
+# service's BUILDER stage then, never to this shared base.
+#
+# curl is gone for the same reason: nothing used it. Every HEALTHCHECK in the three
+# services shells out to `python`, not curl, and uv arrives as a static binary via
+# the COPY below rather than being fetched.
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        build-essential \
-        curl \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 

@@ -26,7 +26,16 @@ WORKDIR /repo/services/frontend
 # the lol-clients-ts TypeScript source directly via the configured alias, so the
 # lib does NOT need a separate dist build for the bundle.
 RUN npm install --no-audit --no-fund
-RUN npm run build
+# NODE_ENV=production ONLY for the build step, not for `npm install` above —
+# npm would skip devDependencies and vite itself would disappear.
+#
+# It has to be set at all because lol/node-base pins NODE_ENV=development (right
+# for dev tooling), and Vite derives isProduction from process.env.NODE_ENV
+# BEFORE falling back to the build mode. Inheriting it makes `vite build` emit a
+# DEVELOPMENT bundle: React's jsxDEV runtime with per-element line numbers, dev
+# warnings, and every `import.meta.env.DEV` block retained — which is how the
+# "Dev login (local only)" button reached the deployed SPA.
+RUN NODE_ENV=production npm run build
 
 # ---------- runtime ----------------------------------------------------------
 FROM nginx:1.29-alpine AS runtime

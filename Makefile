@@ -41,7 +41,7 @@ PY_SERVICE_DIRS := \
 PY_PKG_DIRS := $(PY_LIB_DIRS) $(PY_SERVICE_DIRS)
 
 .PHONY: help up down build-bases test test-db lint format typecheck gen-clients fixtures \
-	dev dev-backend dev-frontend dev-bot dev-desktop sim-join infra-up infra-down db-migrate
+	dev dev-backend dev-frontend dev-bot dev-desktop desktop-win sim-join infra-up infra-down db-migrate
 
 # --- DB / RLS integration test config ----------------------------------------
 # Local equivalent of the CI `db-rls` job. Assumes a REACHABLE Postgres (e.g.
@@ -161,6 +161,14 @@ typecheck: ## Type-check all Python packages with mypy (each package's own confi
 			echo "==> skip (no src) $$d"; \
 		fi; \
 	done
+
+# --- Desktop client, built from WSL for Windows ------------------------------
+# The client MUST run natively (it reaches the League client on 127.0.0.1), so a
+# Linux build is useless for testing. This stages a runnable win32-x64 build on a
+# Windows-visible path, pointed at the devel server by default. Override with
+# BACKEND_URL= / OUT_DIR=. See the header of the script for why not electron-builder.
+desktop-win: ## Build the desktop client for Windows into $$OUT_DIR (default J:\loltournament).
+	@bash services/desktop/scripts/build-win.sh
 
 # --- Placeholders (wired up in later phases) ---------------------------------
 gen-clients: ## (placeholder) Regenerate OpenAPI/TS clients + WS JSON-schema.

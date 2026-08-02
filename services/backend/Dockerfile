@@ -28,6 +28,7 @@ COPY libs/lol-core /build/libs/lol-core
 COPY libs/lol-realtime /build/libs/lol-realtime
 COPY libs/lol-riot /build/libs/lol-riot
 COPY services/backend/pyproject.toml /build/services/backend/pyproject.toml
+COPY services/backend/uv.lock /build/services/backend/uv.lock
 COPY services/backend/README.md /build/services/backend/README.md
 COPY services/backend/src /build/services/backend/src
 
@@ -35,8 +36,14 @@ WORKDIR /build/services/backend
 
 # Create a self-contained virtualenv at /opt/venv with the app + libs installed.
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv
+# --no-editable is load-bearing: [tool.uv.sources] marks the shared libs
+# `editable = true` for host dev, and an editable install only writes a .pth
+# pointing at /build/libs/*/src — a path that does not exist in the runtime
+# stage, which copies /opt/venv alone. The image then builds and pushes fine and
+# dies at import with ModuleNotFoundError. --no-install-project skips lol-backend
+# itself; its source ships separately at /app/src (see PYTHONPATH below).
 RUN uv venv /opt/venv \
-    && uv pip install --python /opt/venv/bin/python .
+    && uv sync --frozen --no-dev --no-editable --no-install-project
 
 # ---------- runtime ----------------------------------------------------------
 FROM ${PYTHON_BASE_IMAGE} AS runtime

@@ -21,14 +21,19 @@ WORKDIR /build
 COPY libs/lol-schemas /build/libs/lol-schemas
 COPY libs/lol-discord /build/libs/lol-discord
 COPY services/bot/pyproject.toml /build/services/bot/pyproject.toml
+COPY services/bot/uv.lock /build/services/bot/uv.lock
 COPY services/bot/README.md /build/services/bot/README.md
 COPY services/bot/src /build/services/bot/src
 
 WORKDIR /build/services/bot
 
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv
+# --no-editable is load-bearing — see the comment in services/backend/Dockerfile:
+# an editable path dep only writes a .pth pointing into /build, which the runtime
+# stage never receives. --no-install-project skips lol-bot; its source ships at
+# /app/src.
 RUN uv venv /opt/venv \
-    && uv pip install --python /opt/venv/bin/python .
+    && uv sync --frozen --no-dev --no-editable --no-install-project
 
 # ---------- runtime ----------------------------------------------------------
 FROM ${PYTHON_BASE_IMAGE} AS runtime

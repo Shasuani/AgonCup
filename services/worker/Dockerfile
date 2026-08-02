@@ -26,14 +26,19 @@ COPY libs/lol-core /build/libs/lol-core
 # Keep in sync with [tool.uv.sources] in services/worker/pyproject.toml.
 COPY libs/lol-riot /build/libs/lol-riot
 COPY services/worker/pyproject.toml /build/services/worker/pyproject.toml
+COPY services/worker/uv.lock /build/services/worker/uv.lock
 COPY services/worker/README.md /build/services/worker/README.md
 COPY services/worker/src /build/services/worker/src
 
 WORKDIR /build/services/worker
 
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv
+# --no-editable is load-bearing — see the comment in services/backend/Dockerfile:
+# an editable path dep only writes a .pth pointing into /build, which the runtime
+# stage never receives. --no-install-project skips lol-worker; its source ships
+# at /app/src.
 RUN uv venv /opt/venv \
-    && uv pip install --python /opt/venv/bin/python .
+    && uv sync --frozen --no-dev --no-editable --no-install-project
 
 # ---------- runtime ----------------------------------------------------------
 FROM ${PYTHON_BASE_IMAGE} AS runtime

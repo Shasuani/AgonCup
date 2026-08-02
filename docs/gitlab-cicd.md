@@ -84,9 +84,10 @@ Also required:
 - **Ports 80 and 443 free *and reachable from the internet*.** Caddy binds both.
   If nginx/apache/another stack already holds them the edge container will not
   start — and if a host or cloud firewall blocks them, ACME cannot complete and
-  there is no certificate. As of this writing neither port answers from outside;
-  verify with `ss -lntp | grep -E ':(80|443)\b'` and check the Hetzner cloud
-  firewall before the first deploy.
+  there is no certificate. Verified free: both refuse with an immediate RST (not
+  a firewall drop), so nothing holds them and nothing filters them.
+- **SSH listens on port 20002, not 22.** `DEPLOY_SSH_PORT` is therefore
+  effectively required despite defaulting to `22` in the pipeline.
 - Nothing else to install — no Python, no Node, no repo clone. The server only
   pulls images.
 
@@ -141,7 +142,7 @@ writes it to `~/.ssh/id_rsa` — that is only a filename, an ed25519 key works.
 | `SSH_PRIVATE_KEY` | ✅ | Full private key including the BEGIN/END lines. Do **not** mask (multiline). |
 | `DEPLOY_HOST` | ✅ | `rust.gameras.gr` (or `144.76.88.206`) — the SSH target, **not** the served domain. Never `127.0.0.1` |
 | `DEPLOY_USER` | ✅ | `loltournament` |
-| `DEPLOY_SSH_PORT` | — | default `22` |
+| `DEPLOY_SSH_PORT` | ✅ | `20002` — this host does not use 22. The pipeline defaults to `22`, so omitting it fails at `ssh-keyscan` with a bare `exit code 1` |
 | `DEPLOY_PATH` | — | default `/home/$DEPLOY_USER/lol` → `/home/loltournament/lol`. Leave unset |
 
 ### Registry pull (server side)
@@ -309,7 +310,7 @@ so the public default never survives the first deploy.
 Images are tagged with the commit SHA, so any past build can be re-run:
 
 ```bash
-ssh loltournament@rust.gameras.gr
+ssh -p 20002 loltournament@rust.gameras.gr
 cd /home/loltournament/lol/devel
 sed -i 's/^IMAGE_TAG=.*/IMAGE_TAG=<older-short-sha>/' .env
 docker compose -f docker-compose.prod.yml up -d
@@ -325,7 +326,16 @@ Note this rolls back **code only** — a migration that already ran is not undon
 
 **`Permission denied (publickey)`** — the public half of `SSH_PRIVATE_KEY` is not
 in the deploy user's `authorized_keys`, or `DEPLOY_USER` is wrong. Test:
-`ssh -i <key> -p <port> loltournament@rust.gameras.gr`.
+`ssh -i secrets/lol_deploy_ci -p 20002 loltournament@rust.gameras.gr`.
+
+**`ssh-keyscan` fails with a bare `exit code 1`** — the step is
+`ssh-keyscan -p "${DEPLOY_SSH_PORT:-22}" "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null`,
+and `2>/dev/null` hides the reason. An empty `DEPLOY_HOST` and an unreachable
+host both exit 1, so the log cannot distinguish them. The usual cause is that
+the job **cannot read the variables at all**: a protected variable is invisible
+to an MR pipeline whose source branch is unprotected, so `DEPLOY_SSH_PORT` falls
+back to `22` and `DEPLOY_HOST` is empty even though both are set in project
+settings. Check the variables' Protected flag before suspecting the network.
 
 **Deploy hangs / `Connection refused` to the host** — with a docker executor,
 `DEPLOY_HOST=127.0.0.1` addresses the job container. Use the real hostname/IP.

@@ -31,6 +31,13 @@ RUN npm run build
 # ---------- runtime ----------------------------------------------------------
 FROM nginx:1.29-alpine AS runtime
 
+# Patch the OS packages the nginx image ships. The tag already tracks a current
+# Alpine (3.23.x); it is the packages baked into it that lag, and they are the
+# ONLY source of OS CVEs in this stack — the Python images are Debian-based.
+# Without this, `security:images` reports c-ares/curl/openssl/expat/libxml2/
+# nghttp2 findings that a plain `apk upgrade` clears entirely.
+RUN apk upgrade --no-cache
+
 # SPA fallback + security headers (CSP, etc.) — see nginx.conf.
 COPY services/frontend/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=builder /repo/services/frontend/dist /usr/share/nginx/html

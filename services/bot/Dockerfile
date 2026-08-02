@@ -4,24 +4,39 @@
 #   docker build -t lol/python-base:dev infra/images/python-base   (or `make build-bases`)
 
 # ---------- builder ----------------------------------------------------------
-FROM lol/python-base:dev AS builder
+# CI builds the base image into the GitLab registry (a fresh dind daemon has no
+# local `lol/python-base:dev`), so the base reference is a build-arg. The default keeps
+# `make up` / local builds working unchanged.
+ARG PYTHON_BASE_IMAGE=lol/python-base:dev
+
+FROM ${PYTHON_BASE_IMAGE} AS builder
+
+# The base image drops to the unprivileged runtime user, but the BUILD stage has
+# to write outside its home (the venv at /opt/venv, the /repo tree). Build as root;
+# the runtime stage below switches back to the non-root user.
+USER root
 
 WORKDIR /build
 
 COPY libs/lol-schemas /build/libs/lol-schemas
 COPY libs/lol-discord /build/libs/lol-discord
 COPY services/bot/pyproject.toml /build/services/bot/pyproject.toml
+COPY services/bot/uv.lock /build/services/bot/uv.lock
 COPY services/bot/README.md /build/services/bot/README.md
 COPY services/bot/src /build/services/bot/src
 
 WORKDIR /build/services/bot
 
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv
+# --no-editable is load-bearing — see the comment in services/backend/Dockerfile:
+# an editable path dep only writes a .pth pointing into /build, which the runtime
+# stage never receives. --no-install-project skips lol-bot; its source ships at
+# /app/src.
 RUN uv venv /opt/venv \
-    && uv pip install --python /opt/venv/bin/python .
+    && uv sync --frozen --no-dev --no-editable --no-install-project
 
 # ---------- runtime ----------------------------------------------------------
-FROM lol/python-base:dev AS runtime
+FROM ${PYTHON_BASE_IMAGE} AS runtime
 
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \

@@ -1,0 +1,509 @@
+# LeagueOfLeagues — GitLab CI/CD (gitlab.com, self-hosted runner, docker+dind)
+#
+#   test  ->  build  ->  security  ->  deploy
+#
+# Model (same shape as the tsat pipeline, adapted to this monorepo):
+#   * Build ONCE in CI, push to the GitLab Container Registry, PULL on the server.
+#     The server never builds and never needs the source.
+#   * Tests block the build; the build blocks the deploy.
+#
+# Current setup — ONE environment (development), one host: lol.gameras.gr.
+#
+#   any branch, any MR         -> tests
+#   MR targeting devel         -> tests + build, and a MANUAL "deploy:review"
+#                                 button to push that branch to the devel server
+#                                 without merging
+#   push/merge into devel      -> tests + build + AUTOMATIC deploy
+#
+# There is deliberately no production job yet: a `deploy:production` stub is at
+# the bottom of this file, commented out, for when a second host exists.
+#
+# NOTE: deploy:review and deploy:devel target the SAME server and domain, so an
+# MR deploy replaces whatever devel is currently serving until the next merge.
+#
+# Registry (gitlab.com, Free tier — registry storage does NOT count against the
+# 10 GiB project storage limit): images land under
+#   registry.gitlab.com/<namespace>/<project>/{python-base,node-base,backend,worker,bot,frontend}
+# $CI_REGISTRY_USER / $CI_REGISTRY_PASSWORD are injected by GitLab — no variable
+# of yours is needed for CI-side registry access. The SERVER authenticates with a
+# long-lived Deploy Token instead (see docs/gitlab-cicd.md), because the job token
+# dies with the job and `docker compose up -d` after a reboot must still pull.
+#
+# Required CI/CD variables: docs/gitlab-cicd.md. Most are ENVIRONMENT-SCOPED —
+# one name, a different value for `development` and `production`.
+
+stages:
+  - test
+  - build
+  - security
+  - deploy
+
+variables:
+  # --- dind wiring (docker:cli talking to the docker:dind service over TLS) ---
+  DOCKER_DRIVER: overlay2
+  DOCKER_HOST: tcp://docker:2376
+  DOCKER_TLS_CERTDIR: "/certs"
+  DOCKER_TLS_VERIFY: "1"
+  DOCKER_CERT_PATH: "/certs/client"
+
+  # --- image coordinates -----------------------------------------------------
+  # Immutable per-commit tag: rollback = redeploy an older IMAGE_TAG.
+  IMAGE_TAG: $CI_COMMIT_SHORT_SHA
+  PYTHON_BASE_IMAGE: $CI_REGISTRY_IMAGE/python-base
+  NODE_BASE_IMAGE: $CI_REGISTRY_IMAGE/node-base
+  BACKEND_IMAGE: $CI_REGISTRY_IMAGE/backend
+  WORKER_IMAGE: $CI_REGISTRY_IMAGE/worker
+  BOT_IMAGE: $CI_REGISTRY_IMAGE/bot
+  FRONTEND_IMAGE: $CI_REGISTRY_IMAGE/frontend
+
+  UV_CACHE_DIR: "$CI_PROJECT_DIR/.cache/uv"
+  # PINNED: ruff's formatter output changes between minors, so an unpinned
+  # `uvx ruff` would start failing `format --check` the day a new release lands.
+  # Keep in lockstep with the rev in .pre-commit-config.yaml.
+  RUFF_VERSION: "0.15.18"
+  # The desktop tests never launch Electron; skip the ~220 MB binary download.
+  ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+  # Public hostname Caddy terminates TLS for. Defined here (not as a GitLab
+  # variable) because there is a single environment for now — override it with an
+  # environment-scoped CI variable of the same name when production gets its own.
+  APP_DOMAIN: lol.gameras.gr
+
+# One pipeline per change: branch pipelines are suppressed while an MR is open.
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_BRANCH
+
+# =============================================================================
+# TEST — must pass before anything is built.
+# =============================================================================
+
+# Shared Python job base: the toolchain every Python job needs. Each package is a
+# standalone uv project, so uv (not pip) does the installing.
+.python_base:
+  image: python:3.12-slim
+  cache:
+    key: uv-$CI_COMMIT_REF_SLUG
+    paths: [.cache/uv]
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates build-essential git
+    - pip install --quiet uv
+    - uv --version
+
+test:python:
+  extends: .python_base
+  stage: test
+  script:
+    # Lint + format across the whole tree. Ruff resolves the NEAREST config per
+    # file (repo-root ruff.toml, or a package's own [tool.ruff]).
+    - uvx ruff@$RUFF_VERSION check .
+    - uvx ruff@$RUFF_VERSION format --check .
+    # Every Python package is STANDALONE (own pyproject + uv path deps), so each
+    # is synced and checked on its own.
+    #
+    # mypy MUST use each package's own [tool.mypy] (no --config-file): only that
+    # config loads the pydantic plugin and sets mypy_path=src. Pointed at the
+    # repo-root mypy.ini instead — as `make typecheck` used to do — it reports 41
+    # phantom errors ("Class cannot subclass Base (has type Any)").
+    - |
+      set -e
+      for pkg in libs/*/ services/*/; do
+        [ -f "${pkg}pyproject.toml" ] || continue
+        echo "=== $pkg"
+        (
+          cd "$pkg"
+          uv sync --all-extras --quiet
+          uv run mypy src
+          # pytest exits 5 when a package legitimately has no tests yet.
+          uv run pytest -q || [ $? -eq 5 ]
+        )
+      done
+
+test:db-rls:
+  # The RLS isolation matrix is the load-bearing multi-tenant test and CANNOT run
+  # against a fake session — it needs a real Postgres and the non-BYPASSRLS
+  # app_rw role that the baseline migration creates.
+  extends: .python_base
+  stage: test
+  services:
+    # SAME image as production (infra/docker-compose.prod.yml). Postgres on musl
+    # vs glibc can order text indexes differently, so tests must not run on a
+    # different libc than the deployment.
+    - name: postgres:16-alpine
+      alias: postgres
+  variables:
+    POSTGRES_USER: lol
+    POSTGRES_PASSWORD: lol
+    POSTGRES_DB: lol
+    # Owner DSN (migrations) vs app_rw DSN (request path — RLS actually binds).
+    DATABASE_URL: postgresql+asyncpg://lol:lol@postgres:5432/lol
+    OWNER_DATABASE_URL: postgresql+asyncpg://lol:lol@postgres:5432/lol
+    APP_DATABASE_URL: postgresql+asyncpg://app_rw:app_rw@postgres:5432/lol
+    LOL_DB_TESTS: "1"
+  script:
+    - cd services/backend
+    - uv sync --all-extras --quiet
+    - PYTHONPATH=src uv run alembic upgrade head
+    # Guards the root cause of the old broken chain: fails if the migrated schema
+    # and app.models have drifted, i.e. if someone changed a model without a
+    # migration (or wrote a migration that derives DDL from Base.metadata).
+    - PYTHONPATH=src uv run alembic check
+    - PYTHONPATH=src uv run pytest -q
+
+test:frontend:
+  stage: test
+  image: node:22-slim
+  cache:
+    key: npm-frontend-$CI_COMMIT_REF_SLUG
+    paths: [services/frontend/node_modules]
+  script:
+    - cd services/frontend
+    - npm ci --no-audit --no-fund
+    - npm run typecheck
+    - npm test
+
+test:desktop:
+  stage: test
+  image: node:22-slim
+  cache:
+    key: npm-desktop-$CI_COMMIT_REF_SLUG
+    paths: [services/desktop/node_modules, libs/lol-lcu/node_modules]
+  script:
+    # @lol/lcu is a file: dep whose package types/main point at ./dist, which is
+    # not in git — without this the desktop typecheck fails with TS2307.
+    - cd libs/lol-lcu && npm ci --no-audit --no-fund && npm run build
+    - cd "$CI_PROJECT_DIR/services/desktop"
+    - npm ci --no-audit --no-fund
+    - npm run typecheck
+    - npm test
+
+# =============================================================================
+# BUILD — one dind job builds the two base images then all four service images.
+#
+# Deliberately a single job: the service Dockerfiles start FROM the base images,
+# so building them in the same daemon avoids a registry round-trip per service
+# and a second dind cold start. Bases are pushed with a `:cache` tag purely as a
+# layer cache for the next pipeline.
+# =============================================================================
+
+build:images:
+  stage: build
+  image: docker:28-cli
+  services:
+    - name: docker:28-dind
+      alias: docker
+  before_script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+  script:
+    - export DOCKER_BUILDKIT=1
+    # --- base images (tagged with the LOCAL name the service Dockerfiles default
+    #     to, so no --build-arg is needed here) ---------------------------------
+    - docker pull "$PYTHON_BASE_IMAGE:cache" || true
+    - docker pull "$NODE_BASE_IMAGE:cache" || true
+    - >
+      docker build --build-arg BUILDKIT_INLINE_CACHE=1
+      --cache-from "$PYTHON_BASE_IMAGE:cache"
+      -t lol/python-base:dev -t "$PYTHON_BASE_IMAGE:cache"
+      infra/images/python-base
+    - >
+      docker build --build-arg BUILDKIT_INLINE_CACHE=1
+      --cache-from "$NODE_BASE_IMAGE:cache"
+      -t lol/node-base:dev -t "$NODE_BASE_IMAGE:cache"
+      infra/images/node-base
+    - docker push "$PYTHON_BASE_IMAGE:cache"
+    - docker push "$NODE_BASE_IMAGE:cache"
+
+    # --- service images (build context is the repo root: they COPY libs/) ------
+    - |
+      set -e
+      for svc in backend worker bot frontend; do
+        case "$svc" in
+          backend)  image="$BACKEND_IMAGE" ;;
+          worker)   image="$WORKER_IMAGE" ;;
+          bot)      image="$BOT_IMAGE" ;;
+          frontend) image="$FRONTEND_IMAGE" ;;
+        esac
+        echo "=== building $svc -> $image"
+        docker pull "$image:$CI_COMMIT_REF_SLUG" || true
+        docker build \
+          --build-arg BUILDKIT_INLINE_CACHE=1 \
+          --cache-from "$image:$CI_COMMIT_REF_SLUG" \
+          -f "services/$svc/Dockerfile" \
+          -t "$image:$IMAGE_TAG" \
+          -t "$image:$CI_COMMIT_REF_SLUG" \
+          .
+        docker push "$image:$IMAGE_TAG"
+        docker push "$image:$CI_COMMIT_REF_SLUG"
+      done
+  rules:
+    # Merge into devel -> build the images that get deployed.
+    - if: $CI_COMMIT_BRANCH == "devel"
+    # MR aimed at devel -> build too, so "deploy:review" is one click away.
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "devel"
+  needs:
+    - test:python
+    - test:db-rls
+    - test:frontend
+    - test:desktop
+
+# =============================================================================
+# SECURITY
+# =============================================================================
+
+security:secrets:
+  # Committed credentials are the one finding worth failing a pipeline over.
+  stage: security
+  image:
+    name: aquasec/trivy:0.72.0
+    entrypoint: [""]
+  script:
+    - trivy fs --scanners secret --exit-code 1 --no-progress --skip-dirs node_modules --skip-dirs .venv .
+  rules:
+    - if: $CI_COMMIT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  needs: []
+
+security:images:
+  stage: security
+  image:
+    name: aquasec/trivy:0.72.0
+    entrypoint: [""]
+  variables:
+    TRIVY_USERNAME: $CI_REGISTRY_USER
+    TRIVY_PASSWORD: $CI_REGISTRY_PASSWORD
+  script:
+    - |
+      set -e
+      for image in "$BACKEND_IMAGE" "$WORKER_IMAGE" "$BOT_IMAGE" "$FRONTEND_IMAGE"; do
+        echo "=== $image:$IMAGE_TAG"
+        # Full HIGH+CRITICAL report (informational)...
+        trivy image --no-progress --severity HIGH,CRITICAL --exit-code 0 "$image:$IMAGE_TAG"
+        # ...but only a fixable CRITICAL blocks the deploy.
+        trivy image --no-progress --severity CRITICAL --ignore-unfixed --exit-code 1 "$image:$IMAGE_TAG"
+      done
+  rules:
+    - if: $CI_COMMIT_BRANCH == "devel"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "devel"
+  needs:
+    - build:images
+
+# =============================================================================
+# DEPLOY
+#
+# The runner ships three things to the server and then runs infra/deploy.sh
+# THERE — all the compose/docker logic lives in that script, so nothing depends
+# on quoting survivng an `ssh "..."` round trip.
+# =============================================================================
+
+.deploy: &deploy
+  image: alpine:3.23
+  before_script:
+    - apk add --no-cache openssh-client curl
+    - mkdir -p ~/.ssh && chmod 700 ~/.ssh
+    - echo "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_rsa
+    - chmod 600 ~/.ssh/id_rsa
+    - ssh-keyscan -p "${DEPLOY_SSH_PORT:-22}" "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+  script:
+    - export SSH_PORT="${DEPLOY_SSH_PORT:-22}"
+    - export DEPLOY_ROOT="${DEPLOY_PATH:-/home/$DEPLOY_USER/lol}"
+    - export SSH_TARGET="${DEPLOY_USER}@${DEPLOY_HOST}"
+    - export APP_DIR="$DEPLOY_ROOT/$STACK"
+    - export EDGE_DIR="$DEPLOY_ROOT/edge"
+
+    # --- the application .env (compose interpolation AND container env) -------
+    #
+    # The six INTERNAL secrets (postgres/app_rw passwords, JWT, PII key, the two
+    # service tokens) are deliberately NOT listed here. They have no external
+    # counterpart — nobody issues them, you just need *some* random value — so
+    # deploy.sh generates them on the server on first deploy and persists them in
+    # .secrets.env. Setting a CI variable of the same name still overrides.
+    # deploy.sh also composes DATABASE_URL / APP_DATABASE_URL, since those embed
+    # the passwords it resolves.
+    #
+    # NB: every value lands in a compose .env, so a literal `$` in a secret would
+    # be interpreted as interpolation. Generate secrets with token_urlsafe.
+    - |
+      cat > /tmp/app.env <<EOF
+      # Generated by GitLab CI/CD — pipeline $CI_PIPELINE_ID, commit $CI_COMMIT_SHA
+      COMPOSE_PROJECT_NAME=lol-$STACK
+      STACK=$STACK
+      $( [ -n "${DISCORD_BOT_TOKEN:-}" ] && echo "COMPOSE_PROFILES=bot" )
+
+      BACKEND_IMAGE=$BACKEND_IMAGE
+      WORKER_IMAGE=$WORKER_IMAGE
+      BOT_IMAGE=$BOT_IMAGE
+      FRONTEND_IMAGE=$FRONTEND_IMAGE
+      IMAGE_TAG=$IMAGE_TAG
+
+      ENVIRONMENT=production
+      LOG_LEVEL=${LOG_LEVEL:-INFO}
+
+      POSTGRES_USER=lol
+      POSTGRES_DB=lol
+      REDIS_URL=redis://redis:6379/0
+
+      DISCORD_CLIENT_ID=${DISCORD_CLIENT_ID:-}
+      DISCORD_CLIENT_SECRET=${DISCORD_CLIENT_SECRET:-}
+      DISCORD_REDIRECT_URI=https://$APP_DOMAIN/api/v1/auth/callback
+      DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:-}
+      # The bot reaches the API over the stack's internal network.
+      BACKEND_BASE_URL=http://backend:8000
+
+      RIOT_API_KEY=${RIOT_API_KEY:-}
+      RIOT_REGION=${RIOT_REGION:-europe}
+      EOF
+
+    # --- optional overrides for the server-generated secrets ------------------
+    # Empty file unless you deliberately set one of these as a CI variable (to
+    # pin or rotate a value). deploy.sh prefers whatever is in here over what it
+    # generated. Rotating POSTGRES_PASSWORD this way does NOT re-key an already
+    # initialised cluster — see docs/gitlab-cicd.md.
+    - |
+      : > /tmp/overrides.env
+      for key in POSTGRES_PASSWORD APP_DB_PASSWORD JWT_SECRET PII_ENCRYPTION_KEY \
+                 BOT_SERVICE_TOKEN LIFECYCLE_SERVICE_TOKEN; do
+        eval "value=\${$key:-}"
+        [ -n "$value" ] && echo "$key=$value" >> /tmp/overrides.env
+      done
+      echo "CI-provided secret overrides: $(wc -l < /tmp/overrides.env)"
+
+    # --- registry credentials, kept OUT of the app .env ----------------------
+    # A read_registry Deploy Token, so the server can still pull after a reboot
+    # (the CI job token would already be dead).
+    - |
+      cat > /tmp/registry.env <<EOF
+      REGISTRY_HOST=$CI_REGISTRY
+      REGISTRY_USER=$REGISTRY_DEPLOY_USER
+      REGISTRY_PASSWORD=$REGISTRY_DEPLOY_TOKEN
+      EOF
+
+    # --- edge (Caddy) config -------------------------------------------------
+    - |
+      cat > /tmp/edge.env <<EOF
+      COMPOSE_PROJECT_NAME=lol-edge
+      ACME_EMAIL=$ACME_EMAIL
+      EOF
+    - |
+      cat > /tmp/site.caddy <<EOF
+      $APP_DOMAIN {
+        encode zstd gzip
+
+        # Prometheus exposition is not public.
+        handle /metrics* {
+          respond 404
+        }
+
+        # API + liveness (reverse_proxy passes the realtime WS upgrade through).
+        handle /api/* {
+          reverse_proxy lol-$STACK-backend:8000
+        }
+        handle /healthz {
+          reverse_proxy lol-$STACK-backend:8000
+        }
+
+        # Everything else: the admin SPA (nginx does the SPA fallback).
+        handle {
+          reverse_proxy lol-$STACK-frontend:80
+        }
+
+        log {
+          output file /data/access-lol-$STACK.log {
+            roll_size 50mb
+            roll_keep 5
+          }
+        }
+      }
+      EOF
+
+    # --- ship it -------------------------------------------------------------
+    - ssh -p "$SSH_PORT" "$SSH_TARGET" "mkdir -p '$APP_DIR/data/postgres' '$APP_DIR/data/redis' '$APP_DIR/backups' '$EDGE_DIR/sites' '$EDGE_DIR/data/caddy' '$EDGE_DIR/config/caddy'"
+    - scp -P "$SSH_PORT" /tmp/app.env "$SSH_TARGET:$APP_DIR/.env"
+    - scp -P "$SSH_PORT" /tmp/overrides.env "$SSH_TARGET:$APP_DIR/.overrides.env"
+    - scp -P "$SSH_PORT" /tmp/registry.env "$SSH_TARGET:$APP_DIR/.registry.env"
+    - scp -P "$SSH_PORT" infra/docker-compose.prod.yml "$SSH_TARGET:$APP_DIR/docker-compose.prod.yml"
+    - scp -P "$SSH_PORT" infra/deploy.sh "$SSH_TARGET:$APP_DIR/deploy.sh"
+    - scp -P "$SSH_PORT" /tmp/edge.env "$SSH_TARGET:$EDGE_DIR/.env"
+    - scp -P "$SSH_PORT" infra/docker-compose.edge.yml "$SSH_TARGET:$EDGE_DIR/docker-compose.edge.yml"
+    - scp -P "$SSH_PORT" infra/Caddyfile "$SSH_TARGET:$EDGE_DIR/Caddyfile"
+    # Only THIS environment's site file — the other stack's stays untouched.
+    - scp -P "$SSH_PORT" /tmp/site.caddy "$SSH_TARGET:$EDGE_DIR/sites/$STACK.caddy"
+    - ssh -p "$SSH_PORT" "$SSH_TARGET" "chmod 600 '$APP_DIR/.env' '$APP_DIR/.overrides.env' '$APP_DIR/.registry.env' && chmod +x '$APP_DIR/deploy.sh'"
+
+    # --- run the deployment on the server ------------------------------------
+    - ssh -p "$SSH_PORT" "$SSH_TARGET" "bash '$APP_DIR/deploy.sh'"
+
+    # --- verify from the outside ---------------------------------------------
+    - |
+      echo "Waiting for https://$APP_DOMAIN/healthz ..."
+      for i in $(seq 1 12); do
+        if curl -sfk "https://$APP_DOMAIN/healthz" >/dev/null; then
+          echo "OK — $APP_DOMAIN is serving."
+          exit 0
+        fi
+        sleep 10
+      done
+      echo "WARNING: /healthz did not answer within 2 minutes."
+      echo "If this is the first deploy, Caddy may still be issuing the certificate,"
+      echo "or DNS for $APP_DOMAIN may not point at this server yet."
+      exit 1
+
+deploy:devel:
+  # Automatic on every push to devel — which is what merging an MR produces.
+  <<: *deploy
+  stage: deploy
+  variables:
+    STACK: devel
+  environment:
+    name: development
+    url: https://$APP_DOMAIN
+  rules:
+    - if: $CI_COMMIT_BRANCH == "devel"
+      when: on_success
+  needs:
+    - build:images
+    - security:images
+
+deploy:review:
+  # Manual button on an MR targeting devel: ship the MR's branch to the devel
+  # server WITHOUT merging. Same host and same stack as deploy:devel, so it
+  # replaces what devel serves until the next merge — deliberate, since there is
+  # only one server for now.
+  <<: *deploy
+  stage: deploy
+  variables:
+    STACK: devel
+  environment:
+    name: development
+    url: https://$APP_DOMAIN
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "devel"
+      when: manual
+      allow_failure: true
+  needs:
+    - build:images
+    - security:images
+
+# --- production, for when a second host exists -------------------------------
+# Uncomment, create the `production` branch, and give the CI variables below an
+# environment scope of `production` (APP_DOMAIN, DEPLOY_HOST, secrets, ...).
+# STACK=prod keeps its containers, data directory and Caddy site file fully
+# separate from devel, so both can share one server if needed.
+#
+# deploy:production:
+#   <<: *deploy
+#   stage: deploy
+#   variables:
+#     STACK: prod
+#   environment:
+#     name: production
+#     url: https://$APP_DOMAIN
+#   rules:
+#     - if: $CI_COMMIT_BRANCH == "production"
+#       when: manual
+#       allow_failure: false
+#   needs:
+#     - build:images
+#     - security:images

@@ -96,8 +96,15 @@ Desktop.ini
 
 # ---- IDE / editors ----
 .idea/
-.vscode/
+# NB: `.vscode/*`, not `.vscode/` — git cannot re-include a file whose parent
+# DIRECTORY is excluded, so the negations below would be dead with a trailing
+# slash. Run/debug config is project infrastructure and IS tracked; anything
+# else under .vscode/ (personal cruft) stays ignored.
+.vscode/*
 !.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/settings.json
 *.swp
 *.swo
 *~

@@ -1,0 +1,41 @@
+# Example of a per-environment site file.
+#
+# The deploy job GENERATES this at <DEPLOY_PATH>/edge/sites/<stack>.caddy from
+# $APP_DOMAIN and $STACK — this copy is committed for reference only and is not
+# used at runtime.
+#
+# Everything is same-origin on purpose: the SPA calls "/api/..." with no
+# configured base URL, and the frontend's CSP is `connect-src 'self'`. Splitting
+# the API onto a second hostname would require widening that CSP.
+
+lol.example.com {
+	encode zstd gzip
+
+	# Prometheus exposition is NOT public. Scrape it from inside the host
+	# instead:  docker exec lol-prod-backend wget -qO- localhost:8000/metrics
+	handle /metrics* {
+		respond 404
+	}
+
+	# API + liveness. reverse_proxy passes WebSocket upgrades through untouched,
+	# so /api/v1/realtime/ws works over wss:// with no extra config.
+	handle /api/* {
+		reverse_proxy lol-prod-backend:8000
+	}
+	handle /healthz {
+		reverse_proxy lol-prod-backend:8000
+	}
+
+	# Everything else is the admin SPA. Its nginx does the SPA fallback, so deep
+	# links and refreshes resolve to index.html.
+	handle {
+		reverse_proxy lol-prod-frontend:80
+	}
+
+	log {
+		output file /data/access-lol-prod.log {
+			roll_size 50mb
+			roll_keep 5
+		}
+	}
+}

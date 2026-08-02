@@ -1,0 +1,50 @@
+# infra/docker-compose.edge.yml
+#
+# The EDGE stack: a single Caddy that terminates TLS for every environment on the
+# host and reverse-proxies into the app stacks over the shared `lol-edge`
+# network. It is deployed independently of the app stacks (deploy directory
+# `<DEPLOY_PATH>/edge`) so that redeploying devel never touches production's
+# certificates or listeners.
+#
+# Caddy obtains and renews Let's Encrypt certificates automatically. That needs:
+#   * ports 80 and 443 free on the host (nothing else may bind them)
+#   * each domain's DNS A/AAAA record already pointing at this server
+#
+# Per-environment routing lives in ./sites/<stack>.caddy, imported by Caddyfile.
+# A deploy writes only its own site file and reloads Caddy, so the two
+# environments never clobber each other's config.
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: lol-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    environment:
+      # Contact address for the ACME account (expiry warnings).
+      ACME_EMAIL: ${ACME_EMAIL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./sites:/etc/caddy/sites:ro
+      # Certificates + OCSP staples. LOSING THIS VOLUME MEANS RE-ISSUING CERTS,
+      # and Let's Encrypt rate-limits that (5 duplicate certs per week).
+      - ./data/caddy:/data
+      - ./config/caddy:/config
+    networks: [edge]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:2019/config/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "5" }
+
+networks:
+  edge:
+    external: true
+    name: lol-edge

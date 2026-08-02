@@ -1,0 +1,49 @@
+{
+  // The Python extension auto-loads the REPO-ROOT .env unless told otherwise —
+  // and that file (when it exists) carries docker-compose hostnames
+  // (postgres/redis), which makes every host-run DB call die with
+  // socket.gaierror. Pin it to the backend's host .env instead; each launch
+  // config overrides it with its own service .env anyway. See CLAUDE.md.
+  "python.envFile": "${workspaceFolder}/services/backend/.env",
+  "python.defaultInterpreterPath": "${workspaceFolder}/services/backend/.venv/bin/python",
+  "python.terminal.activateEnvironment": false,
+
+  // Monorepo: every package is a standalone uv project with a src/ layout.
+  "python.analysis.extraPaths": [
+    "services/backend/src",
+    "services/worker/src",
+    "services/bot/src",
+    "libs/lol-schemas/src",
+    "libs/lol-core/src",
+    "libs/lol-riot/src",
+    "libs/lol-realtime/src",
+    "libs/lol-discord/src"
+  ],
+  "python.testing.pytestEnabled": true,
+  "python.testing.unittestEnabled": false,
+  "python.testing.cwd": "${workspaceFolder}/services/backend",
+  "python.testing.pytestArgs": ["tests"],
+
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": { "source.organizeImports.ruff": "explicit" }
+  },
+  "ruff.configuration": "${workspaceFolder}/ruff.toml",
+  "mypy-type-checker.args": ["--config-file=${workspaceFolder}/mypy.ini"],
+
+  "typescript.tsdk": "services/frontend/node_modules/typescript/lib",
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/.venv": true,
+    "**/dist": true,
+    "**/dist-renderer": true,
+    "**/uv.lock": true,
+    "**/package-lock.json": true
+  },
+  "files.watcherExclude": {
+    "**/.venv/**": true,
+    "**/node_modules/**": true,
+    "**/dist-renderer/**": true
+  }
+}

@@ -20,6 +20,13 @@
 #
 # Note: paths are relative to THIS file (infra/), so the repo root is `..`.
 
+# Compose derives the project name from the file's directory unless told
+# otherwise — which would name this stack "infra" and make its containers
+# indistinguishable from every other project's on the same Docker daemon.
+# Pin it so containers are `lol-postgres-1`, `lol-redis-1`, ... everywhere
+# (make up, VS Code tasks, plain docker compose).
+name: lol
+
 services:
   # ---------------------------------------------------------------------------
   # PostgreSQL 16 — primary datastore (RLS multi-tenant isolation lands in P1).

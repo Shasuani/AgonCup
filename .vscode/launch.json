@@ -1,0 +1,189 @@
+{
+  // LeagueOfLeagues — Run & Debug (host dev, NO docker for the app tiers).
+  //
+  // Prereqs, once:
+  //   1. Task "infra: up (postgres + redis)"   — dev DB on :5442 / redis on :6389
+  //   2. Task "db: migrate (alembic upgrade head)" — creates the schema + app_rw role
+  //   3. Task "deps: all"                      — uv sync + npm install everywhere
+  //  (Every launch config below already runs the deps/build task it needs.)
+  //
+  // Env comes from services/<svc>/.env (LOCALHOST DSNs) — never the repo-root .env,
+  // which uses docker-compose hostnames (postgres/redis) and would break host runs
+  // with socket.gaierror. See CLAUDE.md "Two .env's, on purpose".
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // Breakpoints are reliable here (no reloader subprocess).
+      "name": "Backend: FastAPI :8000",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": ["app.main:app", "--host", "127.0.0.1", "--port", "8000"],
+      "cwd": "${workspaceFolder}/services/backend",
+      "python": "${workspaceFolder}/services/backend/.venv/bin/python",
+      "envFile": "${workspaceFolder}/services/backend/.env",
+      "env": { "PYTHONPATH": "src" },
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "preLaunchTask": "deps: backend"
+    },
+    {
+      // Auto-reload on save. The reloader forks, so breakpoints can be flaky —
+      // use the plain ":8000" config when you actually want to step through code.
+      "name": "Backend: FastAPI :8000 (--reload)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": ["app.main:app", "--host", "127.0.0.1", "--port", "8000", "--reload"],
+      "cwd": "${workspaceFolder}/services/backend",
+      "python": "${workspaceFolder}/services/backend/.venv/bin/python",
+      "envFile": "${workspaceFolder}/services/backend/.env",
+      "env": { "PYTHONPATH": "src" },
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "subProcess": true,
+      "preLaunchTask": "deps: backend"
+    },
+    {
+      "name": "Frontend: Vite dev :5173",
+      "type": "node",
+      "request": "launch",
+      "cwd": "${workspaceFolder}/services/frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "console": "integratedTerminal",
+      "skipFiles": ["<node_internals>/**"],
+      "preLaunchTask": "deps: frontend",
+      // Opens the SPA in your default browser once Vite prints its URL.
+      // The /api proxy targets 127.0.0.1:8000 — start the backend too, or the
+      // "Dev login" button returns 502 backend_unreachable.
+      "serverReadyAction": {
+        "pattern": "Local:\\s+(https?://\\S+)",
+        "uriFormat": "%s",
+        "action": "openExternally"
+      }
+    },
+    {
+      // Electron MAIN process (Node side: LCU adapter, orchestration, IPC).
+      // NOTE: the client must reach the League client on 127.0.0.1 — under WSL
+      // that is WSL's loopback, not Windows'. For real LCU work run the desktop
+      // natively on the machine where League runs (or enable WSL2 mirrored
+      // networking). Everything else (pairing, tournaments, teams) works here.
+      "name": "Desktop: Electron (main)",
+      "type": "node",
+      "request": "launch",
+      "cwd": "${workspaceFolder}/services/desktop",
+      "runtimeExecutable": "${workspaceFolder}/services/desktop/node_modules/.bin/electron",
+      "runtimeArgs": [".", "--remote-debugging-port=9223"],
+      "outputCapture": "std",
+      "console": "integratedTerminal",
+      "skipFiles": ["<node_internals>/**"],
+      "env": {
+        "BACKEND_URL": "http://127.0.0.1:8000",
+        "REALTIME_URL": "ws://127.0.0.1:8000/api/v1/realtime/ws",
+        "ELECTRON_ENABLE_LOGGING": "1"
+      },
+      "preLaunchTask": "build: desktop"
+    },
+    {
+      // Attach to the Electron RENDERER (React UI) — launch "Desktop: Electron
+      // (main)" first, then this to breakpoint in renderer/*.tsx.
+      "name": "Desktop: attach renderer (:9223)",
+      "type": "chrome",
+      "request": "attach",
+      "port": 9223,
+      "webRoot": "${workspaceFolder}/services/desktop/renderer",
+      "timeout": 30000
+    },
+    {
+      "name": "Worker: arq",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "arq",
+      "args": ["app.main.WorkerSettings"],
+      "cwd": "${workspaceFolder}/services/worker",
+      "python": "${workspaceFolder}/services/worker/.venv/bin/python",
+      "envFile": "${workspaceFolder}/services/worker/.env",
+      "env": { "PYTHONPATH": "src" },
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "preLaunchTask": "deps: worker"
+    },
+    {
+      // Needs a real DISCORD_BOT_TOKEN in services/bot/.env + the backend running.
+      "name": "Bot: Discord",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "app.main",
+      "cwd": "${workspaceFolder}/services/bot",
+      "python": "${workspaceFolder}/services/bot/.venv/bin/python",
+      "envFile": "${workspaceFolder}/services/bot/.env",
+      "env": { "PYTHONPATH": "src" },
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "preLaunchTask": "deps: bot"
+    },
+    {
+      // DEV-ONLY: play a whole tournament with fake players so it shows up in
+      // your desktop client. `--cleanup` removes all simulator data.
+      "name": "Dev: simulate tournament",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/services/backend/scripts/simulate_tournament.py",
+      "args": ["--teams", "8", "--mode", "5v5", "--format", "single", "--delay", "4"],
+      "cwd": "${workspaceFolder}/services/backend",
+      "python": "${workspaceFolder}/services/backend/.venv/bin/python",
+      "envFile": "${workspaceFolder}/services/backend/.env",
+      "env": { "PYTHONPATH": "src" },
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Test: backend (current file)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["-q", "${file}"],
+      "cwd": "${workspaceFolder}/services/backend",
+      "python": "${workspaceFolder}/services/backend/.venv/bin/python",
+      "env": { "PYTHONPATH": "src" },
+      "console": "integratedTerminal",
+      "justMyCode": false
+    }
+  ],
+  "compounds": [
+    {
+      "name": "▶ Dev: Backend + Frontend",
+      "configurations": ["Backend: FastAPI :8000 (--reload)", "Frontend: Vite dev :5173"],
+      "stopAll": true,
+      "presentation": { "group": "1-stacks", "order": 1 }
+    },
+    {
+      "name": "▶ Dev: Backend + Desktop client",
+      "configurations": ["Backend: FastAPI :8000", "Desktop: Electron (main)"],
+      "stopAll": true,
+      "presentation": { "group": "1-stacks", "order": 2 }
+    },
+    {
+      "name": "▶ Dev: Backend + Frontend + Desktop",
+      "configurations": [
+        "Backend: FastAPI :8000",
+        "Frontend: Vite dev :5173",
+        "Desktop: Electron (main)"
+      ],
+      "stopAll": true,
+      "presentation": { "group": "1-stacks", "order": 3 }
+    },
+    {
+      "name": "▶ Dev: Everything (backend, worker, bot, frontend)",
+      "configurations": [
+        "Backend: FastAPI :8000",
+        "Worker: arq",
+        "Bot: Discord",
+        "Frontend: Vite dev :5173"
+      ],
+      "stopAll": true,
+      "presentation": { "group": "1-stacks", "order": 4 }
+    }
+  ]
+}

@@ -97,9 +97,19 @@ Every guild-scoped table has Postgres **`FORCE ROW LEVEL SECURITY`** with a
   composite `(id, guild_id)` FK to a `UNIQUE(id, guild_id)` — a row physically
   cannot point at another guild's parent.
 
-Migrations: `services/backend/alembic/versions/` (chain
-`0001 -> 0002 -> 0003 -> 0004 -> 0005`; 0004 added the desktop-code columns,
-0005 added the `riot_accounts` `lcu_puuid` + Solo/Duo rank-snapshot columns).
+Migrations: `services/backend/alembic/versions/` — a **single squashed
+`0001_baseline`** holding the whole v3 schema, the `app_rw` role, the per-guild
+`guild_isolation` policies and `self_role_read`. `alembic upgrade head` works on
+an empty database and an existing one alike.
+
+**Never derive DDL in a migration from `app.models`.** The old `0001..0012` chain
+did (`0002` created tables from `Base.metadata.sorted_tables`), which made it
+unreplayable: on a fresh database 0002 already produced the current schema and
+`0004..0012` died on `DuplicateColumnError`. Migrations are immutable historical
+records; models keep moving. Write static `op.create_table(...)` / `op.add_column(...)`,
+and keep any table list (e.g. the guild-isolated set) hardcoded in the migration.
+CI runs `alembic check` after migrating to catch model/migration drift.
+
 `target_metadata = app.models.Base.metadata` (autogenerate works). Use
 **`sa.false()`** for boolean server defaults, never `func.false()` (compiles to a
 non-existent `false()` function and breaks `alembic upgrade head`).

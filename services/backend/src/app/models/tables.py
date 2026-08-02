@@ -44,6 +44,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
+    Index,
     Integer,
     String,
     Text,
@@ -699,6 +700,17 @@ class VerificationAttempt(Base):
             "status in ('pending','verified','expired','failed')", name="status_allowed"
         ),
         CheckConstraint("verify_kind in ('icon','desktop_code')", name="verify_kind_allowed"),
+        # At most one LIVE desktop code at a time (expired/consumed/NULL rows are
+        # ignored). Migration 0004 created this partial unique index but it was
+        # never mirrored here — so any database built from ``Base.metadata``
+        # (which is what migration 0002 does) silently lacked it, leaving the
+        # single-active-code invariant unenforced at the DB level.
+        Index(
+            "uq_verification_attempts_code_active",
+            "code",
+            unique=True,
+            postgresql_where=text("code IS NOT NULL AND status = 'pending'"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()

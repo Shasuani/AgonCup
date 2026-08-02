@@ -284,9 +284,7 @@ class RiotAccountClient:
         the backend caller, NOT here.
         """
         path = self._league_entries_by_puuid_path(puuid)
-        response = await self._request(
-            platform.base_url, path, what="league_entries_by_puuid"
-        )
+        response = await self._request(platform.base_url, path, what="league_entries_by_puuid")
         data = response.json()
         return [
             LeagueEntryDTO(

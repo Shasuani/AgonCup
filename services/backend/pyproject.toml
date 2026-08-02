@@ -72,6 +72,11 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "W", "C4", "SIM"]
+# Line length is the formatter's job — matching the repo-root ruff.toml policy,
+# which this package config had drifted from. Without it, ruff run from the repo
+# root picks THIS config for services/backend/** and flags long string literals
+# in dev scripts that the formatter cannot split.
+ignore = ["E501"]
 
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI's dependency-injection idiom puts ``Depends()``/``Header()`` etc. in

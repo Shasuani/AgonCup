@@ -166,9 +166,7 @@ def test_desktop_verify_response_rank_snapshot() -> None:
     assert resp.rank_text == "Gold II, 45 LP"
 
     # rank_text defaults to "Unranked"; rank fields default to None.
-    unranked = ls.DesktopVerifyResponseDTO(
-        account_id=uuid4(), puuid="p", verified=True
-    )
+    unranked = ls.DesktopVerifyResponseDTO(account_id=uuid4(), puuid="p", verified=True)
     assert unranked.rank_text == "Unranked"
     assert unranked.tier is None
     assert unranked.league_points is None

@@ -48,14 +48,18 @@ async def run_scheduler_tick(
     """
     opened = 0
     due_open = (
-        await session.execute(
-            select(Tournament).where(
-                Tournament.status == TournamentStatus.DRAFT,
-                Tournament.registration_opens_at.is_not(None),
-                Tournament.registration_opens_at <= now,
+        (
+            await session.execute(
+                select(Tournament).where(
+                    Tournament.status == TournamentStatus.DRAFT,
+                    Tournament.registration_opens_at.is_not(None),
+                    Tournament.registration_opens_at <= now,
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     for t in due_open:
         # Defensive time re-check (the query already filters; keeps the pass correct
         # even under a store that can't model the `<=` / IS NOT NULL predicates).
@@ -76,14 +80,18 @@ async def run_scheduler_tick(
 
     started = 0
     due_start = (
-        await session.execute(
-            select(Tournament).where(
-                Tournament.start_at.is_not(None),
-                Tournament.start_at <= now,
-                Tournament.start_announced_at.is_(None),
+        (
+            await session.execute(
+                select(Tournament).where(
+                    Tournament.start_at.is_not(None),
+                    Tournament.start_at <= now,
+                    Tournament.start_announced_at.is_(None),
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     for t in due_start:
         if t.start_at is None or t.start_at > now or t.start_announced_at is not None:
             continue

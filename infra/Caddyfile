@@ -1,0 +1,19 @@
+# infra/Caddyfile — base config for the shared edge proxy.
+#
+# Deliberately contains NO site blocks. Each environment's routing is written by
+# its own deploy job to ./sites/<stack>.caddy and picked up by the import below,
+# so deploying devel can never clobber production's config (and vice versa).
+#
+# NOTE: Caddy fails to start if the import glob matches nothing. The deploy job
+# always writes its site file BEFORE bringing the edge stack up.
+#
+# See infra/caddy-site.example.caddy for the shape of a generated site file.
+{
+	# ACME contact address (expiry notices). Supplied via the edge stack's .env.
+	email {$ACME_EMAIL}
+
+	# Certificates are issued automatically for every hostname named in a site
+	# block. The admin API stays on the container loopback (Caddy's default).
+}
+
+import /etc/caddy/sites/*.caddy

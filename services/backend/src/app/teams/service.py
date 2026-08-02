@@ -380,8 +380,7 @@ async def list_my_teams(session: AsyncSession, *, user_id: uuid.UUID) -> list[My
         )
     ).all()
     return [
-        MyTeam(team_id=tid, name=name, role=role, status=status)
-        for tid, name, role, status in rows
+        MyTeam(team_id=tid, name=name, role=role, status=status) for tid, name, role, status in rows
     ]
 
 
@@ -408,9 +407,7 @@ async def list_roster(session: AsyncSession, *, team_id: uuid.UUID) -> list[Rost
             .order_by(User.display_name)
         )
     ).all()
-    return [
-        RosterMember(user_id=uid, role=role, display_name=name) for uid, role, name in rows
-    ]
+    return [RosterMember(user_id=uid, role=role, display_name=name) for uid, role, name in rows]
 
 
 @dataclass(frozen=True)
@@ -423,9 +420,7 @@ class JoinRequest:
     display_name: str
 
 
-async def list_join_requests(
-    session: AsyncSession, *, team_id: uuid.UUID
-) -> list[JoinRequest]:
+async def list_join_requests(session: AsyncSession, *, team_id: uuid.UUID) -> list[JoinRequest]:
     """Pending join requests for one team (captain's approval queue), joiner-named."""
     team = await get_team(session, team_id=team_id)
     rows = (
@@ -440,9 +435,7 @@ async def list_join_requests(
         )
     ).all()
     return [
-        JoinRequest(
-            team_id=team.id, team_name=team.name, user_id=uid, display_name=name
-        )
+        JoinRequest(team_id=team.id, team_name=team.name, user_id=uid, display_name=name)
         for uid, name in rows
     ]
 

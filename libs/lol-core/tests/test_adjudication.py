@@ -551,9 +551,7 @@ _DUEL_ROSTER = {TEAM_A: frozenset({"a1"}), TEAM_B: frozenset({"b1"})}
 def test_1v1_both_agree_accepts_with_2_of_2() -> None:
     # Both duelists report A won; 2/2 quorum + total=2 resolves it (6/10 can't).
     reports = [rep("a1", TEAM_A), rep("b1", TEAM_A)]
-    result = adjudicate_result(
-        reports, _DUEL_ROSTER, quorum_threshold=2, total_participants=2
-    )
+    result = adjudicate_result(reports, _DUEL_ROSTER, quorum_threshold=2, total_participants=2)
     assert result.outcome == AdjudicationOutcome.ACCEPT
     assert result.winner_team_id == TEAM_A
 
@@ -569,7 +567,5 @@ def test_1v1_single_report_is_insufficient_not_dispute() -> None:
 def test_1v1_conflicting_claims_dispute() -> None:
     # Each claims they won -> both reports in, no 2/2 agreement -> DISPUTE.
     reports = [rep("a1", TEAM_A), rep("b1", TEAM_B)]
-    result = adjudicate_result(
-        reports, _DUEL_ROSTER, quorum_threshold=2, total_participants=2
-    )
+    result = adjudicate_result(reports, _DUEL_ROSTER, quorum_threshold=2, total_participants=2)
     assert result.outcome == AdjudicationOutcome.DISPUTE

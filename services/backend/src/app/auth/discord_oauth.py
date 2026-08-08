@@ -114,7 +114,14 @@ def build_authorize_url(
         "response_type": "code",
         "scope": " ".join(scopes),
         "state": state,
-        "prompt": "consent",
+        # `none` skips Discord's authorization screen for a user who has already
+        # granted these scopes — they land straight back on the callback. The
+        # value was `consent`, which means "ask EVERY time", so signing in showed
+        # the Authorize button on every single login. A first-time user (or one
+        # who revoked access, or a login that asks for a scope they have not
+        # granted) still gets the screen: `none` only suppresses a re-consent that
+        # would be answered identically.
+        "prompt": "none",
     }
     if code_challenge is not None:
         params["code_challenge"] = code_challenge

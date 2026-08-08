@@ -485,6 +485,18 @@ def test_build_authorize_url_includes_state_and_pkce() -> None:
     assert "code_challenge_method=S256" in pkce
 
 
+def test_authorize_url_does_not_force_a_reconsent() -> None:
+    """`prompt=consent` made Discord show its Authorize screen on EVERY login.
+
+    `none` skips it for a user who already granted these scopes; someone signing
+    in for the first time (or after revoking access) still sees it, because
+    Discord falls back to the screen when consent is genuinely missing.
+    """
+    url = discord_oauth.build_authorize_url(state="s1")
+    assert "prompt=none" in url
+    assert "prompt=consent" not in url
+
+
 def test_login_requests_the_guilds_scope() -> None:
     # Without `guilds`, /users/@me/guilds 403s and the server picker cannot exist.
     assert "guilds" in discord_oauth.DEFAULT_SCOPES

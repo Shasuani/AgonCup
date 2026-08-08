@@ -6,7 +6,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 export type LcuStatus = 'online' | 'loading' | 'offline';
 
 export interface BridgeUser { userId: string; discordUserId: string; displayName: string }
-export interface SessionState { signedIn: boolean; user: BridgeUser | null }
+export type SessionStatus = 'signed-in' | 'needs-pairing' | 'unavailable';
+export interface SessionState { signedIn: boolean; user: BridgeUser | null; status?: SessionStatus }
 export interface ReadSummoner { ok: boolean; puuid?: string; gameName?: string; tagLine?: string; region?: string; reason?: string; detail?: string }
 export interface LinkedAccount { accountId: string; gameName: string | null; tagLine: string | null; region: string | null; verified: boolean; rankText: string }
 export interface Tournament { id: string; name: string; status: string; format: string; gameMode: string; bestOf: number; maxTeams: number; isSharedToCentral: boolean; registrationOpensAt: string | null; startAt: string | null }
@@ -52,6 +53,7 @@ export interface LolBridge {
   readSummoner(): Promise<ReadSummoner>;
   onLcuStatus(cb: (s: LcuStatus) => void): () => void;
   onAuthLost(cb: () => void): () => void;
+  onSessionRestored(cb: () => void): () => void;
 }
 
 declare global {

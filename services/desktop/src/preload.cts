@@ -13,6 +13,7 @@
  *   - `readSummoner()`         -> main reads the LCU current summoner (READ-ONLY).
  *   - `onLcuStatus(cb)`        -> subscribe to LCU reachability badge updates.
  *   - `onAuthLost(cb)`         -> subscribe to "session expired, re-pair" events.
+ *   - `onSessionRestored(cb)` -> subscribe to "backend is back, session restored".
  *
  * Nothing privileged is leaked: only these narrow, validated functions are
  * placed on `window`.
@@ -59,6 +60,10 @@ export interface BridgeAccount {
 export interface SessionStateBridgeResult {
   signedIn: boolean;
   user: BridgeUser | null;
+  /** How to render being signed out. "needs-pairing" = no credential, ask for a
+   * code. "unavailable" = we HOLD one and the backend is unreachable; the app is
+   * retrying and must NOT ask for a code. */
+  status?: "signed-in" | "needs-pairing" | "unavailable";
 }
 
 /** Result of `window.lol.pair(...)`. */
@@ -312,6 +317,9 @@ export interface LolBridge {
   onLcuStatus(callback: (status: LcuStatusBridge) => void): () => void;
   /** Subscribe to "session expired" events. Returns an unsubscribe function. */
   onAuthLost(callback: () => void): () => void;
+  /** Subscribe to "a background retry got the session back" events, so a screen
+   * showing "reconnecting…" can leave it. Returns an unsubscribe function. */
+  onSessionRestored(callback: () => void): () => void;
 }
 
 const bridge: LolBridge = {
@@ -374,6 +382,11 @@ const bridge: LolBridge = {
     const listener = (): void => callback();
     ipcRenderer.on("lol:auth-lost", listener);
     return () => ipcRenderer.removeListener("lol:auth-lost", listener);
+  },
+  onSessionRestored: (callback) => {
+    const listener = (): void => callback();
+    ipcRenderer.on("lol:session-restored", listener);
+    return () => ipcRenderer.removeListener("lol:session-restored", listener);
   },
 };
 

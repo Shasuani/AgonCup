@@ -131,10 +131,25 @@ class FakeSession:
 
     # --- query dispatch ---------------------------------------------------
     async def execute(self, statement: Any, params: Any = None) -> Any:
+        if getattr(statement, "__visit_name__", None) == "delete":
+            return self._execute_delete(statement)
         # text() statements: only set_config('app.current_guild', ...) matters.
         if not hasattr(statement, "column_descriptions"):
             return self._execute_text(statement, params)
         return self._execute_select(statement)
+
+    def _execute_delete(self, statement: Any) -> _Result:
+        """``sa.delete(Model).where(...)`` — drop the matching rows.
+
+        Without this a bulk DELETE fell through to the text() branch and silently
+        no-op'd, so a test could never catch a delete that failed to happen.
+        """
+        model = _model_of(statement.entity_description["entity"])
+        crit = _equality_filters(statement)
+        bucket = self.store[model]
+        for row in [r for r in bucket if _matches(r, crit)]:
+            bucket.remove(row)
+        return _Result([])
 
     def _execute_text(self, statement: Any, params: Any) -> _Result:
         sql = str(statement).lower()
@@ -250,17 +265,64 @@ def _equality_filters(statement: Any) -> dict[str, Any]:
             # tests can never catch being wrong. Restricted to boolean literals so
             # ``.is_(None)`` keeps its current "not modelled" behaviour.
             op = getattr(bool_expr, "operator", None)
+            left = getattr(bool_expr, "left", None)
+            right = getattr(bool_expr, "right", None)
+            if left is None or not hasattr(left, "key"):
+                continue
+            # ``col.in_([...])`` and ``col != x`` are modelled because the sync/
+            # onboarding paths filter on them (``discord_guild_id.in_(...)`` +
+            # ``status != REMOVED``); leaving them unmodelled made the fake answer
+            # as if the filter were absent.
+            if _op_name(op) == "in_op":
+                crit[left.key] = _In(tuple(_literal(v) for v in _in_values(right)))
+                continue
+            if op is operator.ne:
+                crit[left.key] = _Ne(_literal(right))
+                continue
+            # Only ``==`` clauses otherwise constrain the fake store; inequalities
+            # (e.g. ``start_at <= now``) can't be modelled here and are left to the
+            # caller's own Python re-checks.
             if (
                 op is not operator.eq
                 and op is not None
-                and not (_is_operator(op) and isinstance(_literal(bool_expr.right), bool))
+                and not (_is_operator(op) and isinstance(_literal(right), bool))
             ):
                 continue
-            left = getattr(bool_expr, "left", None)
-            right = getattr(bool_expr, "right", None)
-            if left is not None and hasattr(left, "key"):
-                crit[left.key] = _literal(right)
+            crit[left.key] = _literal(right)
     return crit
+
+
+@dataclass(frozen=True)
+class _In:
+    """Marker for an ``IN (...)`` criterion (see :func:`_matches`)."""
+
+    values: tuple[Any, ...]
+
+
+@dataclass(frozen=True)
+class _Ne:
+    """Marker for a ``!=`` criterion (see :func:`_matches`)."""
+
+    value: Any
+
+
+def _op_name(op: Any) -> str:
+    return getattr(op, "__name__", "")
+
+
+def _in_values(right: Any) -> Any:
+    """Unwrap the operand of ``col.in_([...])`` into an iterable of literals.
+
+    SQLAlchemy renders it as an *expanding* bind parameter whose ``.value`` is the
+    original sequence; a literal-list clause exposes ``.clauses`` instead.
+    """
+    value = getattr(right, "value", None)
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return value
+    clauses = getattr(right, "clauses", None)
+    if clauses is not None:
+        return list(clauses)
+    return () if value is None else (value,)
 
 
 def _is_operator(op: Any) -> bool:
@@ -292,6 +354,16 @@ def _matches(row: Any, crit: dict[str, Any]) -> bool:
     for key, val in crit.items():
         actual = getattr(row, key, None)
         actual = getattr(actual, "value", actual)
+        # The IN/!= markers are checked BEFORE the ``.value`` unwrap below, which
+        # would otherwise strip ``_Ne`` down to its operand and turn it into ``==``.
+        if isinstance(val, _In):
+            if not any(str(actual) == str(getattr(v, "value", v)) for v in val.values):
+                return False
+            continue
+        if isinstance(val, _Ne):
+            if str(actual) == str(getattr(val.value, "value", val.value)):
+                return False
+            continue
         val = getattr(val, "value", val)
         if isinstance(val, bool):
             # Boolean columns here are NOT NULL with a server default, which the

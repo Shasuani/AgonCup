@@ -137,6 +137,8 @@ class FakeSession:
 
     # --- query dispatch ---------------------------------------------------
     async def execute(self, statement: Any, params: Any = None) -> Any:
+        if getattr(statement, "__visit_name__", None) == "delete":
+            return self._execute_delete(statement)
         # text() set_config — no-op for the fake.
         if not hasattr(statement, "column_descriptions") and not _is_update(statement):
             return _Result([])
@@ -144,6 +146,15 @@ class FakeSession:
         if _is_update(statement):
             return self._execute_update(statement)
         return self._execute_select(statement)
+
+    def _execute_delete(self, statement: Any) -> _Result:
+        """``sa.delete(Model).where(...)`` — the guild_admin revoke path uses it."""
+        model = _model_of(statement.entity_description["entity"])
+        crit = _equality_filters(statement)
+        bucket = self.store[model]
+        for row in [r for r in bucket if _matches(r, crit)]:
+            bucket.remove(row)
+        return _Result([])
 
     def _execute_select(self, statement: Any) -> _Result:
         entity = statement.column_descriptions[0]["entity"]
@@ -239,13 +250,40 @@ def _equality_filters(statement: Any) -> dict[str, Any]:
             # ``expires_at > now``) are ignored — the fake cannot model time.
             # ``col.is_(False)`` counts: it is how a boolean column is compared in
             # SQL, and dropping it would silently widen every such query here.
-            if getattr(bool_expr, "operator", None) not in (operator.eq, None, sql_operators.is_):
-                continue
+            op = getattr(bool_expr, "operator", None)
             left = getattr(bool_expr, "left", None)
             right = getattr(bool_expr, "right", None)
-            if left is not None and hasattr(left, "key"):
-                crit[left.key] = _literal(right)
+            if left is None or not hasattr(left, "key"):
+                continue
+            # ``col.in_([...])`` / ``col != x`` are modelled because the guild_admin
+            # sync filters guilds on them; unmodelled they widened the query.
+            if op is sql_operators.in_op:
+                values = getattr(right, "value", None)
+                if not isinstance(values, (list, tuple, set, frozenset)):
+                    values = list(getattr(right, "clauses", ()))
+                crit[left.key] = _In(tuple(_literal(v) for v in values))
+                continue
+            if op is operator.ne:
+                crit[left.key] = _Ne(_literal(right))
+                continue
+            if op not in (operator.eq, None, sql_operators.is_):
+                continue
+            crit[left.key] = _literal(right)
     return crit
+
+
+@dataclass(frozen=True)
+class _In:
+    """Marker for an ``IN (...)`` criterion (see :func:`_matches`)."""
+
+    values: tuple[Any, ...]
+
+
+@dataclass(frozen=True)
+class _Ne:
+    """Marker for a ``!=`` criterion (see :func:`_matches`)."""
+
+    value: Any
 
 
 def _flatten_and(clause: Any) -> list[Any]:
@@ -274,6 +312,14 @@ def _col_name(col: Any) -> str:
 def _matches(row: Any, crit: dict[str, Any]) -> bool:
     for key, val in crit.items():
         actual = getattr(row, key, None)
+        if isinstance(val, _In):
+            if not any(str(actual) == str(v) for v in val.values):
+                return False
+            continue
+        if isinstance(val, _Ne):
+            if str(actual) == str(val.value):
+                return False
+            continue
         if str(actual) != str(val):
             return False
     return True
@@ -452,16 +498,24 @@ async def test_logout_revokes_the_whole_family_not_just_the_presented_row() -> N
 # Discord OAuth callback (mocked httpx)
 # ---------------------------------------------------------------------------
 class _MockResponse:
-    def __init__(self, status_code: int, payload: dict[str, Any]) -> None:
+    def __init__(self, status_code: int, payload: Any) -> None:
         self.status_code = status_code
         self._payload = payload
 
-    def json(self) -> dict[str, Any]:
+    def json(self) -> Any:
         return self._payload
 
 
 class _MockDiscordClient:
-    """Stands in for httpx.AsyncClient: token POST + user GET."""
+    """Stands in for httpx.AsyncClient: token POST + user/guild-list GETs.
+
+    The callback fetches ``/users/@me`` AND ``/users/@me/guilds`` (the latter
+    drives the ``guild_admin`` sync), so the GET must dispatch on the URL — a
+    single canned user payload made the guild parse blow up.
+    """
+
+    #: ``/users/@me/guilds`` payload; override per-test to exercise the sync.
+    guilds: list[dict[str, Any]] = []
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         pass
@@ -478,12 +532,14 @@ class _MockDiscordClient:
             {
                 "access_token": "discord-access-xyz",
                 "refresh_token": "discord-refresh-xyz",
-                "scope": "identify",
+                "scope": "identify guilds",
                 "expires_in": 604800,
             },
         )
 
-    async def get(self, url: str, **kwargs: Any) -> _MockResponse:
+    async def get(self, url: str, **kwargs: Any) -> Any:
+        if url.endswith("/guilds"):
+            return _MockResponse(200, type(self).guilds)
         return _MockResponse(200, {"id": "123456789012345678", "username": "tester"})
 
 
@@ -543,6 +599,130 @@ async def test_oauth_callback_upserts_user_and_encrypts_credential(
             settings=get_settings(),
         )
     assert exc_info.value.status_code == 400
+
+
+def _discord_guild_payload(discord_guild_id: int, *, admin: bool) -> dict[str, Any]:
+    """One ``/users/@me/guilds`` entry. Discord sends ``permissions`` as a STRING."""
+    return {
+        "id": str(discord_guild_id),
+        "name": "Server",
+        "icon": None,
+        "owner": False,
+        "permissions": str(discord_oauth.PERMISSION_ADMINISTRATOR if admin else 0),
+    }
+
+
+@pytest.mark.asyncio
+async def test_callback_grants_guild_admin_to_a_discord_administrator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Discord admin who never invited the bot could sign in but not act: with no
+    ``user_guild_roles`` row every tenant call 403'd ("principal has no role in the
+    acting guild"). Login now mirrors Discord's ADMINISTRATOR bit onto a role row."""
+    monkeypatch.setenv("ENVIRONMENT", "test")
+    discord_guild_id = 555666777888999
+
+    session = FakeSession()
+    guild = Guild(discord_guild_id=discord_guild_id, name="Server", status=GuildStatus.ACTIVE)
+    guild.id = uuid.uuid4()
+    session.store[Guild].append(guild)
+    monkeypatch.setattr(auth_router, "SessionLocal", lambda: session)
+    monkeypatch.setattr(
+        _MockDiscordClient, "guilds", [_discord_guild_payload(discord_guild_id, admin=True)]
+    )
+    monkeypatch.setattr(httpx, "AsyncClient", _MockDiscordClient)
+
+    state = "state-admin-sync"
+    auth_router._remember_state(state)
+    result = await auth_router.callback(
+        request=_FakeRequest({auth_router._STATE_COOKIE: state}),
+        response=_FakeResponse(),
+        code="auth-code",
+        state=state,
+        settings=get_settings(),
+    )
+
+    role_rows = session.store[UserGuildRole]
+    assert [r.role for r in role_rows] == [UserGuildRoleName.GUILD_ADMIN]
+    assert str(role_rows[0].guild_id) == str(guild.id)
+
+    # ...and the token minted by THIS login already carries it, so the admin does
+    # not have to sign in a second time for the role to take effect.
+    tokens = dict(parse_qsl(result.headers["location"].partition("#")[2]))
+    claims = verify_access_token(tokens["access_token"])
+    assert claims.guild_id == str(guild.id)
+    assert claims.roles == ("guild_admin",)
+
+
+@pytest.mark.asyncio
+async def test_callback_revokes_guild_admin_once_discord_takes_it_away(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The row is a cache of Discord's bit, not a durable grant — losing the
+    permission on Discord loses it here at the next login."""
+    monkeypatch.setenv("ENVIRONMENT", "test")
+    discord_guild_id = 555666777888999
+
+    session = FakeSession()
+    guild = Guild(discord_guild_id=discord_guild_id, name="Server", status=GuildStatus.ACTIVE)
+    guild.id = uuid.uuid4()
+    session.store[Guild].append(guild)
+    user = User(discord_user_id=123456789012345678, display_name="tester")
+    user.id = uuid.uuid4()
+    session.store[User].append(user)
+    session.store[UserGuildRole].append(
+        UserGuildRole(user_id=user.id, guild_id=guild.id, role=UserGuildRoleName.GUILD_ADMIN)
+    )
+    monkeypatch.setattr(auth_router, "SessionLocal", lambda: session)
+    monkeypatch.setattr(
+        _MockDiscordClient, "guilds", [_discord_guild_payload(discord_guild_id, admin=False)]
+    )
+    monkeypatch.setattr(httpx, "AsyncClient", _MockDiscordClient)
+
+    state = "state-admin-revoke"
+    auth_router._remember_state(state)
+    await auth_router.callback(
+        request=_FakeRequest({auth_router._STATE_COOKIE: state}),
+        response=_FakeResponse(),
+        code="auth-code",
+        state=state,
+        settings=get_settings(),
+    )
+
+    assert session.store[UserGuildRole] == []
+
+
+@pytest.mark.asyncio
+async def test_callback_survives_a_discord_guild_list_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The guild list is best effort: a token minted before the ``guilds`` scope
+    (403) must still log the user in with whatever roles they already hold."""
+    monkeypatch.setenv("ENVIRONMENT", "test")
+
+    class _NoGuildScopeClient(_MockDiscordClient):
+        async def get(self, url: str, **kwargs: Any) -> Any:
+            if url.endswith("/guilds"):
+                return _MockResponse(403, {"message": "Missing Access"})
+            return await super().get(url, **kwargs)
+
+    session = FakeSession()
+    monkeypatch.setattr(auth_router, "SessionLocal", lambda: session)
+    monkeypatch.setattr(httpx, "AsyncClient", _NoGuildScopeClient)
+
+    state = "state-no-scope"
+    auth_router._remember_state(state)
+    result = await auth_router.callback(
+        request=_FakeRequest({auth_router._STATE_COOKIE: state}),
+        response=_FakeResponse(),
+        code="auth-code",
+        state=state,
+        settings=get_settings(),
+    )
+
+    assert result.status_code == 303
+    assert session.store[User][0].discord_user_id == 123456789012345678
+    assert session.store[UserGuildRole] == []
 
 
 @pytest.mark.asyncio

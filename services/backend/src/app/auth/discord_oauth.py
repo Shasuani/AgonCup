@@ -214,6 +214,10 @@ async def fetch_user_guilds(
 
     guilds: list[DiscordGuild] = []
     for entry in resp.json():
+        # Login now calls this to sync guild_admin roles, so an unexpected payload
+        # shape must degrade to "no guilds", never raise into the login path.
+        if not isinstance(entry, dict):
+            continue
         raw_id = entry.get("id")
         if raw_id is None:
             continue

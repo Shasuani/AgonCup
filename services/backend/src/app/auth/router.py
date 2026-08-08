@@ -6,9 +6,11 @@ Endpoints
                             ``state``) and redirect the browser to it.
 * ``GET  /auth/callback`` — validate ``state``, exchange ``code`` for Discord
                             tokens, fetch the Discord user, upsert our ``User``,
-                            store the ENCRYPTED OAuth credential, issue our own
-                            access JWT + rotating refresh token, then **303 back
-                            to the SPA** with the pair in the URL fragment.
+                            store the ENCRYPTED OAuth credential, **sync the
+                            ``guild_admin`` role rows against Discord's live
+                            ADMINISTRATOR bit**, issue our own access JWT +
+                            rotating refresh token, then **303 back to the SPA**
+                            with the pair in the URL fragment.
 * ``POST /auth/refresh``  — rotate a refresh token (reuse-detection revokes the
                             family) and mint a fresh access JWT.
 * ``POST /auth/logout``   — revoke the presented refresh token.
@@ -54,6 +56,7 @@ from app.auth.tokens import (
 )
 from app.config import Settings, get_settings
 from app.db import SessionLocal
+from app.guilds import service as guilds_service
 from app.logging import get_logger
 from app.models import Guild, OAuthCredential, RiotAccount, User, UserGuildRole, VerificationAttempt
 from app.ratelimit import FixedWindowLimiter
@@ -393,6 +396,17 @@ async def callback(
                 status_code=status.HTTP_502_BAD_GATEWAY, detail="discord oauth failed"
             ) from exc
 
+        # Best effort: the guild list drives the guild_admin sync below. A token
+        # minted before the `guilds` scope (or a Discord blip) must NOT break
+        # login — the user simply keeps whatever roles they already had.
+        try:
+            discord_guilds = await discord_oauth.fetch_user_guilds(
+                tokens.access_token, client=client
+            )
+        except (discord_oauth.DiscordOAuthError, httpx.HTTPError) as exc:
+            log.info("discord_guilds_unavailable_at_login", error=str(exc))
+            discord_guilds = ()
+
     async with SessionLocal() as session, session.begin():
         user = (
             await session.execute(
@@ -410,6 +424,16 @@ async def callback(
             user.display_name = discord_user.username
 
         await _upsert_oauth_credential(session, user_id=str(user.id), tokens=tokens)
+        # Mirror Discord's ADMINISTRATOR bit onto durable `guild_admin` rows BEFORE
+        # minting the pair, so the very first login of a server admin already
+        # carries the role (and an acting guild) in its access token.
+        if discord_guilds:
+            await guilds_service.sync_discord_admin_roles(
+                session,
+                user_id=user.id,
+                admin_discord_guild_ids=[g.discord_guild_id for g in discord_guilds if g.is_admin],
+                member_discord_guild_ids=[g.discord_guild_id for g in discord_guilds],
+            )
         pair = await _issue_pair(session, str(user.id), settings)
 
     log.info("auth_login_success", user_id=str(user.id))

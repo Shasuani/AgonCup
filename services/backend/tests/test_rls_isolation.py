@@ -28,6 +28,8 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from tests.dbseed import clean_seed_rows
+
 pytestmark = [
     pytest.mark.skipif(
         os.environ.get("LOL_DB_TESTS") != "1",
@@ -40,6 +42,12 @@ OWNER_URL = os.environ.get("OWNER_DATABASE_URL", "postgresql+asyncpg://lol:lol@l
 APP_URL = os.environ.get(
     "APP_DATABASE_URL", "postgresql+asyncpg://app_rw:app_rw@localhost:5432/lol"
 )
+
+
+@pytest.fixture(autouse=True)
+async def _clean_seed_rows() -> None:
+    """Make the committed seeds re-runnable against a persistent dev database."""
+    await clean_seed_rows(OWNER_URL)
 
 
 async def _make_guild_with_team(owner_conn, discord_id: int) -> tuple[uuid.UUID, uuid.UUID]:

@@ -1,0 +1,60 @@
+/* Teams screen — table cells that carry a name AND its id.
+ *
+ * Mirrors the audit log's actor/entity cells (AuditLogScreen.css): the human
+ * name reads as the row's content, the copyable id sits under it as metadata.
+ * Kept here rather than in global.css because it is cell layout, not a token. */
+
+[data-team-name] {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+[data-roster-member] {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+}
+
+[data-member-name] {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+/* Roster size in the list — a count, not a sentence, so it stays scannable. */
+[data-member-count] {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------- inline (expanded) roster */
+/* Shown inside the expanded row. A plain list, not a nested table: a table
+   inside a table cell fights the parent's column widths and reads as a second
+   dataset rather than as this row's detail. */
+[data-roster-inline] {
+  list-style: none;
+  margin: 0;
+  padding: var(--space-3) 0 var(--space-1);
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--space-2);
+}
+
+[data-roster-inline-item] {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 8px var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+[data-roster-inline-status] {
+  margin: 0;
+  padding: var(--space-3) 0;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}

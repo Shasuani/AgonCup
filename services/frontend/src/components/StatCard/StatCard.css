@@ -18,15 +18,31 @@
    Card
    ------------------------------------------------------------------------- */
 [data-statcard] {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  min-height: 112px;
-  background: var(--surface);
+  min-height: 118px;
+  /* Same lit-panel recipe as tables and content cards, plus the overflow guard
+     the accent rule below needs. */
+  background: var(--elevate), var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
+  box-shadow: inset 0 1px 0 var(--hairline), var(--shadow-sm);
   padding: 20px;
   color: var(--text);
+  overflow: hidden;
+}
+
+/* A hairline of brand color along the top edge. Cards were pure grey, so the
+   KPI row — the first thing on the dashboard — carried none of the product. */
+[data-statcard]::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 2px;
+  background: var(--brand-gradient);
+  opacity: 0.55;
 }
 
 /* Link variant: same surface, but interactive affordances. */
@@ -38,10 +54,14 @@ a[data-statcard-link] {
 }
 
 a[data-statcard-link]:hover {
-  border-color: rgba(109, 92, 246, 0.5);
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-sm);
+  border-color: var(--primary-line);
+  transform: translateY(-2px);
+  box-shadow: inset 0 1px 0 var(--hairline), var(--shadow-md);
   text-decoration: none;
+}
+
+a[data-statcard-link]:hover::before {
+  opacity: 1;
 }
 
 a[data-statcard-link]:focus-visible {
@@ -76,13 +96,14 @@ a[data-statcard-link]:focus-visible {
   flex: none;
   border-radius: var(--radius-md);
   color: var(--accent);
-  background: var(--surface-alt);
-  border: 1px solid var(--border);
+  background: var(--primary-soft);
+  border: 1px solid var(--primary-line);
 }
 
 /* On a link card, lift the icon chip toward the brand color on hover. */
 a[data-statcard-link]:hover [data-statcard-icon] {
-  border-color: rgba(109, 92, 246, 0.4);
+  background: var(--primary-soft);
+  border-color: var(--primary);
 }
 
 /* -------------------------------------------------------------------------
@@ -96,11 +117,12 @@ a[data-statcard-link]:hover [data-statcard-icon] {
   margin-top: auto;
 }
 
+/* The number is the point of the card — give it real size. */
 [data-statcard-value] {
-  font-size: 1.75rem;
-  line-height: 1.1;
+  font-size: 2.125rem;
+  line-height: 1.05;
   font-weight: 700;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.03em;
   font-variant-numeric: tabular-nums;
   color: var(--text);
 }

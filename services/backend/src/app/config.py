@@ -89,10 +89,24 @@ class Settings(BaseSettings):
         description="Refresh-token lifetime (~30d). Stored HASHED + rotated on use.",
     )
 
+    refresh_rotation_grace_seconds: int = Field(
+        default=15,
+        description=(
+            "Leeway during which re-presenting a JUST-rotated refresh token is "
+            "treated as a benign race (two tabs, a retried request) rather than "
+            "theft. Outside it, reuse still burns the family. 0 disables."
+        ),
+    )
+
     @property
     def jwt_access_ttl(self) -> timedelta:
         """Access-token lifetime as a timedelta."""
         return timedelta(seconds=self.jwt_access_ttl_seconds)
+
+    @property
+    def refresh_rotation_grace(self) -> timedelta:
+        """Rotation-race leeway as a timedelta."""
+        return timedelta(seconds=self.refresh_rotation_grace_seconds)
 
     @property
     def jwt_refresh_ttl(self) -> timedelta:

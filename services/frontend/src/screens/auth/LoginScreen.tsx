@@ -52,29 +52,34 @@ export default function LoginScreen(): JSX.Element {
 
   return (
     <main aria-labelledby="login-heading" data-login>
-      <h1 id="login-heading">LeagueOfLeagues — Admin</h1>
-      <p>Sign in with Discord to manage tournaments, teams, and disputes.</p>
-      <Button variant="primary" onClick={login}>
-        Sign in with Discord
-      </Button>
+      <div data-login-card>
+        <h1 id="login-heading">LeagueOfLeagues</h1>
+        <p data-login-tagline>Tournament Operations Console</p>
+        <p data-login-copy>
+          Sign in with Discord to manage tournaments, teams, and disputes.
+        </p>
+        <Button variant="primary" onClick={login} data-login-cta>
+          Sign in with Discord
+        </Button>
 
-      {import.meta.env.DEV && (
-        <div data-dev-login style={{ marginTop: "1.5rem", opacity: 0.85 }}>
-          <hr />
-          <p>
-            <strong>Local development</strong> — no Discord app configured. Mint a
-            platform-operator session:
-          </p>
-          <Button onClick={devLogin} disabled={busy}>
-            {busy ? "Signing in…" : "Dev login (local only)"}
-          </Button>
-          {error && (
-            <p role="alert" data-dev-login-error>
-              {error}
+        {/* Stripped from production builds — import.meta.env.DEV is a compile
+            time constant, so the whole block is dead code in a release bundle. */}
+        {import.meta.env.DEV && (
+          <div data-dev-login>
+            <p data-dev-login-note>
+              <strong>Local development</strong> — no Discord app configured.
             </p>
-          )}
-        </div>
-      )}
+            <Button onClick={devLogin} disabled={busy}>
+              {busy ? "Signing in…" : "Dev login (local only)"}
+            </Button>
+            {error && (
+              <p role="alert" data-dev-login-error>
+                {error}
+              </p>
+            )}
+          </div>
+        )}
+      </div>
     </main>
   );
 }

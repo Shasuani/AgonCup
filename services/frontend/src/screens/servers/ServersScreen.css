@@ -16,11 +16,22 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
-  padding: var(--space-4);
-  background: var(--surface);
+  padding: var(--space-4) var(--space-5);
+  /* Same lit-panel recipe as tables and content cards. */
+  background: var(--elevate), var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-xs);
+  border-radius: var(--radius-lg);
+  box-shadow: inset 0 1px 0 var(--hairline), var(--shadow-sm);
+  transition: border-color 120ms ease, transform 120ms ease;
+}
+
+[data-server-card]:hover {
+  border-color: var(--border-strong);
+}
+
+/* An installed server is the one you act on — mark it without shouting. */
+[data-server-card][data-installed="true"] {
+  border-color: var(--primary-line);
 }
 
 [data-server-identity] {

@@ -29,16 +29,20 @@
   flex-direction: column;
   gap: var(--space-4);
   padding: var(--space-4) var(--space-3);
-  background: var(--surface);
-  border-right: 1px solid var(--border);
+  /* Slightly darker than the content column, with a faint brand wash at the
+     top. A sidebar the same flat color as everything else reads as a list of
+     links floating in nothing. */
+  background:
+    linear-gradient(180deg, rgba(109, 92, 246, 0.06), transparent 220px),
+    var(--surface-sunken);
+  border-right: 1px solid var(--border-subtle);
   overflow-y: auto;
 }
 
 [data-app-sidebar-head] {
   display: flex;
   align-items: center;
-  padding: var(--space-2) var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--border);
+  padding: var(--space-2) var(--space-2) var(--space-4);
 }
 
 [data-brand] {
@@ -77,9 +81,13 @@
 }
 
 [data-app-sidebar] nav[aria-label="Primary"] a {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--space-3);
+  /* 34px tall targets rather than 28px — a nav rail of thin rows reads cheap
+     and is a smaller pointer target than it should be. */
+  min-height: 34px;
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-md);
   color: var(--text-muted);
@@ -106,14 +114,31 @@
   color: var(--text);
 }
 
+/* Active item: a brand tint plus a rounded accent bar on the leading edge.
+   The old inset box-shadow drew a hard 2px line into the rounded corner, which
+   looked like a rendering artefact rather than a selection. */
 [data-app-sidebar] nav[aria-label="Primary"] a.active {
   color: var(--text);
-  background: var(--surface-alt);
-  box-shadow: inset 2px 0 0 var(--primary);
+  font-weight: 600;
+  background: var(--primary-soft);
+  box-shadow: inset 0 0 0 1px var(--primary-line);
+}
+
+[data-app-sidebar] nav[aria-label="Primary"] a.active::before {
+  content: "";
+  position: absolute;
+  /* Sits in the sidebar's own padding gutter, just inside its left edge. */
+  left: calc(var(--space-3) * -1 + 2px);
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 18px;
+  border-radius: var(--radius-pill);
+  background: var(--brand-gradient);
 }
 
 [data-app-sidebar] nav[aria-label="Primary"] a.active svg {
-  color: var(--primary);
+  color: var(--accent);
 }
 
 /* -------------------------------------------------------------------------
@@ -134,12 +159,12 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
-  min-height: 56px;
+  min-height: 60px;
   padding-inline: var(--space-5);
-  background: rgba(17, 19, 25, 0.85);
-  -webkit-backdrop-filter: blur(12px);
-  backdrop-filter: blur(12px);
-  border-bottom: 1px solid var(--border);
+  background: rgba(12, 13, 18, 0.72);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  backdrop-filter: blur(16px) saturate(140%);
+  border-bottom: 1px solid var(--border-subtle);
   flex-wrap: nowrap;
 }
 
@@ -150,23 +175,30 @@
   min-width: 0;
 }
 
-/* Hamburger hidden on desktop. */
-[data-app-hamburger] {
-  display: none;
-  align-items: center;
-  justify-content: center;
-  padding-inline: var(--space-2);
-}
-
 [data-app-header-actions] {
   display: flex;
   align-items: center;
   gap: var(--space-2);
 }
 
-/* Command palette trigger. */
+/* Header controls run one size down from the page's 36px controls, so the
+   topbar stays a bar rather than becoming a second toolbar. */
 [data-command-trigger] {
+  min-height: var(--control-h-sm);
   gap: var(--space-2);
+}
+
+/* The palette trigger is a search affordance, not a button — round it off and
+   let it read as an input the way ⌘K bars do everywhere else. */
+[data-command-trigger] {
+  border-radius: var(--radius-pill);
+  padding-inline: var(--space-3);
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+[data-command-trigger]:hover:not(:disabled) {
+  color: var(--text);
 }
 
 [data-command-trigger-kbd] {
@@ -191,70 +223,78 @@
   flex: 1 0 auto;
 }
 
-/* Scrim is inert on desktop. */
-[data-app-scrim] {
-  display: none;
-}
-
 /* -------------------------------------------------------------------------
-   Mobile drawer (< 900px)
-   ------------------------------------------------------------------------- */
+   Narrow layout (< 900px)
+   -------------------------------------------------------------------------
+   There is no drawer. The off-canvas sidebar + hamburger were removed: the
+   button was invisible on desktop and the whole mechanism (focus trap, inert
+   toggling, scrim, Escape handling) existed to serve one breakpoint. Below
+   900px the sidebar simply stops being a column and becomes a horizontal,
+   scrollable nav strip above the content — always visible, nothing to open,
+   nothing to trap focus in. */
 @media (max-width: 899px) {
   [data-app-shell] {
     grid-template-columns: 1fr;
   }
 
-  [data-app-hamburger] {
-    display: inline-flex;
-  }
-
-  /* Hide non-essential header actions labels to save room. */
+  /* Hide non-essential header action labels to save room. */
   [data-command-trigger-label],
   [data-command-trigger-kbd] {
     display: none;
   }
 
-  /* Off-canvas sidebar drawer. When closed, it is taken out of the tab order
-     (visibility:hidden) so its off-screen nav links are not keyboard-focusable;
-     AppLayout.tsx also applies `inert` imperatively. The transform still drives
-     the slide animation because visibility flips instantly on open/close. */
   [data-app-sidebar] {
-    position: fixed;
-    top: 0;
-    left: 0;
-    bottom: 0;
-    z-index: 55;
-    width: min(280px, 82vw);
-    height: 100vh;
-    transform: translateX(-100%);
-    visibility: hidden;
-    transition: transform 180ms ease, visibility 0s linear 180ms;
-    box-shadow: var(--shadow-lg);
+    position: static;
+    height: auto;
+    flex-direction: row;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    border-right: 0;
+    border-bottom: 1px solid var(--border-subtle);
+    overflow-x: auto;
+    overflow-y: hidden;
   }
 
-  [data-app-shell][data-drawer-open] [data-app-sidebar] {
-    transform: translateX(0);
-    visibility: visible;
-    transition: transform 180ms ease, visibility 0s linear 0s;
+  [data-app-sidebar-head] {
+    padding: 0;
+    flex: none;
   }
 
-  /* Scrim. */
-  [data-app-scrim] {
+  /* The wordmark is too wide for a horizontal strip; show the square mark. */
+  [data-brand-logo] {
+    display: none;
+  }
+
+  [data-brand-mark] {
     display: block;
-    position: fixed;
-    inset: 0;
-    z-index: 50;
-    background: rgba(6, 7, 11, 0.6);
-    -webkit-backdrop-filter: blur(2px);
-    backdrop-filter: blur(2px);
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 180ms ease;
+    height: 26px;
+    width: auto;
+    color: var(--text);
   }
 
-  [data-app-shell][data-drawer-open] [data-app-scrim] {
-    opacity: 1;
-    pointer-events: auto;
+  [data-app-sidebar] nav[aria-label="Primary"] {
+    min-width: 0;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  [data-app-sidebar] nav[aria-label="Primary"] ul {
+    flex-direction: row;
+    flex-wrap: nowrap;
+    gap: var(--space-1);
+  }
+
+  /* The leading accent bar assumed a vertical rail; underline the active tab
+     instead so it reads correctly in a horizontal strip. */
+  [data-app-sidebar] nav[aria-label="Primary"] a.active::before {
+    left: var(--space-3);
+    right: var(--space-3);
+    top: auto;
+    bottom: 2px;
+    width: auto;
+    height: 2px;
+    transform: none;
   }
 }
 
@@ -270,8 +310,7 @@
 
 /* Respect reduced motion (global block also covers transition durations). */
 @media (prefers-reduced-motion: reduce) {
-  [data-app-sidebar],
-  [data-app-scrim] {
+  [data-app-sidebar] {
     transition: none !important;
   }
 }

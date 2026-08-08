@@ -25,7 +25,7 @@ import { useApi } from "../../api/ApiProvider";
 import { useAsyncData } from "../../api/useAsync";
 import { useAuth, sessionFromTokenPair } from "../../auth/AuthProvider";
 import { useActingGuild } from "../../auth/ActingGuildProvider";
-import { Button, ErrorBanner, Spinner, EmptyState } from "../../components";
+import { Button, ErrorBanner, Spinner, EmptyState, ScreenHeader } from "../../components";
 import { useToast } from "../../components/Toast";
 
 import "./ServersScreen.css";
@@ -73,18 +73,16 @@ export default function ServersScreen(): JSX.Element {
 
   return (
     <section aria-labelledby="servers-heading">
-      <div data-screen-header>
-        <div>
-          <h1 id="servers-heading">Your Discord servers</h1>
-          <p data-screen-intro>
-            Servers where you are an administrator. Add the bot to one to start
-            running tournaments there.
-          </p>
-        </div>
-        <Button variant="secondary" onClick={guilds.reload} disabled={guilds.loading}>
-          {guilds.loading ? "Refreshing…" : "Refresh"}
-        </Button>
-      </div>
+      <ScreenHeader
+        id="servers-heading"
+        title="Your Discord servers"
+        intro="Servers where you are an administrator. Add the bot to one to start running tournaments there."
+        actions={
+          <Button variant="secondary" onClick={guilds.reload} disabled={guilds.loading}>
+            {guilds.loading ? "Refreshing…" : "Refresh"}
+          </Button>
+        }
+      />
 
       <ErrorBanner error={guilds.error} />
 
@@ -113,7 +111,7 @@ function ServerCard({ guild, onChanged }: ServerCardProps): JSX.Element {
   const api = useApi();
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { getRefreshToken, setSession } = useAuth();
+  const { setSession } = useAuth();
   const { setActingGuild } = useActingGuild();
   const [busy, setBusy] = useState(false);
 
@@ -130,11 +128,10 @@ function ServerCard({ guild, onChanged }: ServerCardProps): JSX.Element {
   const confirmInstalled = useCallback(async () => {
     setBusy(true);
     try {
-      const refreshToken = getRefreshToken();
-      if (refreshToken) {
-        const pair: TokenPair = await api.auth.refresh({ refresh_token: refreshToken });
-        setSession(sessionFromTokenPair(pair));
-      }
+      // No token to pass: the browser attaches the HttpOnly session cookie and
+      // the backend rotates from that.
+      const pair: TokenPair = await api.auth.refresh({});
+      setSession(sessionFromTokenPair(pair));
       onChanged();
     } catch {
       // A failed rotation is not fatal here — reloading the list still shows
@@ -143,7 +140,7 @@ function ServerCard({ guild, onChanged }: ServerCardProps): JSX.Element {
     } finally {
       setBusy(false);
     }
-  }, [api, getRefreshToken, setSession, onChanged]);
+  }, [api, setSession, onChanged]);
 
   /** Switch the app's tenant to this server and go run something. */
   const manage = useCallback(() => {

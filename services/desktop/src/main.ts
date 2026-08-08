@@ -82,6 +82,13 @@ import { LcuStatusPoller, type LcuStatus } from "./lcu/statusPoller.js";
 /** Default heartbeat cadence while pre-game/in-game (PLAN.md §3.6.1 ~2-3s). */
 const DEFAULT_HEARTBEAT_MS = 2_500;
 
+/** How long to wait before re-opening sockets a 4401 closed while the backend
+ * was unreachable. Long enough that a restarting backend is usually back, short
+ * enough that a live match reconnects without the player noticing. Exported so
+ * a test can tell this timer apart from the controller's heartbeat, which shares
+ * the injected scheduler. */
+export const AUTH_RETRY_MS = 10_000;
+
 /** Build the LCU adapter with writes disabled by default (opt-in per session). */
 export function createLcuAdapter(): LcuAdapter {
   const config: LcuAdapterConfig = {
@@ -125,6 +132,41 @@ export interface SessionStore {
 }
 
 /**
+ * Why a silent refresh produced no session.
+ *
+ * The distinction is the entire point of this type. ONLY the server can declare
+ * the stored credential dead, and it says so with a 401. Everything else — the
+ * backend restarting, a dropped wifi link, a 429, a 502 from the proxy — means
+ * "ask again later". Collapsing the two is what made a client that was offline
+ * for ten seconds throw away a perfectly good refresh token and demand a fresh
+ * pairing code from the bot.
+ */
+export type RefreshFailure = "expired" | "unavailable";
+
+/** Outcome of a silent refresh: rotated, or why not. */
+export type RefreshOutcome =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: RefreshFailure };
+
+/** What {@link DesktopRuntime}'s silent-refresh hook resolves with. */
+export type RefreshAuthResult =
+  | { readonly ok: true; readonly token: string }
+  | { readonly ok: false; readonly reason: RefreshFailure };
+
+/**
+ * Classify a `/auth/refresh` failure status.
+ *
+ * `status: 0` is this client's own "never reached the backend"; 429/5xx are the
+ * backend declining to answer right now; only 401 is the backend saying the
+ * token is expired, revoked, or reuse-detected. Unknown statuses default to
+ * `unavailable` on purpose — retrying a genuinely dead token costs one wasted
+ * request, while discarding a live one costs the user a trip to Discord.
+ */
+export function refreshFailureReason(status: number): RefreshFailure {
+  return status === 401 ? "expired" : "unavailable";
+}
+
+/**
  * The signed-in desktop session: holds the access + rotating refresh tokens and
  * is the SINGLE source of truth for the access token used by both the realtime
  * transports (via a token provider) and the authenticated `verify-lcu` call.
@@ -137,6 +179,9 @@ export class DesktopSession {
   #user: PairedUser | null;
   readonly #store: SessionStore;
   readonly #refresh: (refreshToken: string) => Promise<RefreshResult>;
+  readonly #onWarn: (event: string, detail: Record<string, unknown>) => void;
+  /** The in-flight rotation, shared by every concurrent caller (see refresh). */
+  #inFlight: Promise<RefreshOutcome> | null = null;
 
   constructor(args: {
     accessToken: string;
@@ -144,12 +189,14 @@ export class DesktopSession {
     store: SessionStore;
     refreshSession: (refreshToken: string) => Promise<RefreshResult>;
     user?: PairedUser | null;
+    onWarn?: (event: string, detail: Record<string, unknown>) => void;
   }) {
     this.#accessToken = args.accessToken;
     this.#refreshToken = args.refreshToken;
     this.#store = args.store;
     this.#refresh = args.refreshSession;
     this.#user = args.user ?? null;
+    this.#onWarn = args.onWarn ?? ((): void => {});
   }
 
   get accessToken(): string {
@@ -161,22 +208,56 @@ export class DesktopSession {
   }
 
   /**
-   * Silently rotate the session. On success updates the in-memory tokens and
-   * PERSISTS the rotated refresh token (every refresh persists). Returns false
-   * (without clearing) when the refresh token is expired/revoked/reused — the
-   * caller drops to the pairing screen.
+   * Silently rotate the session, COALESCED: concurrent callers share one
+   * in-flight rotation.
+   *
+   * Coalescing is not an optimisation here. Rotation spends the presented token,
+   * so a second request carrying the same one looks exactly like a stolen token
+   * being replayed — and the server's answer to that is to revoke the whole
+   * family. The renderer fires several authenticated IPC calls at once (teams +
+   * tournaments + presence on one screen), so an expired access token produces
+   * precisely that burst of simultaneous 401s.
+   *
+   * Never clears the store: only the CALLER knows whether a failure warrants
+   * dropping to the pairing screen, and {@link RefreshOutcome} tells it which
+   * kind of failure it was.
    */
-  async refresh(): Promise<boolean> {
+  async refresh(): Promise<RefreshOutcome> {
+    if (this.#inFlight !== null) {
+      return this.#inFlight;
+    }
+    const attempt = this.#rotate().finally(() => {
+      this.#inFlight = null;
+    });
+    this.#inFlight = attempt;
+    return attempt;
+  }
+
+  /** The actual rotation, wrapped by {@link refresh}'s coalescing. */
+  async #rotate(): Promise<RefreshOutcome> {
     const res = await this.#refresh(this.#refreshToken);
     if (!res.ok) {
-      return false;
+      return { ok: false, reason: refreshFailureReason(res.status) };
     }
     this.#accessToken = res.accessToken;
     this.#refreshToken = res.refreshToken;
-    // Re-persist the cached user alongside the rotated token; otherwise a refresh
-    // would overwrite the stored blob and blank the paired name on the next boot.
-    await this.#store.save({ refreshToken: res.refreshToken, user: this.#user });
-    return true;
+    try {
+      // Re-persist the cached user alongside the rotated token; otherwise a
+      // refresh would overwrite the stored blob and blank the paired name on the
+      // next boot.
+      await this.#store.save({ refreshToken: res.refreshToken, user: this.#user });
+    } catch (err) {
+      // The rotation SUCCEEDED; only persistence failed (no OS keychain). The
+      // in-memory session is live and usable, so throwing here would discard a
+      // working session over a next-boot problem — and, because this runs inside
+      // an IPC handler, surface as an opaque renderer error rather than anything
+      // the user could act on.
+      this.#onWarn("secure_store_unavailable", {
+        hint: "rotated token not persisted; session is live until the app closes",
+        detail: String(err),
+      });
+    }
+    return { ok: true };
   }
 }
 
@@ -199,13 +280,23 @@ export type BootDecision =
        * refresh response carries none), so the UI can show the name pre-re-pair. */
       readonly user: PairedUser | null;
     }
-  | { readonly kind: "needs-pairing" };
+  | { readonly kind: "needs-pairing" }
+  | {
+      /** We hold a token but could not reach the backend to rotate it. The token
+       * is KEPT and the app retries; the user is not asked to re-pair. */
+      readonly kind: "unavailable";
+      readonly user: PairedUser | null;
+    };
 
 /**
  * Boot decision (replaces the old dev-login stub): if there is a stored refresh
  * token, refresh it silently and persist the ROTATED token; otherwise show the
- * pairing screen. A failed refresh (expired/revoked) clears the stored token and
- * also drops to pairing. Fully injectable — unit-tested without Electron.
+ * pairing screen. Fully injectable — unit-tested without Electron.
+ *
+ * Only a 401 clears the stored token. Clearing it on ANY failed refresh is what
+ * made the client demand a new pairing code every time it opened before the
+ * backend was up, after a wifi drop, or during a deploy: the credential was
+ * thrown away over a transient error, and only the Discord bot can mint another.
  */
 export async function decideBoot(deps: {
   store: BootStore;
@@ -217,6 +308,9 @@ export async function decideBoot(deps: {
   }
   const res = await deps.refreshSession(stored.refreshToken);
   if (!res.ok) {
+    if (refreshFailureReason(res.status) === "unavailable") {
+      return { kind: "unavailable", user: stored.user ?? null };
+    }
     await deps.store.clear();
     return { kind: "needs-pairing" };
   }
@@ -278,14 +372,14 @@ export class DesktopRuntime {
   readonly #clock: Clock;
   readonly #onWarn: (event: string, detail: Record<string, unknown>) => void;
   readonly #tokenProvider: () => string;
-  readonly #refreshAuth:
-    | (() => Promise<{ ok: true; token: string } | { ok: false }>)
-    | undefined;
+  readonly #refreshAuth: (() => Promise<RefreshAuthResult>) | undefined;
   readonly #onAuthLost: (() => void) | undefined;
   /** One controller + transport per live match, keyed by matchId. */
   readonly #matches = new Map<string, MatchEntry>();
   /** Coalesces concurrent 4401-driven refreshes into one in-flight attempt. */
-  #authRefresh: Promise<boolean> | null = null;
+  #authRefresh: Promise<RefreshAuthResult> | null = null;
+  /** Cancels the pending "backend was unreachable, try the sockets again" timer. */
+  #authRetryCancel: (() => void) | null = null;
 
   constructor(args: {
     adapter: LcuAdapter;
@@ -296,8 +390,9 @@ export class DesktopRuntime {
     clock?: Clock;
     onWarn?: (event: string, detail: Record<string, unknown>) => void;
     /** Silent-refresh hook invoked on a WS 4401; returns the rotated token. */
-    refreshAuth?: () => Promise<{ ok: true; token: string } | { ok: false }>;
-    /** Invoked when a refresh fails (the app must show the pairing screen). */
+    refreshAuth?: () => Promise<RefreshAuthResult>;
+    /** Invoked when the credential is DEAD (the app must show the pairing
+     * screen). Never fired for a merely-unreachable backend. */
     onAuthLost?: () => void;
   }) {
     this.#adapter = args.adapter;
@@ -372,6 +467,8 @@ export class DesktopRuntime {
 
   /** Tear down everything (app shutdown). */
   shutdown(): void {
+    this.#authRetryCancel?.();
+    this.#authRetryCancel = null;
     for (const matchId of [...this.#matches.keys()]) {
       this.onMatchEnded(matchId);
     }
@@ -385,7 +482,13 @@ export class DesktopRuntime {
   /**
    * Handle a WS auth-rejection: silently refresh ONCE (coalesced across all
    * transports that just got 4401'd) then reconnect every transport with the
-   * rotated token. If refresh fails, surface auth-lost so the app re-pairs.
+   * rotated token.
+   *
+   * Only an EXPIRED credential surfaces auth-lost. A 4401 during a backend
+   * restart used to tear the whole session down and drop the user on the pairing
+   * screen mid-tournament; now it warns and lets each transport's own backed-off
+   * reconnect (it schedules one after every 4401 close) try again at a paced
+   * interval, by which time the backend is usually back.
    */
   async #handleAuthRejected(): Promise<void> {
     if (this.#refreshAuth === undefined) {
@@ -393,25 +496,54 @@ export class DesktopRuntime {
       return;
     }
     if (this.#authRefresh === null) {
-      const refreshAuth = this.#refreshAuth;
-      this.#authRefresh = (async () => {
-        const res = await refreshAuth();
-        return res.ok;
-      })();
+      this.#authRefresh = this.#refreshAuth();
     }
-    let ok = false;
+    let res: RefreshAuthResult;
     try {
-      ok = await this.#authRefresh;
+      res = await this.#authRefresh;
     } finally {
       this.#authRefresh = null;
     }
-    if (ok) {
+    if (res.ok) {
       for (const entry of this.#matches.values()) {
         entry.transport.reconnect();
       }
-    } else {
-      this.#onAuthLost?.();
+      return;
     }
+    if (res.reason === "expired") {
+      this.#onAuthLost?.();
+      return;
+    }
+    this.#onWarn("auth_refresh_unavailable", {
+      hint: "backend unreachable; session kept, retrying the sockets",
+      retryInMs: AUTH_RETRY_MS,
+    });
+    this.#scheduleAuthRetry();
+  }
+
+  /**
+   * Re-open the transports after an unreachable-backend refresh.
+   *
+   * The transport deliberately does NOT auto-reconnect on a 4401 (retrying with
+   * a token the server just rejected is pointless), so nothing else will ever
+   * bring these sockets back — leaving the session technically alive but
+   * permanently mute. This paces the retry ourselves: one pending attempt at a
+   * time, however many matches were rejected together. If the backend is still
+   * down, the reconnect 4401s again and lands right back here, so the interval
+   * is the retry loop.
+   */
+  #scheduleAuthRetry(): void {
+    if (this.#authRetryCancel !== null) {
+      return;
+    }
+    const cancel = this.#scheduler.every(AUTH_RETRY_MS, () => {
+      this.#authRetryCancel?.();
+      this.#authRetryCancel = null;
+      for (const entry of this.#matches.values()) {
+        entry.transport.reconnect();
+      }
+    });
+    this.#authRetryCancel = cancel;
   }
 }
 
@@ -471,9 +603,32 @@ async function bootstrap(): Promise<void> {
   let session: DesktopSession | null = null;
   let runtime: DesktopRuntime | null = null;
   let mainWindow: import("electron").BrowserWindow | null = null;
+  /** What the renderer should show while `session` is null. "unavailable" means
+   * we still HOLD a credential and are retrying — not that the user must re-pair. */
+  let signedOutReason: "needs-pairing" | "unavailable" = "needs-pairing";
+  /** Paired-user summary to show while unavailable (restored from the store). */
+  let cachedUser: PairedUser | null = null;
 
   const sendToRenderer = (channel: string, payload: unknown): void => {
     mainWindow?.webContents.send(channel, payload);
+  };
+
+  /**
+   * Tear the session down because the CREDENTIAL IS DEAD (a 401 from
+   * `/auth/refresh`). Also wipes the stored token: it can only ever 401 again,
+   * and leaving it behind means the next boot spends a request rediscovering
+   * that. Never call this for a transient failure — that is the bug this whole
+   * change exists to fix.
+   */
+  const dropSession = (): void => {
+    session = null;
+    runtime?.shutdown();
+    runtime = null;
+    signedOutReason = "needs-pairing";
+    cachedUser = null;
+    void store.clear();
+    sendToRenderer("lol:auth-lost", {});
+    log("auth_lost", { hint: "refresh returned 401; show pairing screen" });
   };
 
   /** Build the per-process runtime once a session exists. */
@@ -491,16 +646,14 @@ async function bootstrap(): Promise<void> {
         verifiedPuuid: undefined,
       },
       onWarn: (e, d) => log(e, d),
-      refreshAuth: async () =>
-        (await active.refresh())
+      refreshAuth: async (): Promise<RefreshAuthResult> => {
+        const outcome = await active.refresh();
+        return outcome.ok
           ? { ok: true, token: active.accessToken }
-          : { ok: false },
+          : { ok: false, reason: outcome.reason };
+      },
       onAuthLost: () => {
-        session = null;
-        runtime?.shutdown();
-        runtime = null;
-        sendToRenderer("lol:auth-lost", {});
-        log("auth_lost", { hint: "refresh failed; show pairing screen" });
+        dropSession();
       },
     });
 
@@ -514,6 +667,40 @@ async function bootstrap(): Promise<void> {
     } else {
       log("realtime_idle", { hint: "set DESKTOP_MATCH_ID (+DESKTOP_GUILD_ID) to join a match" });
     }
+  };
+
+  /**
+   * Run an authenticated backend call with the current session: on a 401,
+   * silently refresh once and retry.
+   *
+   * The two ways a refresh can fail are deliberately NOT collapsed. Only an
+   * EXPIRED credential ends the session; a backend we could not reach leaves the
+   * session exactly as it was and reports a transient failure, so a blip
+   * mid-tournament costs the user a retry instead of a new pairing code.
+   */
+  const withSession = async <T extends { ok: boolean; status?: number }>(
+    call: (accessToken: string) => Promise<T>,
+  ): Promise<T | { ok: false; status: number; detail: string }> => {
+    const active = session;
+    if (active === null) {
+      return { ok: false, status: 401, detail: "Not signed in. Enter your code first." };
+    }
+    const result = await call(active.accessToken);
+    if (result.ok || result.status !== 401) {
+      return result;
+    }
+    const outcome = await active.refresh();
+    if (outcome.ok) {
+      return call(active.accessToken);
+    }
+    if (outcome.reason === "expired") {
+      dropSession();
+      return { ok: false, status: 401, detail: "Session expired. Enter a new code to sign in." };
+    }
+    // status 0 = "never reached the backend", the same code the transport layer
+    // uses, so the renderer renders it as a connectivity problem and not as a
+    // rejected request.
+    return { ok: false, status: 0, detail: "Can't reach the server. Try again in a moment." };
   };
 
   // --- IPC bridge (preload exposes window.lol.*) ---------------------------- //
@@ -536,9 +723,13 @@ async function bootstrap(): Promise<void> {
   });
 
   // Current session state so the renderer chooses pairing vs verify on load.
+  // `status` distinguishes the two ways of being signed out: "needs-pairing"
+  // (no credential — ask for a code) from "unavailable" (we HAVE one, the
+  // backend is just unreachable — show a retry, never a code prompt).
   ipcMain.handle("lol:session-state", () => ({
     signedIn: session !== null,
-    user: session?.user ?? null,
+    user: session?.user ?? cachedUser,
+    status: session !== null ? "signed-in" : signedOutReason,
   }));
 
   // Exchange a pairing code for a session, persist the refresh token, and start.
@@ -563,7 +754,10 @@ async function bootstrap(): Promise<void> {
         store,
         refreshSession: (rt) => refreshSession(rt, { backendUrl: backendBaseUrl() }),
         user: result.user,
+        onWarn: (e, d) => log(e, d),
       });
+      signedOutReason = "needs-pairing";
+      cachedUser = result.user;
       startRuntime();
       return { ok: true, user: result.user, account: result.account };
     },
@@ -574,25 +768,18 @@ async function bootstrap(): Promise<void> {
     if (session === null) {
       return { ok: false };
     }
-    return { ok: await session.refresh() };
+    const outcome = await session.refresh();
+    if (!outcome.ok && outcome.reason === "expired") {
+      dropSession();
+    }
+    return { ok: outcome.ok };
   });
 
   // Authenticated step-2 account link (no code). On 401 refresh once + retry.
   ipcMain.handle("lol:verify", async () => {
-    if (session === null) {
-      return { ok: false, status: 401, detail: "Not signed in. Enter your code first." };
-    }
-    let result: VerifyResult = await verifyDesktop({ accessToken: session.accessToken });
-    if (!result.ok && result.status === 401) {
-      // Access token expired mid-flight: silent refresh + one retry.
-      if (await session.refresh()) {
-        result = await verifyDesktop({ accessToken: session.accessToken });
-      } else {
-        session = null;
-        sendToRenderer("lol:auth-lost", {});
-        return { ok: false, status: 401, detail: "Session expired. Enter a new code to sign in." };
-      }
-    }
+    const result: VerifyResult | { ok: false; status: number; detail: string } = await withSession(
+      (t) => verifyDesktop({ accessToken: t }),
+    );
     if (result.ok) {
       return {
         ok: true,
@@ -610,52 +797,9 @@ async function bootstrap(): Promise<void> {
   });
 
   // The signed-in user's own linked accounts (renderer shows them + "link another").
-  // Refreshes the session once on a 401, mirroring lol:verify.
-  ipcMain.handle("lol:list-accounts", async () => {
-    if (session === null) {
-      return { ok: false, status: 401, detail: "Not signed in." };
-    }
-    let result: ListAccountsResult = await listMyAccounts(
-      { accessToken: session.accessToken },
-      { backendUrl: backendBaseUrl() },
-    );
-    if (!result.ok && result.status === 401) {
-      if (await session.refresh()) {
-        result = await listMyAccounts(
-          { accessToken: session.accessToken },
-          { backendUrl: backendBaseUrl() },
-        );
-      } else {
-        session = null;
-        sendToRenderer("lol:auth-lost", {});
-        return { ok: false, status: 401, detail: "Session expired." };
-      }
-    }
-    return result;
-  });
-
-  // Run an authenticated backend call with the current session: on a 401,
-  // silently refresh once and retry (mirrors lol:verify / lol:list-accounts). An
-  // unrecoverable 401 clears the session and notifies the renderer to re-pair.
-  const withSession = async <T extends { ok: boolean; status?: number }>(
-    call: (accessToken: string) => Promise<T>,
-  ): Promise<T | { ok: false; status: number; detail: string }> => {
-    const active = session;
-    if (active === null) {
-      return { ok: false, status: 401, detail: "Not signed in." };
-    }
-    let result = await call(active.accessToken);
-    if (!result.ok && result.status === 401) {
-      if (await active.refresh()) {
-        result = await call(active.accessToken);
-      } else {
-        session = null;
-        sendToRenderer("lol:auth-lost", {});
-        return { ok: false, status: 401, detail: "Session expired." };
-      }
-    }
-    return result;
-  };
+  ipcMain.handle("lol:list-accounts", () =>
+    withSession((t) => listMyAccounts({ accessToken: t }, { backendUrl: backendBaseUrl() })),
+  );
 
   // The signed-in user's tournaments + join-by-code.
   ipcMain.handle("lol:tournaments-mine", () =>
@@ -787,6 +931,8 @@ async function bootstrap(): Promise<void> {
     session = null;
     runtime?.shutdown();
     runtime = null;
+    signedOutReason = "needs-pairing";
+    cachedUser = null;
     await store.clear();
     log("signed_out", { hint: "user cleared session; show pairing screen" });
     return { ok: true };
@@ -847,24 +993,55 @@ async function bootstrap(): Promise<void> {
   await app.whenReady();
   mainWindow = createWindow();
 
-  // Boot decision: silent refresh if we have a stored token, else pairing.
-  const decision = await decideBoot({
-    store,
-    refreshSession: (rt) => refreshSession(rt, { backendUrl: backendBaseUrl() }),
-  });
-  if (decision.kind === "signed-in") {
-    session = new DesktopSession({
-      accessToken: decision.accessToken,
-      refreshToken: decision.refreshToken,
+  // Boot decision: silent refresh if we have a stored token, else pairing. When
+  // the backend is unreachable the token is KEPT and this retries in the
+  // background — the user is never sent to Discord for a new code over a server
+  // that is merely down or not up yet.
+  const BOOT_RETRY_FIRST_MS = 5_000;
+  const BOOT_RETRY_MAX_MS = 60_000;
+
+  /** Run the boot decision; on "unavailable", schedule a backed-off retry. */
+  const attemptBoot = async (retryDelayMs: number): Promise<void> => {
+    if (session !== null) {
+      return; // The user paired by hand while we were waiting; nothing to restore.
+    }
+    const decision = await decideBoot({
       store,
       refreshSession: (rt) => refreshSession(rt, { backendUrl: backendBaseUrl() }),
-      user: decision.user,
     });
-    startRuntime();
-    log("booted_signed_in", {});
-  } else {
+    if (decision.kind === "signed-in") {
+      session = new DesktopSession({
+        accessToken: decision.accessToken,
+        refreshToken: decision.refreshToken,
+        store,
+        refreshSession: (rt) => refreshSession(rt, { backendUrl: backendBaseUrl() }),
+        user: decision.user,
+        onWarn: (e, d) => log(e, d),
+      });
+      signedOutReason = "needs-pairing";
+      cachedUser = decision.user;
+      startRuntime();
+      // Tells a renderer that is showing "reconnecting…" to load the session. On
+      // the first attempt nothing is listening yet, which is fine: the renderer
+      // reads the state itself when it mounts.
+      sendToRenderer("lol:session-restored", { user: decision.user });
+      log("booted_signed_in", {});
+      return;
+    }
+    if (decision.kind === "unavailable") {
+      signedOutReason = "unavailable";
+      cachedUser = decision.user;
+      log("boot_backend_unavailable", { retryInMs: retryDelayMs });
+      setTimeout(() => {
+        void attemptBoot(Math.min(retryDelayMs * 2, BOOT_RETRY_MAX_MS));
+      }, retryDelayMs);
+      return;
+    }
+    signedOutReason = "needs-pairing";
     log("booted_needs_pairing", {});
-  }
+  };
+
+  await attemptBoot(BOOT_RETRY_FIRST_MS);
 
   // Status poller runs regardless of sign-in (the badge is always visible).
   poller.start();

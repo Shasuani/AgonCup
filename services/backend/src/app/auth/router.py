@@ -39,6 +39,12 @@ from app.accounts import service as accounts_service
 from app.auth import discord_oauth
 from app.auth.deps import Principal, get_current_principal
 from app.auth.jwt import mint_access_token
+from app.auth.session_cookie import (
+    InvalidSessionCookie,
+    cookie_name,
+    mint_session_cookie,
+    read_session_cookie,
+)
 from app.auth.tokens import (
     InvalidRefreshToken,
     RefreshTokenReuse,
@@ -123,11 +129,18 @@ class AdminGuild(BaseModel):
 
 
 class RefreshRequest(BaseModel):
-    refresh_token: str
+    """Refresh body. The token is optional because the SPA does not have one to
+    send: its refresh token lives in an HttpOnly cookie the browser attaches
+    itself. The desktop client keeps sending the body — it stores its token in
+    the OS keychain and has no cookie jar."""
+
+    refresh_token: str | None = None
 
 
 class LogoutRequest(BaseModel):
-    refresh_token: str
+    """Logout body. Optional for the same reason as :class:`RefreshRequest`."""
+
+    refresh_token: str | None = None
 
 
 class DesktopPairRequest(BaseModel):
@@ -272,27 +285,84 @@ async def login(settings: Annotated[Settings, Depends(_get_settings_dep)]) -> Re
     return resp
 
 
-def _callback_redirect(pair: TokenPair, settings: Settings) -> RedirectResponse:
+def _callback_redirect(pair: TokenPair, settings: Settings, *, user_id: str) -> RedirectResponse:
     """Hand the token pair back to the SPA via the URL **fragment**.
 
     The browser lands on the backend's ``/auth/callback``; returning JSON there
     would just render raw tokens in the address bar (and leave the user outside
-    the app). Instead we 303 to ``<frontend>/auth/callback#access_token=..&
-    refresh_token=..``, which ``screens/auth/AuthCallback.tsx`` parses, installs,
-    and scrubs from history. A fragment is chosen over a query string because it
-    is never transmitted to servers, proxies, or access logs.
+    the app). Instead we 303 to ``<frontend>/auth/callback#access_token=..``,
+    which ``screens/auth/AuthCallback.tsx`` parses, installs, and scrubs from
+    history. A fragment is chosen over a query string because it is never
+    transmitted to servers, proxies, or access logs.
+
+    Only the SHORT-LIVED access token rides the fragment. The refresh token goes
+    into the HttpOnly session cookie instead, so the long-lived credential never
+    appears in a URL (where it could survive in history or a screenshot) and is
+    unreadable by JavaScript. The cookie is also what makes the session survive a
+    page reload — see :mod:`app.auth.session_cookie`.
     """
     fragment = urlencode(
         {
             "access_token": pair.access_token,
-            "refresh_token": pair.refresh_token,
             "token_type": pair.token_type,
         }
     )
-    return RedirectResponse(
+    redirect = RedirectResponse(
         url=f"{settings.frontend_origin}/auth/callback#{fragment}",
         status_code=status.HTTP_303_SEE_OTHER,
     )
+    set_session_cookie(redirect, user_id=user_id, pair=pair, settings=settings)
+    return redirect
+
+
+def set_session_cookie(
+    response: Response, *, user_id: str, pair: TokenPair, settings: Settings
+) -> None:
+    """Attach the signed session cookie carrying ``pair``'s refresh token.
+
+    ``SameSite=lax`` rather than ``strict``: the cookie is set on the 303 that
+    Discord's redirect lands on, and a strict cookie is withheld on a cross-site
+    navigation — the browser would drop it on the very request that sets it.
+    Lax still blocks it on cross-site subrequests, which is what CSRF needs, and
+    the SPA and API share an origin so first-party requests always carry it.
+    """
+    response.set_cookie(
+        cookie_name(settings),
+        mint_session_cookie(user_id=user_id, refresh_token=pair.refresh_token, settings=settings),
+        max_age=int(settings.jwt_refresh_ttl.total_seconds()),
+        httponly=True,
+        samesite="lax",
+        secure=settings.is_production,
+        path="/",
+    )
+
+
+def clear_session_cookie(response: Response, settings: Settings) -> None:
+    """Delete the session cookie (logout). Must mirror the set attributes."""
+    response.delete_cookie(
+        cookie_name(settings),
+        path="/",
+        httponly=True,
+        samesite="lax",
+        secure=settings.is_production,
+    )
+
+
+def _clear_cookie_headers(settings: Settings) -> dict[str, str]:
+    """The ``Set-Cookie`` header that deletes the session cookie, as a raw header.
+
+    Needed because a cookie written onto the INJECTED ``Response`` is silently
+    dropped when the handler raises: FastAPI builds a fresh response from the
+    exception and never merges those headers. ``HTTPException(headers=...)`` is
+    carried through, so the delete has to travel on the exception itself — the
+    difference is invisible in a unit test that calls the handler directly, and
+    only shows up through the real ASGI stack.
+    """
+    carrier = Response()
+    clear_session_cookie(carrier, settings)
+    return {
+        key.decode(): value.decode() for key, value in carrier.raw_headers if key == b"set-cookie"
+    }
 
 
 @router.get("/callback", summary="Discord OAuth2 callback (303 back to the SPA)")
@@ -345,7 +415,7 @@ async def callback(
     log.info("auth_login_success", user_id=str(user.id))
     # Returning a Response directly bypasses the injected `response`, so the
     # single-use state cookie must be cleared on the redirect itself.
-    redirect = _callback_redirect(pair, settings)
+    redirect = _callback_redirect(pair, settings, user_id=str(user.id))
     redirect.delete_cookie(_STATE_COOKIE)
     return redirect
 
@@ -476,10 +546,19 @@ async def list_admin_guilds(
 
 @router.post("/refresh", response_model=TokenPair, summary="Rotate a refresh token")
 async def refresh(
-    body: Annotated[RefreshRequest, Body()],
     request: Request,
+    response: Response,
     settings: Annotated[Settings, Depends(_get_settings_dep)],
+    body: RefreshRequest | None = None,
 ) -> TokenPair:
+    """Rotate the session. Also the SPA's "am I still signed in?" call on boot.
+
+    The token comes from the request body (desktop, which holds it in the OS
+    keychain) or, when the body has none, from the HttpOnly session cookie (the
+    browser, which cannot read it). A rotated cookie is written back on success,
+    and a rejected refresh clears the stale one so the SPA is not stuck retrying
+    a cookie that can only ever 401.
+    """
     # Per-IP brake on refresh-token guessing/replay floods (the secret is opaque +
     # high-entropy, but a flood still costs a DB lookup per attempt).
     client_ip = request.client.host if request.client else "unknown"
@@ -488,26 +567,41 @@ async def refresh(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="too many attempts"
         )
 
+    presented = body.refresh_token if body is not None else None
+    from_cookie = False
+    if not presented:
+        try:
+            presented = read_session_cookie(
+                request.cookies.get(cookie_name(settings)), settings=settings
+            ).refresh_token
+        except InvalidSessionCookie as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="invalid or expired refresh token",
+                headers=_clear_cookie_headers(settings),
+            ) from exc
+        from_cookie = True
+
     # Manual transaction control (not session.begin()): on reuse we MUST commit
     # the family revocation before raising — raising inside an auto-rollback
     # transaction would undo the very theft mitigation reuse-detection performed.
     async with SessionLocal() as session:
         try:
-            rotated = await rotate_refresh_token(
-                session, token=body.refresh_token, settings=settings
-            )
+            rotated = await rotate_refresh_token(session, token=presented, settings=settings)
         except RefreshTokenReuse as exc:
             await session.commit()  # persist the family revocation, then reject
             log.warning("refresh_token_reuse_detected")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="refresh token reuse detected; session revoked",
+                headers=_clear_cookie_headers(settings) if from_cookie else None,
             ) from exc
         except InvalidRefreshToken as exc:
             await session.rollback()
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="invalid or expired refresh token",
+                headers=_clear_cookie_headers(settings) if from_cookie else None,
             ) from exc
 
         acting_guild, roles = await _roles_for(session, rotated.user_id)
@@ -516,13 +610,43 @@ async def refresh(
         )
         await session.commit()
 
-    return TokenPair(access_token=access, refresh_token=rotated.token)
+    pair = TokenPair(access_token=access, refresh_token=rotated.token)
+    if from_cookie:
+        # Rotation invalidated the token the old cookie carried, so the cookie
+        # MUST be replaced or the next reload would present a dead one.
+        set_session_cookie(response, user_id=rotated.user_id, pair=pair, settings=settings)
+    return pair
 
 
 @router.post("/logout", summary="Revoke the presented refresh token")
-async def logout(body: Annotated[LogoutRequest, Body()]) -> dict[str, str]:
-    async with SessionLocal() as session, session.begin():
-        await revoke_refresh_token(session, token=body.refresh_token)
+async def logout(
+    request: Request,
+    response: Response,
+    settings: Annotated[Settings, Depends(_get_settings_dep)],
+    body: LogoutRequest | None = None,
+) -> dict[str, str]:
+    """End the session for real: revoke server-side AND drop the cookie.
+
+    The SPA's Sign out used to clear React state only, leaving the refresh token
+    valid in the database until it expired — harmless while the token died with
+    the tab, but a real hole now that the cookie makes sessions survive a reload.
+
+    Always answers 200: an absent or already-dead token means the caller is
+    logged out, which is the outcome they asked for.
+    """
+    presented = body.refresh_token if body is not None else None
+    if not presented:
+        try:
+            presented = read_session_cookie(
+                request.cookies.get(cookie_name(settings)), settings=settings
+            ).refresh_token
+        except InvalidSessionCookie:
+            presented = None
+
+    if presented:
+        async with SessionLocal() as session, session.begin():
+            await revoke_refresh_token(session, token=presented)
+    clear_session_cookie(response, settings)
     return {"status": "logged_out"}
 
 
@@ -669,6 +793,7 @@ _DEV_DISCORD_USER = 100000000000000002
     summary="DEV ONLY: mint a platform_operator session without Discord OAuth",
 )
 async def dev_login(
+    response: Response,
     settings: Annotated[Settings, Depends(_get_settings_dep)],
 ) -> TokenPair:
     """Mint a real admin token for local development — **disabled in production**.
@@ -677,6 +802,10 @@ async def dev_login(
     a normal access/refresh pair, so the SPA AND the backend API both work without
     a configured Discord OAuth app. Returns 404 when ``ENVIRONMENT=production`` so
     it can never be a production backdoor.
+
+    Sets the same session cookie the OAuth callback does. Without it a dev session
+    died on the first page reload — the very behaviour the cookie exists to fix,
+    left broken on the path developers actually use.
     """
     if settings.is_production:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")
@@ -725,4 +854,5 @@ async def dev_login(
         pair = await _issue_pair(session, str(user.id), settings)
 
     log.warning("dev_login_used", user_id=str(user.id))
+    set_session_cookie(response, user_id=str(user.id), pair=pair, settings=settings)
     return pair

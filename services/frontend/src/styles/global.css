@@ -24,6 +24,39 @@
   --danger: #f87171;
   --focus-ring: #a99cff;
 
+  /* --- Elevation surfaces -------------------------------------------------
+     Depth used to be carried by ONE device: a 1px border around a single flat
+     --surface. Everything therefore sat on the same plane and the app read as
+     a wireframe. These give a real stack: sunken (inputs/wells) < page < card
+     < raised (menus, popovers, the thing you are meant to look at). */
+  --surface-sunken: #0c0d12;
+  --surface-raised: #171a23;
+
+  /* Two border weights so a card outline and a divider are not the same line. */
+  --border-subtle: #1d212a;
+  --border-strong: #353b4a;
+
+  /* Top inner highlight — the single most load-bearing trick in a dark UI. It
+     fakes a light source above the surface, which is what separates a "panel"
+     from a "rectangle". Paired with --elevate below. */
+  --hairline: rgba(255, 255, 255, 0.07);
+  --elevate: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.038),
+    rgba(255, 255, 255, 0) 44%
+  );
+
+  /* Brand tints, so the accent appears somewhere other than the buttons. */
+  --primary-soft: rgba(109, 92, 246, 0.13);
+  --primary-softer: rgba(109, 92, 246, 0.07);
+  --primary-line: rgba(109, 92, 246, 0.36);
+  --brand-gradient: linear-gradient(135deg, var(--primary), var(--accent));
+
+  /* Control sizing — buttons/inputs/selects share one height so a toolbar row
+     lines up instead of stair-stepping. */
+  --control-h: 36px;
+  --control-h-sm: 30px;
+
   /* Spacing scale (8px base rhythm) */
   --space-1: 4px;
   --space-2: 8px;
@@ -76,11 +109,18 @@ html {
 
 body {
   margin: 0;
-  background: var(--bg);
+  /* A flat fill made every screen read as a void behind floating rectangles.
+     One very low-amplitude brand glow at the top gives the page a direction of
+     light, which the card highlights below are consistent with. */
+  background:
+    radial-gradient(900px 520px at 78% -12%, rgba(109, 92, 246, 0.09), transparent 62%),
+    radial-gradient(700px 420px at 8% -6%, rgba(139, 125, 255, 0.055), transparent 60%),
+    var(--bg);
+  background-attachment: fixed;
   color: var(--text);
   font-family: var(--font-sans);
   font-size: 0.9375rem;
-  line-height: 1.5;
+  line-height: 1.55;
   font-weight: 400;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -127,25 +167,37 @@ h4 {
   color: var(--text);
 }
 
+/* The scale was compressed — h3 (1.0625rem) sat a hair above body text
+   (0.9375rem), so a section heading and a paragraph looked like the same thing
+   and no page had a visible hierarchy. Each step is now clearly a step. */
 h1 {
-  font-size: clamp(1.625rem, 1.4rem + 1vw, 1.875rem);
-  line-height: 1.2;
+  font-size: clamp(1.875rem, 1.55rem + 1.3vw, 2.25rem);
+  line-height: 1.15;
   font-weight: 700;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.028em;
 }
 
 h2 {
-  font-size: 1.375rem;
-  line-height: 1.3;
+  /* 600, not 650: the Inter link in index.html requests discrete weights
+     (400/500/600/700), so an in-between value would snap unpredictably. */
+  font-size: clamp(1.375rem, 1.25rem + 0.5vw, 1.5rem);
+  line-height: 1.25;
   font-weight: 600;
-  letter-spacing: -0.015em;
+  letter-spacing: -0.02em;
 }
 
 h3 {
-  font-size: 1.0625rem;
+  font-size: 1.125rem;
+  line-height: 1.35;
+  font-weight: 600;
+  letter-spacing: -0.012em;
+}
+
+h4 {
+  font-size: 0.9375rem;
   line-height: 1.4;
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.005em;
 }
 
 p {
@@ -348,44 +400,60 @@ button[data-variant] {
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  padding-inline: 14px;
+  /* Was ~30px tall with 13px text — small flat controls are the single
+     clearest "cheap" tell. Now a proper 36px control that matches inputs. */
+  min-height: var(--control-h);
+  padding-block: 0;
+  padding-inline: 16px;
   font-family: inherit;
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
   font-weight: 600;
-  letter-spacing: 0.01em;
+  letter-spacing: 0.005em;
   line-height: 1.2;
   border: 1px solid transparent;
   border-radius: var(--radius-md);
   cursor: pointer;
   transition: background-color 120ms ease, border-color 120ms ease,
-    color 120ms ease, transform 120ms ease;
+    color 120ms ease, transform 120ms ease, box-shadow 120ms ease;
   white-space: nowrap;
 }
 
 button[data-variant="primary"] {
-  background: var(--primary);
+  /* A gradient + a colored shadow, so the primary action reads as raised and
+     lit rather than as a flat swatch. */
+  background: linear-gradient(180deg, var(--primary-hover), var(--primary));
   color: var(--on-primary);
-  box-shadow: var(--shadow-xs);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    0 1px 2px rgba(0, 0, 0, 0.4),
+    0 4px 14px rgba(109, 92, 246, 0.28);
 }
 
 button[data-variant="primary"]:hover:not(:disabled) {
-  background: var(--primary-hover);
+  background: linear-gradient(180deg, #8b7bfa, var(--primary-hover));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    0 1px 2px rgba(0, 0, 0, 0.4),
+    0 6px 20px rgba(109, 92, 246, 0.38);
 }
 
 button[data-variant="primary"]:active:not(:disabled) {
   transform: translateY(1px);
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.28),
+    0 1px 2px rgba(0, 0, 0, 0.4);
 }
 
 button[data-variant="secondary"] {
-  background: var(--surface-alt);
+  background: var(--elevate), var(--surface-alt);
   color: var(--text);
   border-color: var(--border);
+  box-shadow: inset 0 1px 0 var(--hairline), var(--shadow-xs);
 }
 
 button[data-variant="secondary"]:hover:not(:disabled) {
-  border-color: #333845;
-  background: #1f222c;
+  border-color: var(--border-strong);
+  background: var(--elevate), #1f222c;
 }
 
 button[data-variant="secondary"]:active:not(:disabled) {
@@ -393,13 +461,18 @@ button[data-variant="secondary"]:active:not(:disabled) {
 }
 
 button[data-variant="danger"] {
-  background: transparent;
+  background: rgba(248, 113, 113, 0.06);
   color: var(--danger);
-  border-color: rgba(248, 113, 113, 0.45);
+  border-color: rgba(248, 113, 113, 0.42);
 }
 
 button[data-variant="danger"]:hover:not(:disabled) {
-  background: rgba(248, 113, 113, 0.12);
+  background: rgba(248, 113, 113, 0.14);
+  border-color: rgba(248, 113, 113, 0.65);
+}
+
+button[data-variant="danger"]:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 button[data-variant]:focus-visible {
@@ -451,7 +524,10 @@ input,
 select,
 textarea {
   width: 100%;
-  background: var(--bg);
+  /* Was --bg: darker than the card it sits on, so a field read as a hole
+     punched through the panel. --surface-sunken with an inset shadow is a
+     well INSIDE the surface — the same light direction as everything else. */
+  background: var(--surface-sunken);
   color: var(--text);
   font-family: inherit;
   font-size: 0.9375rem;
@@ -459,7 +535,21 @@ textarea {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: var(--space-2) var(--space-3);
-  transition: border-color 120ms ease, box-shadow 120ms ease;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.22);
+  transition: border-color 120ms ease, box-shadow 120ms ease,
+    background-color 120ms ease;
+}
+
+/* Single-line controls share the button height so a toolbar row lines up. */
+input:not([type="checkbox"]):not([type="radio"]),
+select {
+  min-height: var(--control-h);
+}
+
+input:hover:not(:disabled):not(:focus),
+select:hover:not(:disabled):not(:focus),
+textarea:hover:not(:disabled):not(:focus) {
+  border-color: var(--border-strong);
 }
 
 textarea {
@@ -476,8 +566,9 @@ input:focus,
 select:focus,
 textarea:focus {
   outline: none;
+  background: var(--surface-alt);
   border-color: var(--primary);
-  box-shadow: var(--shadow-focus);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.18), var(--shadow-focus);
 }
 
 input:focus-visible,
@@ -559,19 +650,22 @@ p[role="alert"][data-field-error]::before {
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
-  background: var(--surface);
+  /* The shared panel recipe: lit top edge + soft drop shadow, so the table is
+     an object on the page rather than an outlined region of it. */
+  background: var(--elevate), var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
+  box-shadow: inset 0 1px 0 var(--hairline), var(--shadow-sm);
   overflow: hidden;
   margin-bottom: var(--space-5);
 }
 
 [data-table] caption {
   text-align: left;
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-4) var(--space-5) var(--space-3);
   font-weight: 600;
+  font-size: 0.9375rem;
   color: var(--text);
-  border-bottom: 1px solid var(--border);
   caption-side: top;
 }
 
@@ -582,29 +676,176 @@ p[role="alert"][data-field-error]::before {
   font-size: 0.6875rem;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.07em;
   padding: var(--space-3) var(--space-4);
-  padding-block: 10px;
+  padding-block: 11px;
+  border-top: 1px solid var(--border-subtle);
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
 }
 
+/* Give the first and last columns the same breathing room as the panel edge,
+   so content is not jammed against the rounded corner. */
+[data-table] thead th[scope="col"]:first-child,
+[data-table] tbody td:first-child {
+  padding-left: var(--space-5);
+}
+
+[data-table] thead th[scope="col"]:last-child,
+[data-table] tbody td:last-child {
+  padding-right: var(--space-5);
+}
+
 [data-table] td {
-  padding: var(--space-3) var(--space-4);
-  border-top: 1px solid var(--border);
+  /* Rows were 12px-padded and cramped; 14px reads as a list of records. */
+  padding: 14px var(--space-4);
+  border-top: 1px solid var(--border-subtle);
   color: var(--text);
   vertical-align: middle;
 }
 
-[data-table] tbody tr:hover {
-  background: var(--surface-alt);
+[data-table] tbody tr:first-child td {
+  border-top: 0;
 }
 
+[data-table] tbody tr {
+  transition: background-color 100ms ease;
+}
+
+[data-table] tbody tr:hover {
+  background: var(--primary-softer);
+}
+
+/* When the surrounding ScreenHeader already names the table on screen, the
+   caption is redundant visually but must stay in the accessibility tree.
+   Also applied to control-column headers, which need a name but no glyph. */
+[data-visually-hidden],
+[data-table] caption[data-caption-hidden] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* "Nothing here" is a state, not an error — a centered panel that fills the
+   table body, rather than an italic apology squeezed into one line. */
 [data-table] td[data-empty] {
   text-align: center;
-  font-style: italic;
   color: var(--text-muted);
-  padding: var(--space-6);
+  padding: var(--space-7) var(--space-5);
+  background: var(--surface);
+}
+
+[data-table] td[data-empty] [data-empty-inner] {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+[data-table] td[data-empty] [data-empty-message] {
+  margin: 0;
+  max-width: 48ch;
+  font-size: 0.9375rem;
+}
+
+[data-table] td[data-empty] [data-empty-action] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: center;
+}
+
+/* -------------------------------------------------------------------------
+   Expandable rows
+   ------------------------------------------------------------------------- */
+[data-table] [data-expand-col],
+[data-table] [data-expand-cell] {
+  width: 44px;
+  padding-right: 0;
+}
+
+[data-table][data-expandable] tbody td:first-child {
+  /* The toggle column owns the panel's left inset instead of the first data
+     cell, so the chevrons line up with the table edge. */
+  padding-left: var(--space-4);
+}
+
+[data-expand-toggle] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  appearance: none;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: transform 140ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+[data-expand-toggle] > span {
+  /* The glyph rotates, not the button, so the focus ring stays square. */
+  display: block;
+  transition: transform 140ms ease;
+}
+
+[data-expand-toggle]:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+[data-expand-toggle][aria-expanded="true"] {
+  background: var(--primary-soft);
+  border-color: var(--primary-line);
+  color: var(--accent);
+}
+
+[data-expand-toggle][aria-expanded="true"] > span {
+  transform: rotate(90deg);
+}
+
+/* The parent row of an open detail keeps the tint, so the pair reads as one
+   unit rather than as two unrelated rows. */
+[data-table] tbody tr[data-row-open] {
+  background: var(--primary-softer);
+}
+
+[data-table] tbody tr[data-expanded-row] > td {
+  padding: 0 var(--space-5) var(--space-4);
+  background: var(--primary-softer);
+  border-top: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-expand-toggle],
+  [data-expand-toggle] > span {
+    transition: none;
+  }
+}
+
+/* A refreshing table dims slightly so the stale rows read as "being replaced"
+   without disappearing. Rows stay legible and selectable throughout. */
+[data-table][aria-busy="true"] tbody {
+  opacity: 0.7;
+  transition: opacity 120ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-table][aria-busy="true"] tbody {
+    transition: none;
+  }
 }
 
 /* Tables can overflow horizontally on narrow viewports. The component does not
@@ -761,11 +1002,13 @@ p[role="alert"][data-field-error]::before {
 [role="dialog"][data-modal] {
   display: flex;
   flex-direction: column;
-  background: var(--surface);
-  border: 1px solid var(--border);
+  /* A dialog is the topmost plane in the app — it gets the raised surface, not
+     the same flat --surface every card uses. */
+  background: var(--elevate), var(--surface-raised);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-lg);
-  max-width: 480px;
+  box-shadow: inset 0 1px 0 var(--hairline), var(--shadow-lg);
+  max-width: 520px;
   width: calc(100% - 32px);
   max-height: 85vh;
   animation: lol-pop 120ms ease;
@@ -895,23 +1138,43 @@ p[role="alert"][data-field-error]::before {
 /* -------------------------------------------------------------------------
    Login / auth card
    ------------------------------------------------------------------------- */
-/* The login view is a single <main data-login> whose children are the auth-card
-   contents (no wrapper element). We therefore make the <main> itself the card:
-   a constrained, centered surface. The full-viewport tinted backdrop is painted
-   with a fixed pseudo-element so the page behind the card carries the radial. */
+/* <main data-login> is the full-viewport stage; <div data-login-card> inside it
+   is the card. The <main> used to BE the card, which meant the sign-in panel
+   was pinned near the top of a tall empty page rather than centred in it. The
+   tinted backdrop is painted by a fixed pseudo-element on the stage. */
 [data-login] {
   position: relative;
   z-index: 0;
-  width: calc(100% - 2 * var(--space-4));
-  max-width: 400px;
-  margin: 0 auto;
-  margin-block: clamp(48px, 12vh, 140px);
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: var(--space-6) var(--space-4);
+}
+
+[data-login-card] {
+  width: 100%;
+  max-width: 420px;
   padding: 40px 36px;
   text-align: center;
-  background: var(--surface);
+  background: var(--elevate), var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-lg);
+  box-shadow: inset 0 1px 0 var(--hairline), var(--shadow-lg);
+}
+
+/* Brand mark above the wordmark, so the card opens with the product rather
+   than with a line of text. */
+[data-login-card]::before {
+  content: "";
+  display: block;
+  width: 44px;
+  height: 44px;
+  margin: 0 auto var(--space-4);
+  border-radius: var(--radius-lg);
+  background: var(--brand-gradient);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.16),
+    0 8px 24px rgba(109, 92, 246, 0.35);
 }
 
 /* Full-viewport backdrop behind the card: brand hero illustration layered under
@@ -946,35 +1209,50 @@ p[role="alert"][data-field-error]::before {
   }
 }
 
-[data-login] > h1 {
-  margin: 0 0 var(--space-3);
+[data-login-card] h1 {
+  margin: 0 0 var(--space-1);
   font-size: 1.5rem;
   font-weight: 700;
+  letter-spacing: -0.025em;
 }
 
-[data-login] > p {
+[data-login-tagline] {
+  margin: 0 0 var(--space-5);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  /* Not --text-muted: the tagline is brand, not secondary content. */
+  color: var(--accent);
+}
+
+[data-login-copy] {
   margin: 0;
   color: var(--text-muted);
 }
 
-[data-login] > button[data-variant] {
+[data-login-cta] {
   width: 100%;
   margin-top: var(--space-5);
 }
 
+/* The dev block is a separate concern from signing in — rule it off instead of
+   letting it read as part of the same panel. The <hr> it used to draw is gone;
+   the border does the job without an element. */
 [data-login] [data-dev-login] {
-  text-align: left;
-}
-
-[data-login] [data-dev-login] hr {
-  border: 0;
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
   border-top: 1px solid var(--border);
-  margin: var(--space-5) 0;
+  text-align: left;
 }
 
 [data-login] [data-dev-login] p {
   font-size: 0.8125rem;
   color: var(--text-muted);
+}
+
+[data-dev-login-note] {
+  margin-bottom: var(--space-3);
 }
 
 [data-login] [data-dev-login] button[data-variant] {
@@ -1016,12 +1294,17 @@ p[role="alert"][data-field-error]::before {
   border: 0;
 }
 
+/* Header controls are the compact size. `min-height` must be re-stated, not
+   just `height`: the base control rule sets min-height: var(--control-h), and
+   a min-height always beats a smaller height. */
 [data-acting-guild] input,
 [data-acting-guild] select {
-  height: 32px;
+  height: var(--control-h-sm);
+  min-height: var(--control-h-sm);
   padding-block: 0;
   font-size: 0.8125rem;
   background: var(--surface-alt);
+  box-shadow: none;
   border-radius: var(--radius-pill);
   min-width: 160px;
 }
@@ -1039,8 +1322,33 @@ p[role="alert"][data-field-error]::before {
   border-bottom: 1px solid var(--border);
 }
 
-[data-screen-header] h1 {
+[data-screen-header] h1,
+[data-screen-header] h2 {
   margin: 0;
+}
+
+/* The title + intro column. `min-width: 0` lets a long title wrap instead of
+   pushing the action slot off the row. */
+[data-screen-heading] {
+  min-width: 0;
+}
+
+/* Right-aligned actions (Refresh, Create, …). Wraps under the title on narrow
+   viewports via the max-width:640px rule below. */
+[data-screen-actions] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+}
+
+/* Section-level header (an <h2> inside a screen): same shape, quieter rule and
+   less vertical spend than the screen's own header. */
+[data-screen-header][data-section-header] {
+  margin-top: var(--space-6);
+  margin-bottom: var(--space-4);
+  padding-bottom: var(--space-2);
 }
 
 [data-screen-intro] {
@@ -1061,6 +1369,10 @@ section[aria-labelledby]:first-child {
   [data-screen-header] {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  [data-screen-actions] {
+    justify-content: flex-start;
   }
 }
 
@@ -1178,27 +1490,121 @@ section[aria-labelledby]:first-child {
   color: var(--text-muted);
 }
 
+/* Schedule cell: a two-row "Opens / Starts" mini-table, so the two timestamps
+   are distinguishable at a glance instead of being one run-on line. */
 [data-schedule] {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   font-size: 0.8125rem;
   line-height: 1.4;
+  font-variant-numeric: tabular-nums;
 }
 
-/* Generic content cards for create/detail sections. */
+[data-schedule-row] {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  white-space: nowrap;
+}
+
+[data-schedule-key] {
+  min-width: 42px;
+  color: var(--text-muted);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* The tournament name in the list is the row's primary control. It was a bare
+   <button> with no variant, so it rendered as the browser's default grey box
+   inside the table. It should read as a link and behave as a toggle. */
+[data-select-tournament] {
+  appearance: none;
+  border: 0;
+  background: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  font-weight: 600;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: color 120ms ease;
+}
+
+[data-select-tournament]:hover {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+[data-select-tournament][data-active] {
+  color: var(--accent);
+}
+
+/* The open row gets a leading accent marker so the table shows which record
+   the detail panel below belongs to. */
+[data-select-tournament][data-active]::before {
+  content: "";
+  display: inline-block;
+  width: 3px;
+  height: 1em;
+  margin-right: var(--space-2);
+  vertical-align: -0.15em;
+  border-radius: var(--radius-pill);
+  background: var(--brand-gradient);
+}
+
+/* Generic content cards for create/detail sections. Same panel recipe as the
+   table: lit top edge, soft shadow, one radius. Anything that is "a thing on
+   the page" should use this, so the app has one card and not six. */
 [data-create-section],
 [data-verification-panel],
 [data-guild-settings],
 [data-tournament-summary],
-[data-report-form] {
-  background: var(--surface);
+[data-report-form],
+[data-registrations],
+[data-start],
+[data-bracket-section],
+[data-panel] {
+  background: var(--elevate), var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
+  box-shadow: inset 0 1px 0 var(--hairline), var(--shadow-sm);
   padding: var(--space-5);
   margin-bottom: var(--space-5);
+}
+
+/* Danger variant of the panel — a destructive section (guild purge) needs to
+   look different from an ordinary one BEFORE the button is read. */
+[data-panel][data-tone="danger"] {
+  background: linear-gradient(
+      0deg,
+      rgba(248, 113, 113, 0.05),
+      rgba(248, 113, 113, 0.05)
+    ),
+    var(--surface);
+  border-color: rgba(248, 113, 113, 0.32);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), var(--shadow-sm);
 }
 
 /* -------------------------------------------------------------------------
    Dashboard (HomeScreen nav cards)
    ------------------------------------------------------------------------- */
+/* The KPI row and the nav cards ran together as one undifferentiated wall of
+   cards. A quiet section label separates "how things are" from "where to go". */
+[data-dashboard-heading] {
+  margin: var(--space-6) 0 var(--space-4);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+}
+
 [data-dashboard] {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));

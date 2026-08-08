@@ -277,10 +277,33 @@ security:images:
   script:
     - |
       set -e
+      # Pulling layers out of the registry is the flaky part: a dropped HTTP/2
+      # stream ("stream error: ... INTERNAL_ERROR; received from peer") aborts the
+      # scan and used to fail the pipeline as if the image were unsafe, blocking a
+      # deploy over a network blip.
+      #
+      # The informational pass runs with --exit-code 0, so a FINDING can never
+      # fail it — any non-zero exit there is a fatal/transport error by
+      # construction. That makes it an exact probe for the transient case, and the
+      # only thing worth retrying. The gate below keeps failing fast and honestly
+      # on a real CRITICAL, with no retries to muddy the signal.
+      report_with_retry() {
+        attempt=1
+        while ! trivy image --no-progress --severity HIGH,CRITICAL --exit-code 0 "$1"; do
+          if [ "$attempt" -ge 3 ]; then
+            echo "trivy could not scan $1 after 3 attempts — see the error above;" >&2
+            echo "this is a scanner/transport failure, NOT a vulnerability result." >&2
+            return 1
+          fi
+          echo "trivy failed on $1 (attempt $attempt) — retrying in $((attempt * 10))s" >&2
+          sleep $((attempt * 10))
+          attempt=$((attempt + 1))
+        done
+      }
       for image in "$BACKEND_IMAGE" "$WORKER_IMAGE" "$BOT_IMAGE" "$FRONTEND_IMAGE"; do
         echo "=== $image:$IMAGE_TAG"
         # Full HIGH+CRITICAL report (informational)...
-        trivy image --no-progress --severity HIGH,CRITICAL --exit-code 0 "$image:$IMAGE_TAG"
+        report_with_retry "$image:$IMAGE_TAG"
         # ...but only a fixable CRITICAL blocks the deploy.
         trivy image --no-progress --severity CRITICAL --ignore-unfixed --exit-code 1 "$image:$IMAGE_TAG"
       done

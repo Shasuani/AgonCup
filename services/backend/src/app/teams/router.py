@@ -53,6 +53,12 @@ class TeamResponse(BaseModel):
     name: str
     captain_user_id: str
     guild_id: str
+    # Both are populated only by the LIST route, which joins them in one query.
+    # They default to None rather than to a placeholder so a client can tell
+    # "not fetched on this route" apart from a real value (a create result has
+    # no roster count yet; inventing 1 would be a guess, not a fact).
+    captain_name: str | None = None
+    member_count: int | None = None
 
 
 class CreatedTeamResponse(TeamResponse):
@@ -170,7 +176,12 @@ async def create_team(
 async def list_teams(
     session: Annotated[AsyncSession, Depends(get_tenant_session)],
 ) -> list[TeamResponse]:
-    return [_to_response(t) for t in await service.list_teams(session)]
+    return [
+        _to_response(o.team).model_copy(
+            update={"captain_name": o.captain_name, "member_count": o.member_count}
+        )
+        for o in await service.list_teams_overview(session)
+    ]
 
 
 @router.post(

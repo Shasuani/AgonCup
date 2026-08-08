@@ -17,6 +17,7 @@ import type {
   AdminGuild,
   AttemptStatusResponse,
   CheckInRequest,
+  CreatedTeamResponse,
   CreatedTournamentResponse,
   CreateTeamRequest,
   CreateTournamentRequest,
@@ -94,7 +95,8 @@ export interface TournamentsApi {
 }
 
 export interface TeamsApi {
-  create(body: CreateTeamRequest): Promise<TeamResponse>;
+  /** Resolves with the join code — it is returned on create and nowhere else. */
+  create(body: CreateTeamRequest): Promise<CreatedTeamResponse>;
   list(): Promise<TeamResponse[]>;
   get(teamId: string): Promise<TeamResponse>;
   listMembers(teamId: string): Promise<TeamMemberResponse[]>;
@@ -209,7 +211,7 @@ export function createClient(config: ClientConfig): ApiClient {
   };
 
   const teams: TeamsApi = {
-    create: (body) => request<TeamResponse>({ method: 'POST', path: '/teams', body }),
+    create: (body) => request<CreatedTeamResponse>({ method: 'POST', path: '/teams', body }),
     list: () => request<TeamResponse[]>({ method: 'GET', path: '/teams' }),
     get: (id) => request<TeamResponse>({ method: 'GET', path: `/teams/${seg(id)}` }),
     listMembers: (id) =>

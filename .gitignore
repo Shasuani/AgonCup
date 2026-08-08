@@ -120,3 +120,4 @@ logs/
 *.bak
 *.tmp
 tmp/
+ToDoList.txt

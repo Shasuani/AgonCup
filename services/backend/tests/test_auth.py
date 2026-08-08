@@ -22,6 +22,7 @@ import operator
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import parse_qsl
 
@@ -29,9 +30,10 @@ import httpx
 import pytest
 from fastapi import HTTPException
 from lol_schemas.enums import GuildStatus, UserGuildRoleName
+from sqlalchemy.sql import operators as sql_operators
 
 from app.accounts import service as accounts_service
-from app.auth import discord_oauth
+from app.auth import discord_oauth, session_cookie
 from app.auth import router as auth_router
 from app.auth.deps import Principal, require_role
 from app.auth.jwt import (
@@ -43,6 +45,7 @@ from app.auth.tokens import (
     RefreshTokenReuse,
     hash_token,
     issue_refresh_token,
+    revoke_refresh_token,
     rotate_refresh_token,
 )
 from app.config import get_settings
@@ -80,17 +83,30 @@ class _Result:
 
 
 class _FakeRequest:
-    """Minimal stand-in for starlette Request — the callback only reads cookies."""
+    """Minimal stand-in for starlette Request — the routes only read cookies.
 
-    def __init__(self, cookies: dict[str, str]) -> None:
+    ``client`` is present because /auth/refresh rate-limits on the peer address.
+    """
+
+    def __init__(self, cookies: dict[str, str], *, host: str = "203.0.113.9") -> None:
         self.cookies = cookies
+        self.client = SimpleNamespace(host=host)
 
 
 class _FakeResponse:
-    """Minimal stand-in for Response — the callback only clears a cookie."""
+    """Minimal stand-in for Response, recording cookie writes so tests can assert
+    what the browser would actually be told to store."""
 
-    def delete_cookie(self, *args: Any, **kwargs: Any) -> None:
-        return None
+    def __init__(self) -> None:
+        self.cookies: dict[str, str] = {}
+        self.deleted: list[str] = []
+
+    def set_cookie(self, key: str, value: str = "", **kwargs: Any) -> None:
+        self.cookies[key] = value
+
+    def delete_cookie(self, key: str, *args: Any, **kwargs: Any) -> None:
+        self.deleted.append(key)
+        self.cookies.pop(key, None)
 
 
 class FakeSession:
@@ -221,7 +237,9 @@ def _equality_filters(statement: Any) -> dict[str, Any]:
         for bool_expr in _flatten_and(clause):
             # Only equality clauses constrain the fake store; inequalities (e.g.
             # ``expires_at > now``) are ignored — the fake cannot model time.
-            if getattr(bool_expr, "operator", None) not in (operator.eq, None):
+            # ``col.is_(False)`` counts: it is how a boolean column is compared in
+            # SQL, and dropping it would silently widen every such query here.
+            if getattr(bool_expr, "operator", None) not in (operator.eq, None, sql_operators.is_):
                 continue
             left = getattr(bool_expr, "left", None)
             right = getattr(bool_expr, "right", None)
@@ -242,6 +260,10 @@ def _flatten_and(clause: Any) -> list[Any]:
 
 
 def _literal(value: Any) -> Any:
+    # ``is_(False)`` yields a False_/True_ SQL element rather than a bind param.
+    name = value.__class__.__name__
+    if name in ("False_", "True_"):
+        return name == "True_"
     return getattr(value, "value", value)
 
 
@@ -337,18 +359,93 @@ async def test_refresh_rotation_issues_new_token_same_family() -> None:
 async def test_refresh_reuse_revokes_family() -> None:
     session = FakeSession()
     uid = str(uuid.uuid4())
-    first = await issue_refresh_token(session, user_id=uid)
-    rotated = await rotate_refresh_token(session, token=first.token)
+    t0 = datetime.now(tz=UTC)
+    first = await issue_refresh_token(session, user_id=uid, now=t0)
+    rotated = await rotate_refresh_token(session, token=first.token, now=t0)
 
-    # Replaying the OLD (already-rotated) token = reuse → family revoked.
+    # Replaying the OLD (already-rotated) token WELL AFTER the rotation-race grace
+    # is what theft looks like → family revoked.
+    later = t0 + get_settings().refresh_rotation_grace + timedelta(seconds=1)
     with pytest.raises(RefreshTokenReuse):
-        await rotate_refresh_token(session, token=first.token)
+        await rotate_refresh_token(session, token=first.token, now=later)
 
     # Every token in the family is now revoked, including the (previously live) one.
     assert all(r.revoked for r in session.store[RefreshToken])
     # And the successor can no longer be rotated either.
     with pytest.raises(RefreshTokenReuse):
-        await rotate_refresh_token(session, token=rotated.token)
+        await rotate_refresh_token(session, token=rotated.token, now=later)
+
+
+@pytest.mark.asyncio
+async def test_refresh_replay_within_grace_is_a_race_not_theft() -> None:
+    """Two tabs booting together present the same cookie twice, milliseconds apart.
+
+    Burning the family there signed the user out of the session they had just
+    restored — the reported "every reload sends me back through Discord".
+    """
+    session = FakeSession()
+    uid = str(uuid.uuid4())
+    t0 = datetime.now(tz=UTC)
+    first = await issue_refresh_token(session, user_id=uid, now=t0)
+    winner = await rotate_refresh_token(session, token=first.token, now=t0)
+
+    sibling = await rotate_refresh_token(session, token=first.token, now=t0 + timedelta(seconds=1))
+
+    assert sibling.token not in (first.token, winner.token)
+    assert sibling.family_id == first.family_id
+    rows = {r.token_hash: r for r in session.store[RefreshToken]}
+    # BOTH rotation products stay live: whichever response reaches the browser
+    # last is the cookie it keeps, so revoking either would strand half the races.
+    assert rows[hash_token(winner.token)].revoked is False
+    assert rows[hash_token(sibling.token)].revoked is False
+    assert rows[hash_token(first.token)].revoked is True
+
+
+@pytest.mark.asyncio
+async def test_refresh_replay_within_grace_still_burns_once_the_chain_moved_on() -> None:
+    """The grace covers a race, not a replay of a token whose successor is dead.
+
+    Rotating the successor away means the session moved on; a straggler presenting
+    the grandparent afterwards is reuse, window or not.
+    """
+    session = FakeSession()
+    uid = str(uuid.uuid4())
+    t0 = datetime.now(tz=UTC)
+    first = await issue_refresh_token(session, user_id=uid, now=t0)
+    second = await rotate_refresh_token(session, token=first.token, now=t0)
+    await rotate_refresh_token(session, token=second.token, now=t0)
+
+    with pytest.raises(RefreshTokenReuse):
+        await rotate_refresh_token(session, token=first.token, now=t0 + timedelta(seconds=1))
+
+
+@pytest.mark.asyncio
+async def test_refresh_grace_of_zero_restores_strict_reuse_detection() -> None:
+    session = FakeSession()
+    settings = get_settings().model_copy(update={"refresh_rotation_grace_seconds": 0})
+    uid = str(uuid.uuid4())
+    t0 = datetime.now(tz=UTC)
+    first = await issue_refresh_token(session, user_id=uid, settings=settings, now=t0)
+    await rotate_refresh_token(session, token=first.token, settings=settings, now=t0)
+
+    with pytest.raises(RefreshTokenReuse):
+        await rotate_refresh_token(session, token=first.token, settings=settings, now=t0)
+
+
+@pytest.mark.asyncio
+async def test_logout_revokes_the_whole_family_not_just_the_presented_row() -> None:
+    """A graced sibling must not outlive the logout that ended its session."""
+    session = FakeSession()
+    uid = str(uuid.uuid4())
+    t0 = datetime.now(tz=UTC)
+    first = await issue_refresh_token(session, user_id=uid, now=t0)
+    winner = await rotate_refresh_token(session, token=first.token, now=t0)
+    sibling = await rotate_refresh_token(session, token=first.token, now=t0 + timedelta(seconds=1))
+
+    assert await revoke_refresh_token(session, token=winner.token) is True
+
+    rows = {r.token_hash: r for r in session.store[RefreshToken]}
+    assert rows[hash_token(sibling.token)].revoked is True
 
 
 # ---------------------------------------------------------------------------
@@ -410,15 +507,18 @@ async def test_oauth_callback_upserts_user_and_encrypts_credential(
         request=req, response=resp, code="auth-code-123", state=state, settings=get_settings()
     )
 
-    # The browser is 303'd back to the SPA with the pair in the URL FRAGMENT
-    # (never the query string — a fragment is not sent to servers/proxies/logs).
+    # The browser is 303'd back to the SPA with the SHORT-LIVED access token in
+    # the URL FRAGMENT (never the query string — a fragment is not sent to
+    # servers/proxies/logs).
     assert result.status_code == 303
     location = result.headers["location"]
     base, _, fragment = location.partition("#")
     assert base == f"{get_settings().frontend_origin}/auth/callback"
     tokens = dict(parse_qsl(fragment))
     assert tokens["access_token"]
-    assert tokens["refresh_token"]
+    # The refresh token must NOT ride the URL: it is the long-lived credential,
+    # and a URL survives in history, screenshots and the referrer chain.
+    assert "refresh_token" not in tokens
 
     # The access JWT verifies and carries our user id.
     user = session.store[User][0]
@@ -937,6 +1037,7 @@ async def test_refresh_rate_limited_is_429(monkeypatch: pytest.MonkeyPatch) -> N
         await auth_router.refresh(
             body=auth_router.RefreshRequest(refresh_token="bogus"),
             request=req,  # type: ignore[arg-type]
+            response=_FakeResponse(),  # type: ignore[arg-type]
             settings=get_settings(),
         )
     assert exc.value.status_code == 401
@@ -945,6 +1046,199 @@ async def test_refresh_rate_limited_is_429(monkeypatch: pytest.MonkeyPatch) -> N
         await auth_router.refresh(
             body=auth_router.RefreshRequest(refresh_token="bogus"),
             request=req,  # type: ignore[arg-type]
+            response=_FakeResponse(),  # type: ignore[arg-type]
             settings=get_settings(),
         )
     assert exc.value.status_code == 429
+
+
+# ---------------------------------------------------------------------------
+# Session cookie: the browser's persistent, JS-unreadable half of the session
+# ---------------------------------------------------------------------------
+def test_session_cookie_round_trips_the_refresh_token() -> None:
+    raw = session_cookie.mint_session_cookie(user_id="u1", refresh_token="rt-secret")
+    claims = session_cookie.read_session_cookie(raw)
+    assert claims.user_id == "u1"
+    assert claims.refresh_token == "rt-secret"
+
+
+def test_session_cookie_rejects_tampering_and_absence() -> None:
+    raw = session_cookie.mint_session_cookie(user_id="u1", refresh_token="rt-secret")
+    with pytest.raises(session_cookie.InvalidSessionCookie):
+        session_cookie.read_session_cookie(raw[:-2] + "xy")  # broken signature
+    with pytest.raises(session_cookie.InvalidSessionCookie):
+        session_cookie.read_session_cookie(None)
+    with pytest.raises(session_cookie.InvalidSessionCookie):
+        session_cookie.read_session_cookie("")
+
+
+def test_an_access_jwt_is_not_accepted_as_a_session_cookie() -> None:
+    """Both are signed with the same key, so only `typ` keeps them apart."""
+    access = mint_access_token(user_id="u1", guild_id=None, roles=())
+    with pytest.raises(session_cookie.InvalidSessionCookie):
+        session_cookie.read_session_cookie(access)
+
+
+@pytest.mark.asyncio
+async def test_callback_puts_the_refresh_token_in_an_httponly_cookie(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The session must survive a reload without the token being readable by JS."""
+    session = FakeSession()
+    monkeypatch.setattr(auth_router, "SessionLocal", lambda: session)
+    monkeypatch.setattr(httpx, "AsyncClient", _MockDiscordClient)
+    state = "state-cookie"
+    auth_router._remember_state(state)
+
+    result = await auth_router.callback(
+        request=_FakeRequest({auth_router._STATE_COOKIE: state}),  # type: ignore[arg-type]
+        response=_FakeResponse(),  # type: ignore[arg-type]
+        code="auth-code-123",
+        state=state,
+        settings=get_settings(),
+    )
+
+    set_cookie = [v for k, v in result.raw_headers if k == b"set-cookie"]
+    session_header = next(
+        h.decode() for h in set_cookie if session_cookie.cookie_name().encode() in h
+    )
+    assert "HttpOnly" in session_header
+    assert "SameSite=lax" in session_header
+    # The cookie's JWT carries the refresh token that was actually issued.
+    raw = session_header.split("=", 1)[1].split(";", 1)[0]
+    issued = session.store[RefreshToken][0]
+    assert session_cookie.read_session_cookie(raw).refresh_token
+    assert issued is not None
+
+
+@pytest.mark.asyncio
+async def test_refresh_falls_back_to_the_cookie_and_rotates_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The SPA sends no body — the browser attaches the cookie for it."""
+    session = FakeSession()
+    monkeypatch.setattr(auth_router, "SessionLocal", lambda: session)
+    uid = str(uuid.uuid4())
+    issued = await issue_refresh_token(session, user_id=uid)
+    raw = session_cookie.mint_session_cookie(user_id=uid, refresh_token=issued.token)
+    response = _FakeResponse()
+
+    pair = await auth_router.refresh(
+        request=_FakeRequest({session_cookie.cookie_name(): raw}),  # type: ignore[arg-type]
+        response=response,  # type: ignore[arg-type]
+        settings=get_settings(),
+        body=None,
+    )
+
+    assert pair.refresh_token != issued.token  # rotated
+    # A cookie still carrying the now-revoked token would 401 on the next reload.
+    rotated_cookie = response.cookies[session_cookie.cookie_name()]
+    assert session_cookie.read_session_cookie(rotated_cookie).refresh_token == pair.refresh_token
+
+
+@pytest.mark.asyncio
+async def test_refresh_clears_a_cookie_it_cannot_use(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Otherwise the SPA retries a dead cookie on every single boot.
+
+    Asserted on the EXCEPTION's headers, not on the injected Response: a cookie
+    written to that Response is dropped when the handler raises (FastAPI builds a
+    fresh response from the exception). See ``_clear_cookie_headers``.
+    """
+    session = FakeSession()
+    monkeypatch.setattr(auth_router, "SessionLocal", lambda: session)
+    monkeypatch.setattr(
+        auth_router, "_refresh_limiter", FixedWindowLimiter(max_hits=5, window_s=60.0)
+    )
+    raw = session_cookie.mint_session_cookie(user_id="u1", refresh_token="never-issued")
+
+    with pytest.raises(HTTPException) as exc:
+        await auth_router.refresh(
+            request=_FakeRequest({session_cookie.cookie_name(): raw}),  # type: ignore[arg-type]
+            response=_FakeResponse(),  # type: ignore[arg-type]
+            settings=get_settings(),
+            body=None,
+        )
+
+    assert exc.value.status_code == 401
+    set_cookie = (exc.value.headers or {}).get("set-cookie", "")
+    assert session_cookie.cookie_name() in set_cookie
+    assert "Max-Age=0" in set_cookie
+
+
+def test_a_raised_401_actually_delivers_the_clear_cookie_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Through the real ASGI stack — the unit test above cannot prove delivery.
+
+    A `response.delete_cookie(...)` before `raise HTTPException` looks correct and
+    passes when the handler is called directly, but the header never reaches the
+    browser. Only a request through the app catches that.
+
+    The FakeSession is not incidental: going through the app means the handler
+    runs for real, and its first act is to look the presented token up. Left on
+    the real `SessionLocal` this test passes on any machine with a dev Postgres
+    running and dies in CI on `getaddrinfo`, which is exactly the offline-unit
+    rule this suite is built on. An EMPTY store is also the state under test —
+    the token was never issued, so the lookup must miss and 401.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(auth_router, "SessionLocal", FakeSession)
+
+    app = FastAPI()
+    app.include_router(auth_router.router, prefix="/api/v1")
+    client = TestClient(app)
+
+    client.cookies.set(
+        session_cookie.cookie_name(),
+        session_cookie.mint_session_cookie(user_id="u1", refresh_token="never-issued"),
+    )
+    res = client.post("/api/v1/auth/refresh", json={})
+
+    assert res.status_code == 401
+    assert session_cookie.cookie_name() in res.headers.get("set-cookie", "")
+
+
+@pytest.mark.asyncio
+async def test_logout_revokes_the_cookie_token_and_clears_the_cookie(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sign out used to clear React state only, leaving the token live in the DB."""
+    session = FakeSession()
+    monkeypatch.setattr(auth_router, "SessionLocal", lambda: session)
+    uid = str(uuid.uuid4())
+    issued = await issue_refresh_token(session, user_id=uid)
+    raw = session_cookie.mint_session_cookie(user_id=uid, refresh_token=issued.token)
+    response = _FakeResponse()
+
+    result = await auth_router.logout(
+        request=_FakeRequest({session_cookie.cookie_name(): raw}),  # type: ignore[arg-type]
+        response=response,  # type: ignore[arg-type]
+        settings=get_settings(),
+        body=None,
+    )
+
+    assert result == {"status": "logged_out"}
+    assert session.store[RefreshToken][0].revoked is True
+    assert session_cookie.cookie_name() in response.deleted
+
+
+@pytest.mark.asyncio
+async def test_logout_without_any_session_still_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ "Log me out" is satisfied by already being logged out."""
+    session = FakeSession()
+    monkeypatch.setattr(auth_router, "SessionLocal", lambda: session)
+    response = _FakeResponse()
+
+    result = await auth_router.logout(
+        request=_FakeRequest({}),  # type: ignore[arg-type]
+        response=response,  # type: ignore[arg-type]
+        settings=get_settings(),
+        body=None,
+    )
+
+    assert result == {"status": "logged_out"}
+    assert session_cookie.cookie_name() in response.deleted

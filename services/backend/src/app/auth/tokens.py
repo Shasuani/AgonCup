@@ -7,7 +7,12 @@ cannot replay sessions. On every ``/auth/refresh``:
 * the presented secret is hashed and looked up;
 * an **already-revoked** match means the token was *reused* (it was rotated away
   earlier) → the entire **family** is revoked and the refresh is rejected. This is
-  the standard refresh-token-theft detection (rotation + reuse → kill family);
+  the standard refresh-token-theft detection (rotation + reuse → kill family).
+  The one exception is a **rotation race** — the same token presented twice within
+  ``Settings.refresh_rotation_grace`` while the earlier rotation's product is
+  still live — which is what two tabs booting together, or a client retrying a
+  request whose response it never saw, actually look like. Those get a sibling
+  token instead of a dead session; see :func:`rotate_refresh_token`;
 * a valid, unexpired, unrevoked token is **rotated**: it is marked revoked and a
   new token is issued in the same ``family_id`` with ``rotated_from_id`` set.
 
@@ -20,7 +25,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,6 +35,9 @@ from app.models import RefreshToken
 
 # Bytes of entropy in the opaque refresh secret (256-bit).
 _TOKEN_BYTES = 32
+
+# A zero grace disables the rotation-race leeway entirely (strict reuse detection).
+_ZERO = timedelta(0)
 
 
 class RefreshTokenError(Exception):
@@ -126,6 +134,33 @@ async def _revoke_family(session: AsyncSession, family_id: str) -> None:
     )
 
 
+async def _live_successor(
+    session: AsyncSession, *, row_id: str, moment: datetime
+) -> RefreshToken | None:
+    """The newest still-usable token rotated directly off ``row_id``, if any.
+
+    ``limit(1)``, not ``scalar_one_or_none``: a graced race (below) deliberately
+    issues a SIBLING off the same predecessor, so one row can have several
+    successors and a strict single-row fetch would explode on the second replay.
+    """
+    return (
+        (
+            await session.execute(
+                select(RefreshToken)
+                .where(
+                    RefreshToken.rotated_from_id == row_id,
+                    RefreshToken.revoked.is_(False),
+                    RefreshToken.expires_at > moment,
+                )
+                .order_by(RefreshToken.issued_at.desc())
+                .limit(1)
+            )
+        )
+        .scalars()
+        .first()
+    )
+
+
 async def rotate_refresh_token(
     session: AsyncSession,
     *,
@@ -151,6 +186,38 @@ async def rotate_refresh_token(
         raise InvalidRefreshToken("unknown refresh token")
 
     if row.revoked:
+        # Not every replay is theft. Two tabs booting together, or a request the
+        # client retried because it never saw the response, both present the same
+        # token twice within a heartbeat of each other — and burning the family
+        # there logs a legitimate user out of a session they just established.
+        #
+        # So: if this token was rotated moments ago AND that rotation's product is
+        # still live, treat it as a race and issue a SIBLING off the same
+        # predecessor. The earlier successor is deliberately LEFT ALIVE — revoking
+        # it would just move the problem, since whichever response reaches the
+        # browser last is the cookie it keeps, and half the time that is the other
+        # one. Two live tokens for a few seconds is the price; genuine reuse
+        # outside the window, or of a token whose chain has already moved on,
+        # still burns the family.
+        successor = await _live_successor(session, row_id=str(row.id), moment=moment)
+        grace = settings.refresh_rotation_grace
+        if (
+            successor is not None
+            and grace > _ZERO
+            and moment - successor.issued_at <= grace
+            and row.expires_at > moment
+        ):
+            return await issue_refresh_token(
+                session,
+                user_id=str(row.user_id),
+                family_id=str(row.family_id),
+                rotated_from_id=str(row.id),
+                device_label=row.device_label,
+                device_id=row.device_id,
+                settings=settings,
+                now=moment,
+            )
+
         # Reuse of a rotated token → theft. Burn the whole family.
         await _revoke_family(session, str(row.family_id))
         raise RefreshTokenReuse("refresh token reuse detected; family revoked")
@@ -177,7 +244,14 @@ async def rotate_refresh_token(
 
 
 async def revoke_refresh_token(session: AsyncSession, *, token: str) -> bool:
-    """Revoke a single presented refresh token (logout). Returns True if found.
+    """End the session the presented token belongs to (logout). True if found.
+
+    Revokes the whole **family**, not just the presented row. A family is exactly
+    one login lineage — every login mints a fresh family (see ``_issue_pair``) —
+    so this is what "log me out" means, and revoking one row is not: the
+    rotation-race grace in :func:`rotate_refresh_token` can leave a live sibling,
+    and a single-row revoke would sail straight past it and leave the session
+    alive for whoever holds it.
 
     Idempotent: revoking an unknown or already-revoked token is a no-op success.
     """
@@ -187,7 +261,7 @@ async def revoke_refresh_token(session: AsyncSession, *, token: str) -> bool:
     ).scalar_one_or_none()
     if row is None:
         return False
-    row.revoked = True
+    await _revoke_family(session, str(row.family_id))
     return True
 
 

@@ -100,7 +100,11 @@ export function createRequestRunner(config: ClientConfig): RequestRunner {
       if (guild) headers['X-Guild-Id'] = guild;
     }
 
-    const init: RequestInit = { method: opts.method, headers };
+    // `same-origin` so the browser attaches the HttpOnly session cookie that
+    // carries the refresh token — /auth/refresh and /auth/logout read it, and
+    // without this the SPA could not restore a session after a reload. It is not
+    // the default: `fetch` omits credentials unless asked, even same-origin.
+    const init: RequestInit = { method: opts.method, headers, credentials: 'same-origin' };
     if (opts.body !== undefined) {
       init.body = JSON.stringify(opts.body);
     }

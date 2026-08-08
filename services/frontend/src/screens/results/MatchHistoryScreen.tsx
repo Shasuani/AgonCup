@@ -10,7 +10,7 @@
 
 import { useApi } from "../../api/ApiProvider";
 import { useAsyncData } from "../../api/useAsync";
-import { ErrorBanner, Spinner } from "../../components";
+import { Button, EmptyState, ErrorBanner, ScreenHeader, Skeleton } from "../../components";
 import {
   championIconUrl,
   fetchMatchHistory,
@@ -85,31 +85,43 @@ function GameCard({ game }: { game: HistoryGame }): JSX.Element {
 
 export default function MatchHistoryScreen(): JSX.Element {
   const api = useApi();
-  const { data: games, loading, error } = useAsyncData<HistoryGame[]>(
+  const { data: games, loading, error, reload } = useAsyncData<HistoryGame[]>(
     () => fetchMatchHistory(api),
     [api],
   );
 
   return (
     <section aria-labelledby="history-heading">
-      <h1 id="history-heading">Match history</h1>
-      <p>
-        Per-game scoreboards from completed games. Reconstructed from client
-        reports (display only) — the official result still comes from adjudication
-        or an admin override.
-      </p>
+      <ScreenHeader
+        id="history-heading"
+        title="Match history"
+        intro="Per-game scoreboards from completed games. Reconstructed from client reports (display only) — the official result still comes from adjudication or an admin override."
+        actions={
+          <Button variant="secondary" onClick={reload} disabled={loading}>
+            {loading ? "Refreshing…" : "Refresh"}
+          </Button>
+        }
+      />
 
-      <ErrorBanner error={error} />
+      <ErrorBanner error={error} onRetry={reload} />
 
       {loading && games === null ? (
-        <p data-history-loading>
-          <Spinner label="Loading match history" /> Loading…
-        </p>
+        <div data-history-list data-history-loading aria-hidden="true">
+          {[0, 1].map((i) => (
+            <article key={i} data-history-card>
+              <Skeleton variant="line" width="40%" />
+              <Skeleton variant="rect" height={168} />
+            </article>
+          ))}
+        </div>
       ) : null}
 
       {games !== null ? (
         games.length === 0 ? (
-          <p data-history-empty>No games have been played yet.</p>
+          <EmptyState
+            title="No games have been played yet"
+            description="Scoreboards appear here once a custom match finishes and the players' clients report the result."
+          />
         ) : (
           <div data-history-list>
             {games.map((g) => (

@@ -36,9 +36,11 @@ describe("RequireRole", () => {
     expect(screen.getByText("NOT AUTHORIZED")).toBeInTheDocument();
   });
 
-  it("redirects an unauthenticated user to login", () => {
+  it("redirects an unauthenticated user to login", async () => {
+    // With no session the provider first attempts a silent cookie refresh, so
+    // the redirect lands only once that resolves (here: a failed fetch).
     renderGatedRoute(undefined);
-    expect(screen.getByText("LOGIN")).toBeInTheDocument();
+    expect(await screen.findByText("LOGIN")).toBeInTheDocument();
   });
 });
 

@@ -14,13 +14,18 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import discord
-from discord import app_commands
 
 from app.backend_client import BackendError, DiscordContext
 from app.cogs import setup_cogs
 from app.cogs._helpers import context_of, error_embed
 from app.cogs.register import RegisterCog
-from app.cogs.tournament import ScheduleModal, TournamentAdminCog
+from app.cogs.tournament import (
+    BasicsModal,
+    ScheduleModal,
+    ScheduleView,
+    TournamentAdminCog,
+    TournamentBasics,
+)
 from app.main import build_bot
 
 
@@ -82,19 +87,35 @@ def test_link_alias_renders_minted_code() -> None:
     assert "WXYZ-2345" in blob
 
 
-def _run_create(cog: TournamentAdminCog, interaction: Any, *, opens: str = "", starts: str = ""):
-    """Drive the two-step flow: slash command -> modal -> submit."""
-    asyncio.run(
-        cog.create.callback(
-            cog,
-            interaction,
-            "Summer Cup",
-            8,
-            app_commands.Choice(name="5v5", value="summoners_rift_5v5"),
-            app_commands.Choice(name="Bo1", value=1),
-        )
-    )
-    modal = interaction.response.send_modal.await_args.args[0]
+def _fill_basics(
+    cog: TournamentAdminCog,
+    interaction: Any,
+    *,
+    name: str = "Summer Cup",
+    size: str = "8",
+    mode: str = "summoners_rift_5v5",
+    series: str = "1",
+) -> ScheduleView:
+    """Run the slash command, fill form 1 and submit it; return the step-2 view."""
+    asyncio.run(cog.create.callback(cog, interaction))
+    modal: BasicsModal = interaction.response.send_modal.await_args.args[0]
+    modal.name_input._value = name
+    modal.size_select._values = [size]
+    modal.mode_select._values = [mode]
+    modal.series_select._values = [series]
+    asyncio.run(modal.on_submit(interaction))
+    view = interaction.response.send_message.await_args.kwargs["view"]
+    assert isinstance(view, ScheduleView)
+    return view
+
+
+def _run_create(
+    cog: TournamentAdminCog, interaction: Any, *, opens: str = "", starts: str = ""
+) -> ScheduleModal:
+    """Drive the whole flow: command -> basics form -> "Add dates…" -> schedule form."""
+    view = _fill_basics(cog, interaction)
+    asyncio.run(view.schedule.callback(interaction))
+    modal: ScheduleModal = interaction.response.send_modal.await_args.args[0]
     modal.registration_opens._value = opens
     modal.starts._value = starts
     asyncio.run(modal.on_submit(interaction))
@@ -127,18 +148,59 @@ def test_tournament_create_shows_join_code() -> None:
     assert "desktop client" in blob.lower()
 
 
-def test_tournament_create_requires_name_mode_series_and_size() -> None:
-    """The four core options are REQUIRED, so Discord prompts for them in turn.
+def test_tournament_create_asks_everything_in_a_form() -> None:
+    """The command takes no options — every setting is asked for in form 1.
 
-    As optional parameters they sat behind the "+" affordance and an admin who
-    never opened it silently got 16 teams / 5v5 / Bo1.
+    As optional slash parameters the four core settings sat behind the "+"
+    affordance, and an admin who never opened it silently got 16 teams / 5v5 / Bo1.
     """
-    params = TournamentAdminCog.create.parameters
-    by_name = {p.name: p for p in params}
+    assert TournamentAdminCog.create.parameters == []
 
-    assert [p.name for p in params] == ["name", "max_teams", "mode", "series"]
-    assert all(p.required for p in params)
-    assert (by_name["max_teams"].min_value, by_name["max_teams"].max_value) == (2, 16)
+    modal = BasicsModal(cog=TournamentAdminCog(AsyncMock()))
+    labels = [child for child in modal.children if isinstance(child, discord.ui.Label)]
+
+    assert [label.text for label in labels] == [
+        "Tournament name",
+        "Bracket size",
+        "Game mode",
+        "Series length",
+    ]
+    assert all(label.component.required for label in labels)
+    # The bracket-size dropdown mirrors the backend's MAX_TEAMS_HARD_CAP.
+    assert [o.value for o in modal.size_select.options] == [str(n) for n in range(2, 17)]
+    assert [o.value for o in modal.mode_select.options] == ["summoners_rift_5v5", "aram_1v1"]
+    assert [o.value for o in modal.series_select.options] == ["1", "3", "5"]
+
+
+def test_basics_form_hands_off_to_the_optional_schedule_form() -> None:
+    """Form 1 cannot open form 2 directly — Discord forbids modal-after-modal."""
+    cog = TournamentAdminCog(AsyncMock())
+    interaction = _make_interaction()
+
+    view = _fill_basics(cog, interaction, name="  Summer Cup  ", size="16", series="3")
+
+    assert view._basics == TournamentBasics(
+        name="Summer Cup",  # trimmed
+        max_teams=16,
+        game_mode="summoners_rift_5v5",
+        best_of=3,
+    )
+    assert [b.label for b in view.children] == ["Add dates…", "Skip — create now"]
+
+
+def test_skip_button_creates_without_a_schedule() -> None:
+    backend = AsyncMock()
+    backend.create_tournament.return_value = {"id": "t1", "name": "Summer Cup"}
+    cog = TournamentAdminCog(backend)
+    interaction = _make_interaction()
+
+    view = _fill_basics(cog, interaction)
+    asyncio.run(view.skip.callback(interaction))
+
+    # The buttons are dropped so the tournament cannot be created twice.
+    assert interaction.response.edit_message.await_args.kwargs["view"] is None
+    kwargs = backend.create_tournament.await_args.kwargs
+    assert (kwargs["registration_opens_at"], kwargs["start_at"]) == (None, None)
 
 
 def test_schedule_modal_fields_are_optional_and_labelled() -> None:
@@ -150,15 +212,13 @@ def test_schedule_modal_fields_are_optional_and_labelled() -> None:
     """
     modal = ScheduleModal(
         cog=TournamentAdminCog(AsyncMock()),
-        name="Cup",
-        max_teams=8,
-        game_mode="aram_1v1",
-        best_of=1,
+        basics=TournamentBasics(name="Cup", max_teams=8, game_mode="aram_1v1", best_of=1),
     )
     fields = [modal.registration_opens, modal.starts]
+    labels = [child for child in modal.children if isinstance(child, discord.ui.Label)]
 
     assert [f.required for f in fields] == [False, False]
-    assert all("(optional)" in f.label for f in fields)
+    assert all("(optional)" in label.text for label in labels)
     assert all("leave blank" in (f.placeholder or "").lower() for f in fields)
 
 

@@ -41,7 +41,7 @@ PY_SERVICE_DIRS := \
 PY_PKG_DIRS := $(PY_LIB_DIRS) $(PY_SERVICE_DIRS)
 
 .PHONY: help up down build-bases test test-db lint format typecheck gen-clients fixtures \
-	dev dev-backend dev-frontend dev-bot dev-desktop desktop-win sim-join infra-up infra-down db-migrate
+	dev dev-backend dev-frontend dev-bot dev-desktop desktop-win desktop-mac sim-join infra-up infra-down db-migrate
 
 # --- DB / RLS integration test config ----------------------------------------
 # Local equivalent of the CI `db-rls` job. Assumes a REACHABLE Postgres (e.g.
@@ -121,11 +121,21 @@ dev: ## Run backend (:8000) AND frontend (:5173) together; Ctrl-C stops both.
 # --- Quality gates -----------------------------------------------------------
 # Each loop iterates the package dirs; `[ -d ... ]` keeps it green before a
 # package exists, and `--directory` keeps each uv project standalone.
+#
+# The `uv sync --all-extras --dev` before each run is LOAD-BEARING, not tidiness.
+# pytest/mypy live in each package's `[project.optional-dependencies] dev`, which
+# a plain `uv run` does NOT install. When the tool is missing from the project
+# venv, `uv run` does not fail — it falls through to whatever is on PATH. On a
+# machine with conda/micromamba that silently ran lol-realtime's suite under a
+# system Python 3.9 with no pydantic (collection error), and `uv run mypy` died
+# with "Failed to spawn". Syncing first is what CI does, and it makes the local
+# run reproduce CI instead of the developer's PATH.
 test: ## Run pytest across all Python libs and services.
 	@for d in $(PY_PKG_DIRS); do \
 		if [ -d "$$d" ]; then \
 			echo "==> pytest $$d"; \
-			$(UV) run --directory "$$d" pytest || exit $$?; \
+			$(UV) sync --directory "$$d" --all-extras --dev --quiet || exit $$?; \
+			$(UV) run --directory "$$d" --no-sync pytest || exit $$?; \
 		else \
 			echo "==> skip (missing) $$d"; \
 		fi; \
@@ -156,7 +166,8 @@ typecheck: ## Type-check all Python packages with mypy (each package's own confi
 	@for d in $(PY_PKG_DIRS); do \
 		if [ -d "$$d/src" ]; then \
 			echo "==> mypy $$d/src"; \
-			$(UV) run --directory "$$d" mypy src || exit $$?; \
+			$(UV) sync --directory "$$d" --all-extras --dev --quiet || exit $$?; \
+			$(UV) run --directory "$$d" --no-sync mypy src || exit $$?; \
 		else \
 			echo "==> skip (no src) $$d"; \
 		fi; \
@@ -169,6 +180,13 @@ typecheck: ## Type-check all Python packages with mypy (each package's own confi
 # BACKEND_URL= / OUT_DIR=. See the header of the script for why not electron-builder.
 desktop-win: ## Build the desktop client for Windows into $$OUT_DIR (default J:\loltournament).
 	@bash services/desktop/scripts/build-win.sh
+
+# Build + install the macOS app so a Finder/Spotlight launch always runs the
+# latest build against the right backend (a Finder launch inherits no shell env,
+# so both urls are baked into the installed bundle). Override with
+# BACKEND_URL= / APP_DEST=.
+desktop-mac: ## Build + install the desktop client to $$APP_DEST (default /Applications/LeagueOfLeagues.app).
+	@bash services/desktop/scripts/install-macos.sh
 
 # --- Placeholders (wired up in later phases) ---------------------------------
 gen-clients: ## (placeholder) Regenerate OpenAPI/TS clients + WS JSON-schema.

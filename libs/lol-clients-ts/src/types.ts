@@ -27,12 +27,16 @@ export interface TokenPair {
   token_type: string;
 }
 
+/** Refresh body. `refresh_token` is optional: a browser has none to send — its
+ *  token lives in the HttpOnly session cookie the browser attaches itself. The
+ *  desktop client passes it explicitly (it stores the token in the OS keychain). */
 export interface RefreshRequest {
-  refresh_token: string;
+  refresh_token?: string;
 }
 
+/** Logout body. Optional for the same reason as {@link RefreshRequest}. */
 export interface LogoutRequest {
-  refresh_token: string;
+  refresh_token?: string;
 }
 
 /** Response body of `POST /auth/logout`. */

@@ -113,7 +113,7 @@ function ServerCard({ guild, onChanged }: ServerCardProps): JSX.Element {
   const api = useApi();
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { getRefreshToken, setSession } = useAuth();
+  const { setSession } = useAuth();
   const { setActingGuild } = useActingGuild();
   const [busy, setBusy] = useState(false);
 
@@ -130,11 +130,10 @@ function ServerCard({ guild, onChanged }: ServerCardProps): JSX.Element {
   const confirmInstalled = useCallback(async () => {
     setBusy(true);
     try {
-      const refreshToken = getRefreshToken();
-      if (refreshToken) {
-        const pair: TokenPair = await api.auth.refresh({ refresh_token: refreshToken });
-        setSession(sessionFromTokenPair(pair));
-      }
+      // No token to pass: the browser attaches the HttpOnly session cookie and
+      // the backend rotates from that.
+      const pair: TokenPair = await api.auth.refresh({});
+      setSession(sessionFromTokenPair(pair));
       onChanged();
     } catch {
       // A failed rotation is not fatal here — reloading the list still shows
@@ -143,7 +142,7 @@ function ServerCard({ guild, onChanged }: ServerCardProps): JSX.Element {
     } finally {
       setBusy(false);
     }
-  }, [api, getRefreshToken, setSession, onChanged]);
+  }, [api, setSession, onChanged]);
 
   /** Switch the app's tenant to this server and go run something. */
   const manage = useCallback(() => {

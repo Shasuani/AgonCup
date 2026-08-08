@@ -1,29 +1,27 @@
 // Auth context for the admin SPA.
 //
-// Holds the access + refresh tokens IN MEMORY (React state). Login is a browser
-// redirect to the backend's Discord-OAuth start; the backend redirects back to
-// `/auth/callback#access_token=...&refresh_token=...`, which AuthCallback (see
-// AuthCallback.tsx) parses and feeds to `setSession`.
+// The SHORT-LIVED access token lives in React state; the long-lived refresh
+// token is never in JavaScript at all. The backend puts it in an HttpOnly,
+// SameSite session cookie (a signed JWT — see app/auth/session_cookie.py), so an
+// injected script cannot read it, and the browser attaches it automatically to
+// /auth/refresh and /auth/logout.
 //
-// SECURITY TRADE-OFF (follow-up): keeping the refresh token in JS memory exposes
-// it to XSS (any injected script can read it) but it never touches disk and is
-// gone on reload. The hardened alternative is an httpOnly, Secure, SameSite
-// cookie for the refresh token (unreadable by JS) with the access token kept in
-// memory. That requires backend cookie support + CSRF protection on the refresh
-// endpoint. Tracked as a required follow-up below.
+// That cookie is also what makes a session survive a page reload. The provider
+// used to hold BOTH tokens in React state and restore nothing on mount, so every
+// refresh — every new tab, every restart — logged the user out and sent them
+// back through Discord. On mount we now attempt one silent refresh: if the
+// cookie is good the session is restored, otherwise the login screen appears.
 //
-// REQUIRED FOLLOW-UPS (backend coordination):
-//   1. Move the refresh token to an httpOnly cookie (XSS hardening, above).
-//
-// (The callback redirect shape was previously ASSUMED here and unimplemented on
-// the backend — `/auth/callback` returned the TokenPair as JSON, so signing in
-// dead-ended on a page of raw tokens. The backend now 303s to
-// `<FRONTEND_BASE_URL>/auth/callback#access_token=...&refresh_token=...`.)
+// `logout` calls the backend so the refresh token is REVOKED and the cookie
+// cleared. Clearing React state alone (what it used to do) left the session
+// alive server-side until it expired — invisible while the token died with the
+// tab, but a real hole now that the cookie outlives it.
 
 import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -33,19 +31,30 @@ import type { AccessTokenClaims, TokenPair } from "@lol/clients-ts";
 import { decodeAccessToken } from "./jwt";
 import { config } from "../config";
 
+/** Absolute URL of an `/api/v1/auth/*` endpoint. */
+function authEndpoint(path: string): string {
+  return `${config.apiBaseUrl.replace(/\/+$/, "")}/api/v1/auth/${path}`;
+}
+
 /** The backend `/auth/login` URL the browser is redirected to. */
 function backendLoginUrl(): string {
-  return `${config.apiBaseUrl.replace(/\/+$/, "")}/api/v1/auth/login`;
+  return authEndpoint("login");
 }
 
 export interface AuthSession {
   accessToken: string;
-  refreshToken: string;
+  /** Legacy/desktop-shaped field. The browser no longer receives one — the token
+   *  is in the HttpOnly cookie — so this is absent in the SPA. */
+  refreshToken?: string;
 }
 
 export interface AuthContextValue {
   /** True once a non-expired access token is present. */
   isAuthenticated: boolean;
+  /** True while the mount-time silent refresh is still in flight. Render a
+   *  spinner rather than the login screen, or a returning user sees a flash of
+   *  "signed out" before their session is restored. */
+  isRestoring: boolean;
   /** Decoded (UNVERIFIED) claims of the current access token, or null. */
   claims: AccessTokenClaims | null;
   /** Lazy accessor passed to the API client's `getToken`. */
@@ -85,6 +94,8 @@ export function AuthProvider({
   redirect,
 }: AuthProviderProps): JSX.Element {
   const [session, setSessionState] = useState<AuthSession | null>(initialSession);
+  // Tests hand us a session directly; only a real cold start needs restoring.
+  const [isRestoring, setIsRestoring] = useState(initialSession === null);
 
   // Keep a ref in sync so `getToken` is a stable identity yet always reads the
   // latest token (the API client calls it lazily on every request).
@@ -93,9 +104,46 @@ export function AuthProvider({
 
   const setSession = useCallback((next: AuthSession) => {
     setSessionState(next);
+    setIsRestoring(false);
   }, []);
 
+  // Cold start: ask the backend to rotate the session cookie into a fresh access
+  // token. 401 simply means "no usable cookie" — show the login screen.
+  useEffect(() => {
+    if (initialSession !== null) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(authEndpoint("refresh"), {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+        });
+        if (!cancelled && res.ok) {
+          const pair = (await res.json()) as TokenPair;
+          setSessionState({ accessToken: pair.access_token });
+        }
+      } catch {
+        // Offline / backend down: fall through to the login screen.
+      } finally {
+        if (!cancelled) setIsRestoring(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [initialSession]);
+
   const logout = useCallback(() => {
+    // Revoke server-side and drop the cookie, then clear locally regardless: a
+    // failed call must not strand the user in a session they asked to leave.
+    void fetch(authEndpoint("logout"), {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    }).catch(() => undefined);
     setSessionState(null);
   }, []);
 
@@ -124,6 +172,7 @@ export function AuthProvider({
   const value = useMemo<AuthContextValue>(
     () => ({
       isAuthenticated: Boolean(session?.accessToken),
+      isRestoring,
       claims,
       getToken,
       getRefreshToken,
@@ -131,7 +180,7 @@ export function AuthProvider({
       setSession,
       logout,
     }),
-    [session?.accessToken, claims, getToken, getRefreshToken, login, setSession, logout],
+    [session?.accessToken, isRestoring, claims, getToken, getRefreshToken, login, setSession, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -146,7 +195,11 @@ export function useAuth(): AuthContextValue {
   return ctx;
 }
 
-/** Convert a backend {@link TokenPair} into the in-memory session shape. */
+/** Convert a backend {@link TokenPair} into the in-memory session shape.
+ *
+ * The refresh token is intentionally dropped: the browser's copy is the HttpOnly
+ * cookie the same response set, and keeping a second copy in JS would hand XSS
+ * exactly what the cookie exists to protect. */
 export function sessionFromTokenPair(pair: TokenPair): AuthSession {
-  return { accessToken: pair.access_token, refreshToken: pair.refresh_token };
+  return { accessToken: pair.access_token };
 }

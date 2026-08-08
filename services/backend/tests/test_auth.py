@@ -22,6 +22,7 @@ import operator
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import parse_qsl
 
@@ -31,7 +32,7 @@ from fastapi import HTTPException
 from lol_schemas.enums import GuildStatus, UserGuildRoleName
 
 from app.accounts import service as accounts_service
-from app.auth import discord_oauth
+from app.auth import discord_oauth, session_cookie
 from app.auth import router as auth_router
 from app.auth.deps import Principal, require_role
 from app.auth.jwt import (
@@ -80,17 +81,30 @@ class _Result:
 
 
 class _FakeRequest:
-    """Minimal stand-in for starlette Request — the callback only reads cookies."""
+    """Minimal stand-in for starlette Request — the routes only read cookies.
 
-    def __init__(self, cookies: dict[str, str]) -> None:
+    ``client`` is present because /auth/refresh rate-limits on the peer address.
+    """
+
+    def __init__(self, cookies: dict[str, str], *, host: str = "203.0.113.9") -> None:
         self.cookies = cookies
+        self.client = SimpleNamespace(host=host)
 
 
 class _FakeResponse:
-    """Minimal stand-in for Response — the callback only clears a cookie."""
+    """Minimal stand-in for Response, recording cookie writes so tests can assert
+    what the browser would actually be told to store."""
 
-    def delete_cookie(self, *args: Any, **kwargs: Any) -> None:
-        return None
+    def __init__(self) -> None:
+        self.cookies: dict[str, str] = {}
+        self.deleted: list[str] = []
+
+    def set_cookie(self, key: str, value: str = "", **kwargs: Any) -> None:
+        self.cookies[key] = value
+
+    def delete_cookie(self, key: str, *args: Any, **kwargs: Any) -> None:
+        self.deleted.append(key)
+        self.cookies.pop(key, None)
 
 
 class FakeSession:
@@ -410,15 +424,18 @@ async def test_oauth_callback_upserts_user_and_encrypts_credential(
         request=req, response=resp, code="auth-code-123", state=state, settings=get_settings()
     )
 
-    # The browser is 303'd back to the SPA with the pair in the URL FRAGMENT
-    # (never the query string — a fragment is not sent to servers/proxies/logs).
+    # The browser is 303'd back to the SPA with the SHORT-LIVED access token in
+    # the URL FRAGMENT (never the query string — a fragment is not sent to
+    # servers/proxies/logs).
     assert result.status_code == 303
     location = result.headers["location"]
     base, _, fragment = location.partition("#")
     assert base == f"{get_settings().frontend_origin}/auth/callback"
     tokens = dict(parse_qsl(fragment))
     assert tokens["access_token"]
-    assert tokens["refresh_token"]
+    # The refresh token must NOT ride the URL: it is the long-lived credential,
+    # and a URL survives in history, screenshots and the referrer chain.
+    assert "refresh_token" not in tokens
 
     # The access JWT verifies and carries our user id.
     user = session.store[User][0]
@@ -937,6 +954,7 @@ async def test_refresh_rate_limited_is_429(monkeypatch: pytest.MonkeyPatch) -> N
         await auth_router.refresh(
             body=auth_router.RefreshRequest(refresh_token="bogus"),
             request=req,  # type: ignore[arg-type]
+            response=_FakeResponse(),  # type: ignore[arg-type]
             settings=get_settings(),
         )
     assert exc.value.status_code == 401
@@ -945,6 +963,188 @@ async def test_refresh_rate_limited_is_429(monkeypatch: pytest.MonkeyPatch) -> N
         await auth_router.refresh(
             body=auth_router.RefreshRequest(refresh_token="bogus"),
             request=req,  # type: ignore[arg-type]
+            response=_FakeResponse(),  # type: ignore[arg-type]
             settings=get_settings(),
         )
     assert exc.value.status_code == 429
+
+
+# ---------------------------------------------------------------------------
+# Session cookie: the browser's persistent, JS-unreadable half of the session
+# ---------------------------------------------------------------------------
+def test_session_cookie_round_trips_the_refresh_token() -> None:
+    raw = session_cookie.mint_session_cookie(user_id="u1", refresh_token="rt-secret")
+    claims = session_cookie.read_session_cookie(raw)
+    assert claims.user_id == "u1"
+    assert claims.refresh_token == "rt-secret"
+
+
+def test_session_cookie_rejects_tampering_and_absence() -> None:
+    raw = session_cookie.mint_session_cookie(user_id="u1", refresh_token="rt-secret")
+    with pytest.raises(session_cookie.InvalidSessionCookie):
+        session_cookie.read_session_cookie(raw[:-2] + "xy")  # broken signature
+    with pytest.raises(session_cookie.InvalidSessionCookie):
+        session_cookie.read_session_cookie(None)
+    with pytest.raises(session_cookie.InvalidSessionCookie):
+        session_cookie.read_session_cookie("")
+
+
+def test_an_access_jwt_is_not_accepted_as_a_session_cookie() -> None:
+    """Both are signed with the same key, so only `typ` keeps them apart."""
+    access = mint_access_token(user_id="u1", guild_id=None, roles=())
+    with pytest.raises(session_cookie.InvalidSessionCookie):
+        session_cookie.read_session_cookie(access)
+
+
+@pytest.mark.asyncio
+async def test_callback_puts_the_refresh_token_in_an_httponly_cookie(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The session must survive a reload without the token being readable by JS."""
+    session = FakeSession()
+    monkeypatch.setattr(auth_router, "SessionLocal", lambda: session)
+    monkeypatch.setattr(httpx, "AsyncClient", _MockDiscordClient)
+    state = "state-cookie"
+    auth_router._remember_state(state)
+
+    result = await auth_router.callback(
+        request=_FakeRequest({auth_router._STATE_COOKIE: state}),  # type: ignore[arg-type]
+        response=_FakeResponse(),  # type: ignore[arg-type]
+        code="auth-code-123",
+        state=state,
+        settings=get_settings(),
+    )
+
+    set_cookie = [v for k, v in result.raw_headers if k == b"set-cookie"]
+    session_header = next(
+        h.decode() for h in set_cookie if session_cookie.cookie_name().encode() in h
+    )
+    assert "HttpOnly" in session_header
+    assert "SameSite=lax" in session_header
+    # The cookie's JWT carries the refresh token that was actually issued.
+    raw = session_header.split("=", 1)[1].split(";", 1)[0]
+    issued = session.store[RefreshToken][0]
+    assert session_cookie.read_session_cookie(raw).refresh_token
+    assert issued is not None
+
+
+@pytest.mark.asyncio
+async def test_refresh_falls_back_to_the_cookie_and_rotates_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The SPA sends no body — the browser attaches the cookie for it."""
+    session = FakeSession()
+    monkeypatch.setattr(auth_router, "SessionLocal", lambda: session)
+    uid = str(uuid.uuid4())
+    issued = await issue_refresh_token(session, user_id=uid)
+    raw = session_cookie.mint_session_cookie(user_id=uid, refresh_token=issued.token)
+    response = _FakeResponse()
+
+    pair = await auth_router.refresh(
+        request=_FakeRequest({session_cookie.cookie_name(): raw}),  # type: ignore[arg-type]
+        response=response,  # type: ignore[arg-type]
+        settings=get_settings(),
+        body=None,
+    )
+
+    assert pair.refresh_token != issued.token  # rotated
+    # A cookie still carrying the now-revoked token would 401 on the next reload.
+    rotated_cookie = response.cookies[session_cookie.cookie_name()]
+    assert session_cookie.read_session_cookie(rotated_cookie).refresh_token == pair.refresh_token
+
+
+@pytest.mark.asyncio
+async def test_refresh_clears_a_cookie_it_cannot_use(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Otherwise the SPA retries a dead cookie on every single boot.
+
+    Asserted on the EXCEPTION's headers, not on the injected Response: a cookie
+    written to that Response is dropped when the handler raises (FastAPI builds a
+    fresh response from the exception). See ``_clear_cookie_headers``.
+    """
+    session = FakeSession()
+    monkeypatch.setattr(auth_router, "SessionLocal", lambda: session)
+    monkeypatch.setattr(
+        auth_router, "_refresh_limiter", FixedWindowLimiter(max_hits=5, window_s=60.0)
+    )
+    raw = session_cookie.mint_session_cookie(user_id="u1", refresh_token="never-issued")
+
+    with pytest.raises(HTTPException) as exc:
+        await auth_router.refresh(
+            request=_FakeRequest({session_cookie.cookie_name(): raw}),  # type: ignore[arg-type]
+            response=_FakeResponse(),  # type: ignore[arg-type]
+            settings=get_settings(),
+            body=None,
+        )
+
+    assert exc.value.status_code == 401
+    set_cookie = (exc.value.headers or {}).get("set-cookie", "")
+    assert session_cookie.cookie_name() in set_cookie
+    assert "Max-Age=0" in set_cookie
+
+
+def test_a_raised_401_actually_delivers_the_clear_cookie_header() -> None:
+    """Through the real ASGI stack — the unit test above cannot prove delivery.
+
+    A `response.delete_cookie(...)` before `raise HTTPException` looks correct and
+    passes when the handler is called directly, but the header never reaches the
+    browser. Only a request through the app catches that.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    app.include_router(auth_router.router, prefix="/api/v1")
+    client = TestClient(app)
+
+    client.cookies.set(
+        session_cookie.cookie_name(),
+        session_cookie.mint_session_cookie(user_id="u1", refresh_token="never-issued"),
+    )
+    res = client.post("/api/v1/auth/refresh", json={})
+
+    assert res.status_code == 401
+    assert session_cookie.cookie_name() in res.headers.get("set-cookie", "")
+
+
+@pytest.mark.asyncio
+async def test_logout_revokes_the_cookie_token_and_clears_the_cookie(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sign out used to clear React state only, leaving the token live in the DB."""
+    session = FakeSession()
+    monkeypatch.setattr(auth_router, "SessionLocal", lambda: session)
+    uid = str(uuid.uuid4())
+    issued = await issue_refresh_token(session, user_id=uid)
+    raw = session_cookie.mint_session_cookie(user_id=uid, refresh_token=issued.token)
+    response = _FakeResponse()
+
+    result = await auth_router.logout(
+        request=_FakeRequest({session_cookie.cookie_name(): raw}),  # type: ignore[arg-type]
+        response=response,  # type: ignore[arg-type]
+        settings=get_settings(),
+        body=None,
+    )
+
+    assert result == {"status": "logged_out"}
+    assert session.store[RefreshToken][0].revoked is True
+    assert session_cookie.cookie_name() in response.deleted
+
+
+@pytest.mark.asyncio
+async def test_logout_without_any_session_still_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ "Log me out" is satisfied by already being logged out."""
+    session = FakeSession()
+    monkeypatch.setattr(auth_router, "SessionLocal", lambda: session)
+    response = _FakeResponse()
+
+    result = await auth_router.logout(
+        request=_FakeRequest({}),  # type: ignore[arg-type]
+        response=response,  # type: ignore[arg-type]
+        settings=get_settings(),
+        body=None,
+    )
+
+    assert result == {"status": "logged_out"}
+    assert session_cookie.cookie_name() in response.deleted

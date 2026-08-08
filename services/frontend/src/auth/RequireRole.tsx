@@ -10,6 +10,7 @@
 import type { ReactNode } from "react";
 import { Navigate, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "./AuthProvider";
+import { Spinner } from "../components/Spinner";
 import { hasAnyRole } from "./roles";
 
 export interface RequireAuthProps {
@@ -18,9 +19,15 @@ export interface RequireAuthProps {
 
 /** Gate that requires an authenticated session. */
 export function RequireAuth({ children }: RequireAuthProps): JSX.Element {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, isRestoring } = useAuth();
   const location = useLocation();
 
+  // A deep-linked reload arrives here BEFORE the silent refresh resolves.
+  // Redirecting now would bounce a signed-in user to /login and lose the route
+  // they asked for, so wait for the answer.
+  if (isRestoring) {
+    return <Spinner label="Restoring your session" />;
+  }
   if (!isAuthenticated) {
     return <Navigate to="/login" replace state={{ from: location.pathname }} />;
   }
@@ -39,8 +46,11 @@ export interface RequireRoleProps {
  * an unauthenticated user has no roles and is sent to NotAuthorized.
  */
 export function RequireRole({ anyOf, children }: RequireRoleProps): JSX.Element {
-  const { isAuthenticated, claims } = useAuth();
+  const { isAuthenticated, isRestoring, claims } = useAuth();
 
+  if (isRestoring) {
+    return <Spinner label="Restoring your session" />;
+  }
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
   }

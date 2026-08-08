@@ -13,10 +13,12 @@
 // endpoint. Tracked as a required follow-up below.
 //
 // REQUIRED FOLLOW-UPS (backend coordination):
-//   1. Confirm/implement the OAuth callback redirect target + fragment shape
-//      (`/auth/callback#access_token=...&refresh_token=...`). The exact format
-//      is ASSUMED here and must be matched to the backend's auth router.
-//   2. Move the refresh token to an httpOnly cookie (XSS hardening, above).
+//   1. Move the refresh token to an httpOnly cookie (XSS hardening, above).
+//
+// (The callback redirect shape was previously ASSUMED here and unimplemented on
+// the backend — `/auth/callback` returned the TokenPair as JSON, so signing in
+// dead-ended on a page of raw tokens. The backend now 303s to
+// `<FRONTEND_BASE_URL>/auth/callback#access_token=...&refresh_token=...`.)
 
 import {
   createContext,
@@ -48,6 +50,14 @@ export interface AuthContextValue {
   claims: AccessTokenClaims | null;
   /** Lazy accessor passed to the API client's `getToken`. */
   getToken: () => string | null;
+  /**
+   * The current refresh token, for callers that need to re-mint the ACCESS token
+   * mid-session — roles are baked into the access JWT at issue time, so after an
+   * action that grants a role (e.g. installing the bot into a new server, which
+   * makes the installer a `guild_admin`) the old token still reads `roles: []`
+   * until it is rotated. See `screens/servers/ServersScreen`.
+   */
+  getRefreshToken: () => string | null;
   /** Start Discord OAuth by navigating the browser to the backend. */
   login: () => void;
   /** Install a session (used by the OAuth callback handler). */
@@ -102,6 +112,10 @@ export function AuthProvider({
     return sessionRef.current?.accessToken ?? null;
   }, []);
 
+  const getRefreshToken = useCallback((): string | null => {
+    return sessionRef.current?.refreshToken ?? null;
+  }, []);
+
   const claims = useMemo(
     () => decodeAccessToken(session?.accessToken),
     [session?.accessToken],
@@ -112,11 +126,12 @@ export function AuthProvider({
       isAuthenticated: Boolean(session?.accessToken),
       claims,
       getToken,
+      getRefreshToken,
       login,
       setSession,
       logout,
     }),
-    [session?.accessToken, claims, getToken, login, setSession, logout],
+    [session?.accessToken, claims, getToken, getRefreshToken, login, setSession, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

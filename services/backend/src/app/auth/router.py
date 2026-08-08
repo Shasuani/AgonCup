@@ -6,8 +6,9 @@ Endpoints
                             ``state``) and redirect the browser to it.
 * ``GET  /auth/callback`` — validate ``state``, exchange ``code`` for Discord
                             tokens, fetch the Discord user, upsert our ``User``,
-                            store the ENCRYPTED OAuth credential, then issue our
-                            own access JWT + rotating refresh token.
+                            store the ENCRYPTED OAuth credential, issue our own
+                            access JWT + rotating refresh token, then **303 back
+                            to the SPA** with the pair in the URL fragment.
 * ``POST /auth/refresh``  — rotate a refresh token (reuse-detection revokes the
                             family) and mint a fresh access JWT.
 * ``POST /auth/logout``   — revoke the presented refresh token.
@@ -24,17 +25,19 @@ import secrets
 import time
 from datetime import UTC, datetime
 from typing import Annotated
+from urllib.parse import urlencode
 
 import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
-from lol_schemas.enums import UserGuildRoleName
+from lol_schemas.enums import GuildStatus, UserGuildRoleName
 from pydantic import BaseModel, Field
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.accounts import service as accounts_service
 from app.auth import discord_oauth
+from app.auth.deps import Principal, get_current_principal
 from app.auth.jwt import mint_access_token
 from app.auth.tokens import (
     InvalidRefreshToken,
@@ -48,7 +51,7 @@ from app.db import SessionLocal
 from app.logging import get_logger
 from app.models import Guild, OAuthCredential, RiotAccount, User, UserGuildRole, VerificationAttempt
 from app.ratelimit import FixedWindowLimiter
-from app.security import encrypt
+from app.security import decrypt, encrypt
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 log = get_logger("app.auth")
@@ -99,6 +102,24 @@ class TokenPair(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"  # noqa: S105 - not a secret, the scheme name
+
+
+class AdminGuild(BaseModel):
+    """A Discord server the caller administers — a bot-install target.
+
+    ``installed`` distinguishes "the bot is already here, go manage it" from
+    "click ``invite_url`` to add it". Ids are strings: Discord snowflakes exceed
+    JavaScript's safe integer range and would be silently mangled as JSON numbers.
+    """
+
+    discord_guild_id: str
+    name: str
+    icon_url: str | None = None
+    owner: bool = False
+    installed: bool = False
+    #: Our internal guild UUID (the `X-Guild-Id` tenant key). Null until installed.
+    guild_id: str | None = None
+    invite_url: str
 
 
 class RefreshRequest(BaseModel):
@@ -251,14 +272,37 @@ async def login(settings: Annotated[Settings, Depends(_get_settings_dep)]) -> Re
     return resp
 
 
-@router.get("/callback", response_model=TokenPair, summary="Discord OAuth2 callback")
+def _callback_redirect(pair: TokenPair, settings: Settings) -> RedirectResponse:
+    """Hand the token pair back to the SPA via the URL **fragment**.
+
+    The browser lands on the backend's ``/auth/callback``; returning JSON there
+    would just render raw tokens in the address bar (and leave the user outside
+    the app). Instead we 303 to ``<frontend>/auth/callback#access_token=..&
+    refresh_token=..``, which ``screens/auth/AuthCallback.tsx`` parses, installs,
+    and scrubs from history. A fragment is chosen over a query string because it
+    is never transmitted to servers, proxies, or access logs.
+    """
+    fragment = urlencode(
+        {
+            "access_token": pair.access_token,
+            "refresh_token": pair.refresh_token,
+            "token_type": pair.token_type,
+        }
+    )
+    return RedirectResponse(
+        url=f"{settings.frontend_origin}/auth/callback#{fragment}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.get("/callback", summary="Discord OAuth2 callback (303 back to the SPA)")
 async def callback(
     request: Request,
     response: Response,
     code: Annotated[str, Query()],
     state: Annotated[str, Query()],
     settings: Annotated[Settings, Depends(_get_settings_dep)],
-) -> TokenPair:
+) -> RedirectResponse:
     # CSRF: the ?state must match the cookie set at /login (session binding) AND
     # be a live, single-use value from the in-process store. Constant-time match.
     cookie_state = request.cookies.get(_STATE_COOKIE)
@@ -299,7 +343,11 @@ async def callback(
         pair = await _issue_pair(session, str(user.id), settings)
 
     log.info("auth_login_success", user_id=str(user.id))
-    return pair
+    # Returning a Response directly bypasses the injected `response`, so the
+    # single-use state cookie must be cleared on the redirect itself.
+    redirect = _callback_redirect(pair, settings)
+    redirect.delete_cookie(_STATE_COOKIE)
+    return redirect
 
 
 async def _upsert_oauth_credential(
@@ -335,6 +383,95 @@ async def _upsert_oauth_credential(
         existing.access_token_enc = access_enc
         existing.refresh_token_enc = refresh_enc
         existing.scopes = list(tokens.scopes)
+
+
+@router.get(
+    "/guilds",
+    response_model=list[AdminGuild],
+    summary="Discord servers the caller administers (bot install targets)",
+)
+async def list_admin_guilds(
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    settings: Annotated[Settings, Depends(_get_settings_dep)],
+) -> list[AdminGuild]:
+    """List the caller's Discord servers where they can install the bot.
+
+    Answers "where do I put this bot?" — previously unanswerable, because there
+    was no way to enumerate a user's servers and no invite URL anywhere in the
+    product; a guild could only be onboarded by hand-crafting an invite link.
+
+    Admin-ness is Discord's own ``ADMINISTRATOR`` bit read from the user's OAuth
+    token, never anything the client asserts. ``installed`` is the join against
+    our ``guilds`` table (the tenant root — NOT under guild RLS, so it is
+    readable without an acting-guild GUC).
+    """
+    async with SessionLocal() as session:
+        cred = (
+            await session.execute(
+                select(OAuthCredential).where(
+                    OAuthCredential.user_id == principal.user_id,
+                    OAuthCredential.provider == DISCORD_PROVIDER,
+                )
+            )
+        ).scalar_one_or_none()
+        if cred is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail="discord_reauth_required"
+            )
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            try:
+                guilds = await discord_oauth.fetch_user_guilds(
+                    decrypt(cred.access_token_enc), client=client
+                )
+            except discord_oauth.DiscordReauthRequired:
+                # Expired/revoked token, or one minted before the `guilds` scope
+                # existed. The SPA turns this into a "sign in again" prompt.
+                log.info("discord_guilds_reauth_required", user_id=principal.user_id)
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT, detail="discord_reauth_required"
+                ) from None
+            except discord_oauth.DiscordOAuthError as exc:
+                log.warning("discord_guilds_failed", error=str(exc))
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY, detail="discord guild list failed"
+                ) from exc
+
+        admin_guilds = [g for g in guilds if g.is_admin]
+        onboarded = {
+            row.discord_guild_id: row
+            for row in (
+                await session.execute(
+                    select(Guild).where(
+                        Guild.discord_guild_id.in_([g.discord_guild_id for g in admin_guilds]),
+                        Guild.status != GuildStatus.REMOVED,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        }
+
+    return [
+        AdminGuild(
+            discord_guild_id=str(g.discord_guild_id),
+            name=g.name,
+            icon_url=(
+                f"https://cdn.discordapp.com/icons/{g.discord_guild_id}/{g.icon}.png"
+                if g.icon
+                else None
+            ),
+            owner=g.owner,
+            installed=g.discord_guild_id in onboarded,
+            guild_id=(
+                str(onboarded[g.discord_guild_id].id) if g.discord_guild_id in onboarded else None
+            ),
+            invite_url=discord_oauth.build_bot_invite_url(
+                settings=settings, guild_id=g.discord_guild_id
+            ),
+        )
+        for g in admin_guilds
+    ]
 
 
 @router.post("/refresh", response_model=TokenPair, summary="Rotate a refresh token")

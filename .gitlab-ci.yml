@@ -348,6 +348,11 @@ security:images:
       DISCORD_CLIENT_ID=${DISCORD_CLIENT_ID:-}
       DISCORD_CLIENT_SECRET=${DISCORD_CLIENT_SECRET:-}
       DISCORD_REDIRECT_URI=https://$APP_DOMAIN/api/v1/auth/callback
+      # Where /api/v1/auth/callback 303s the browser back to (the SPA, served by
+      # Caddy on the same host). WITHOUT this the backend keeps its dev default,
+      # http://localhost:5173, and every deployed Discord login dead-ends on the
+      # callback URL instead of landing in the app.
+      FRONTEND_BASE_URL=https://$APP_DOMAIN
       DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:-}
       # The bot reaches the API over the stack's internal network.
       BACKEND_BASE_URL=http://backend:8000

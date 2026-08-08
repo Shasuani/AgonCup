@@ -109,6 +109,23 @@ class Settings(BaseSettings):
         default="http://localhost:8000/api/v1/auth/callback",
         description="OAuth2 redirect URI registered in the Discord developer portal.",
     )
+    frontend_base_url: str = Field(
+        default="http://localhost:5173",
+        description="Public origin of the admin SPA. /auth/callback redirects the browser "
+        "here (to <origin>/auth/callback) with the token pair in the URL FRAGMENT — a "
+        "fragment is never sent to servers/proxies/logs. No trailing slash.",
+    )
+    discord_bot_permissions: int = Field(
+        default=117760,
+        description="Permission bitfield baked into the bot-invite URL: View Channels "
+        "(1024) + Send Messages (2048) + Embed Links (16384) + Attach Files (32768) + "
+        "Read Message History (65536). The bot only posts embeds and DMs.",
+    )
+
+    @property
+    def frontend_origin(self) -> str:
+        """`frontend_base_url` without a trailing slash (safe to concatenate)."""
+        return self.frontend_base_url.rstrip("/")
 
     # --- PII-at-rest encryption (read by app.security.crypto) ---------------
     # The crypto module reads PII_ENCRYPTION_KEY from the environment directly;

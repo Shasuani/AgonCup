@@ -16,8 +16,11 @@ import type {
   AddMemberRequest,
   AdminGuild,
   AttemptStatusResponse,
+  CheckInRequest,
+  CreatedTournamentResponse,
   CreateTeamRequest,
   CreateTournamentRequest,
+  EntrantResponse,
   FailoverResponse,
   FeedItemRefRequest,
   FeedItemResponse,
@@ -78,11 +81,15 @@ export interface AuthApi {
 }
 
 export interface TournamentsApi {
-  create(body: CreateTournamentRequest): Promise<TournamentResponse>;
+  /** The create response is the ONLY place the join code is returned. */
+  create(body: CreateTournamentRequest): Promise<CreatedTournamentResponse>;
   list(): Promise<TournamentResponse[]>;
   get(tournamentId: string): Promise<TournamentResponse>;
+  /** Who has entered, and who has locked in. */
+  entrants(tournamentId: string): Promise<EntrantResponse[]>;
   register(tournamentId: string, body: TeamRef): Promise<RegistrationResponse>;
-  checkIn(tournamentId: string, body: TeamRef): Promise<RegistrationResponse>;
+  /** Lock in. Omit `team_id` to lock in the caller's own entry. */
+  checkIn(tournamentId: string, body?: CheckInRequest): Promise<RegistrationResponse>;
   start(tournamentId: string): Promise<StartResponse>;
 }
 
@@ -180,9 +187,11 @@ export function createClient(config: ClientConfig): ApiClient {
 
   const tournaments: TournamentsApi = {
     create: (body) =>
-      request<TournamentResponse>({ method: 'POST', path: '/tournaments', body }),
+      request<CreatedTournamentResponse>({ method: 'POST', path: '/tournaments', body }),
     list: () => request<TournamentResponse[]>({ method: 'GET', path: '/tournaments' }),
     get: (id) => request<TournamentResponse>({ method: 'GET', path: `/tournaments/${seg(id)}` }),
+    entrants: (id) =>
+      request<EntrantResponse[]>({ method: 'GET', path: `/tournaments/${seg(id)}/entrants` }),
     register: (id, body) =>
       request<RegistrationResponse>({
         method: 'POST',
@@ -193,7 +202,7 @@ export function createClient(config: ClientConfig): ApiClient {
       request<RegistrationResponse>({
         method: 'POST',
         path: `/tournaments/${seg(id)}/check-in`,
-        body,
+        body: body ?? {},
       }),
     start: (id) =>
       request<StartResponse>({ method: 'POST', path: `/tournaments/${seg(id)}/start` }),

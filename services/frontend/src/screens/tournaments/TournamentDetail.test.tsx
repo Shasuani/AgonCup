@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import type { ApiClient, TournamentResponse } from "@lol/clients-ts";
+import type { ApiClient, EntrantResponse, TournamentResponse } from "@lol/clients-ts";
 import { AppProviders } from "../../App";
 import { makeSession } from "../../test/jwt";
 import { TournamentDetail } from "./TournamentDetail";
@@ -13,9 +13,32 @@ const TOURNAMENT: TournamentResponse = {
   name: "Spring Cup",
   status: "ready",
   format: "single_elimination",
+  game_mode: "summoners_rift_5v5",
+  best_of: 1,
   max_teams: 8,
   is_shared_to_central: false,
+  registration_opens_at: null,
+  start_at: null,
 };
+
+const ENTRANTS: EntrantResponse[] = [
+  {
+    team_id: "team-1",
+    name: "Alpha",
+    locked_in: true,
+    is_solo: false,
+    is_you: false,
+    can_lock_in: true,
+  },
+  {
+    team_id: "team-2",
+    name: "Beta",
+    locked_in: false,
+    is_solo: false,
+    is_you: false,
+    can_lock_in: true,
+  },
+];
 
 function mockClient(overrides: Partial<ApiClient["tournaments"]> = {}): {
   client: ApiClient;
@@ -25,6 +48,7 @@ function mockClient(overrides: Partial<ApiClient["tournaments"]> = {}): {
     get: vi.fn(async () => TOURNAMENT),
     list: vi.fn(),
     create: vi.fn(),
+    entrants: vi.fn(async () => ENTRANTS),
     register: vi.fn(async (_id: string, body: { team_id: string }) => ({
       id: "reg-1",
       tournament_id: "tour-1",
@@ -90,7 +114,35 @@ describe("TournamentDetail Start gating", () => {
 });
 
 describe("TournamentDetail registration + check-in", () => {
-  it("registers a team and then checks it in", async () => {
+  it("lists the entrants the server reports, with their lock-in state", async () => {
+    // Previously this list held only registrations made in THIS browser session,
+    // so a reload showed "nobody has entered" on a full bracket.
+    const { client, tournaments } = mockClient();
+    renderDetail(client, ["guild_admin"]);
+
+    expect(await screen.findByText("Alpha")).toBeInTheDocument();
+    expect(screen.getByText("Beta")).toBeInTheDocument();
+    expect(screen.getByText("locked in")).toBeInTheDocument();
+    expect(screen.getByText("not ready")).toBeInTheDocument();
+    expect(tournaments.entrants).toHaveBeenCalledWith("tour-1");
+    // Only the entrant that has NOT locked in offers the action.
+    expect(screen.getAllByRole("button", { name: "Lock in" })).toHaveLength(1);
+  });
+
+  it("locks an entrant in and re-reads the list", async () => {
+    const { client, tournaments } = mockClient();
+    renderDetail(client, ["guild_admin"]);
+    await screen.findByText("Beta");
+
+    await userEvent.click(screen.getByRole("button", { name: "Lock in" }));
+
+    await waitFor(() =>
+      expect(tournaments.checkIn).toHaveBeenCalledWith("tour-1", { team_id: "team-2" }),
+    );
+    await waitFor(() => expect(tournaments.entrants).toHaveBeenCalledTimes(2));
+  });
+
+  it("registers a team by id through the admin escape hatch", async () => {
     const { client, tournaments } = mockClient();
     renderDetail(client, ["guild_admin"]);
     await screen.findByRole("heading", { name: "Spring Cup" });
@@ -101,12 +153,6 @@ describe("TournamentDetail registration + check-in", () => {
     await waitFor(() =>
       expect(tournaments.register).toHaveBeenCalledWith("tour-1", { team_id: "team-42" }),
     );
-    expect(await screen.findByText("registered")).toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole("button", { name: "Check in" }));
-    await waitFor(() =>
-      expect(tournaments.checkIn).toHaveBeenCalledWith("tour-1", { team_id: "team-42" }),
-    );
-    expect(await screen.findByText("checked_in")).toBeInTheDocument();
+    await waitFor(() => expect(tournaments.entrants).toHaveBeenCalledTimes(2));
   });
 });

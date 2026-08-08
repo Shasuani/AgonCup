@@ -1064,6 +1064,125 @@ section[aria-labelledby]:first-child {
   }
 }
 
+/* -------------------------------------------------------------------------
+   Forms: two-column field grid + grouped optional sections
+   ------------------------------------------------------------------------- */
+
+/* Fields flow into as many columns as fit. A single stacked column made the
+   create form a long scroll once it grew past three inputs. */
+[data-form-grid] {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  column-gap: var(--space-4);
+}
+
+/* The trailing margin on each field would double up with the grid's row gap. */
+[data-form-grid] > [data-form-field] {
+  margin-bottom: var(--space-3);
+}
+
+[data-form-section] {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 8px);
+  padding: var(--space-4);
+  margin: 0 0 var(--space-4);
+}
+
+[data-form-section] > legend {
+  padding-inline: var(--space-2);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+[data-form-section] > [data-hint] {
+  margin-top: 0;
+}
+
+/* The join code is minted on create and returned nowhere else — make it the
+   loudest thing on the screen and easy to read character by character. */
+[data-created-tournament] {
+  margin-top: var(--space-5);
+  padding: var(--space-4);
+  border: 1px solid var(--accent, var(--border));
+  border-radius: var(--radius-md, 8px);
+  background: var(--surface-raised, var(--surface));
+}
+
+[data-created-tournament] > h3 {
+  margin: 0 0 var(--space-2);
+}
+
+[data-join-code] {
+  margin: var(--space-3) 0;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  user-select: all;
+}
+
+/* -------------------------------------------------------------------------
+   Entrants list (tournament detail)
+   ------------------------------------------------------------------------- */
+[data-registration-list] {
+  list-style: none;
+  margin: 0 0 var(--space-4);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+[data-registration] {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 8px);
+  background: var(--surface);
+}
+
+[data-registration-team] {
+  flex: 1;
+  font-weight: 600;
+}
+
+[data-registration-status] {
+  font-size: 0.8125rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* Locked in is the state that gates starting, so make it readable at a glance. */
+[data-registration][data-locked-in] {
+  border-color: var(--success, var(--accent, var(--border)));
+}
+
+[data-registration][data-locked-in] [data-registration-status] {
+  color: var(--success, var(--accent, var(--text-muted)));
+}
+
+[data-manual-register] > summary {
+  cursor: pointer;
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  margin-bottom: var(--space-3);
+}
+
+[data-muted] {
+  color: var(--text-muted);
+}
+
+[data-schedule] {
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
 /* Generic content cards for create/detail sections. */
 [data-create-section],
 [data-verification-panel],

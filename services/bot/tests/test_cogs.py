@@ -14,12 +14,13 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import discord
+from discord import app_commands
 
 from app.backend_client import BackendError, DiscordContext
 from app.cogs import setup_cogs
 from app.cogs._helpers import context_of, error_embed
 from app.cogs.register import RegisterCog
-from app.cogs.tournament import TournamentAdminCog
+from app.cogs.tournament import ScheduleModal, TournamentAdminCog
 from app.main import build_bot
 
 
@@ -81,6 +82,25 @@ def test_link_alias_renders_minted_code() -> None:
     assert "WXYZ-2345" in blob
 
 
+def _run_create(cog: TournamentAdminCog, interaction: Any, *, opens: str = "", starts: str = ""):
+    """Drive the two-step flow: slash command -> modal -> submit."""
+    asyncio.run(
+        cog.create.callback(
+            cog,
+            interaction,
+            "Summer Cup",
+            8,
+            app_commands.Choice(name="5v5", value="summoners_rift_5v5"),
+            app_commands.Choice(name="Bo1", value=1),
+        )
+    )
+    modal = interaction.response.send_modal.await_args.args[0]
+    modal.registration_opens._value = opens
+    modal.starts._value = starts
+    asyncio.run(modal.on_submit(interaction))
+    return modal
+
+
 def test_tournament_create_shows_join_code() -> None:
     backend = AsyncMock()
     backend.create_tournament.return_value = {
@@ -94,13 +114,90 @@ def test_tournament_create_shows_join_code() -> None:
     cog = TournamentAdminCog(backend)
     interaction = _make_interaction()
 
-    asyncio.run(cog.create.callback(cog, interaction, "Summer Cup"))
+    _run_create(cog, interaction)
 
     backend.create_tournament.assert_awaited_once()
+    kwargs = backend.create_tournament.await_args.kwargs
+    assert kwargs["max_teams"] == 8
+    assert kwargs["game_mode"] == "summoners_rift_5v5"
+    assert kwargs["best_of"] == 1
     embed = _sent_embed(interaction)
     blob = " ".join((f.name or "") + (f.value or "") for f in embed.fields)
     assert "ABCD2345" in blob
     assert "desktop client" in blob.lower()
+
+
+def test_tournament_create_requires_name_mode_series_and_size() -> None:
+    """The four core options are REQUIRED, so Discord prompts for them in turn.
+
+    As optional parameters they sat behind the "+" affordance and an admin who
+    never opened it silently got 16 teams / 5v5 / Bo1.
+    """
+    params = TournamentAdminCog.create.parameters
+    by_name = {p.name: p for p in params}
+
+    assert [p.name for p in params] == ["name", "max_teams", "mode", "series"]
+    assert all(p.required for p in params)
+    assert (by_name["max_teams"].min_value, by_name["max_teams"].max_value) == (2, 16)
+
+
+def test_schedule_modal_fields_are_optional_and_labelled() -> None:
+    """The scheduling fields moved into a modal precisely so they can be SKIPPED.
+
+    Discord walks through required options only, and will not accept an empty
+    required option — so an optional-but-prompted field is only expressible as a
+    modal input with required=False.
+    """
+    modal = ScheduleModal(
+        cog=TournamentAdminCog(AsyncMock()),
+        name="Cup",
+        max_teams=8,
+        game_mode="aram_1v1",
+        best_of=1,
+    )
+    fields = [modal.registration_opens, modal.starts]
+
+    assert [f.required for f in fields] == [False, False]
+    assert all("(optional)" in f.label for f in fields)
+    assert all("leave blank" in (f.placeholder or "").lower() for f in fields)
+
+
+def test_tournament_create_skips_scheduling_when_the_modal_is_left_blank() -> None:
+    backend = AsyncMock()
+    backend.create_tournament.return_value = {"id": "t1", "name": "Summer Cup"}
+    cog = TournamentAdminCog(backend)
+    interaction = _make_interaction()
+
+    _run_create(cog, interaction, opens="", starts="")
+
+    kwargs = backend.create_tournament.await_args.kwargs
+    assert kwargs["registration_opens_at"] is None
+    assert kwargs["start_at"] is None
+
+
+def test_tournament_create_passes_modal_times_through_as_utc_iso() -> None:
+    backend = AsyncMock()
+    backend.create_tournament.return_value = {"id": "t1", "name": "Summer Cup"}
+    cog = TournamentAdminCog(backend)
+    interaction = _make_interaction()
+
+    _run_create(cog, interaction, opens="2026-08-01 18:00", starts="2026-08-02 20:00")
+
+    kwargs = backend.create_tournament.await_args.kwargs
+    assert kwargs["registration_opens_at"].startswith("2026-08-01T18:00")
+    assert kwargs["start_at"].startswith("2026-08-02T20:00")
+
+
+def test_tournament_create_rejects_an_unreadable_time() -> None:
+    backend = AsyncMock()
+    cog = TournamentAdminCog(backend)
+    interaction = _make_interaction()
+
+    _run_create(cog, interaction, opens="next tuesday")
+
+    backend.create_tournament.assert_not_awaited()
+    message = interaction.followup.send.await_args.args[0]
+    assert "next tuesday" in message
 
 
 def test_tournament_start_calls_backend() -> None:

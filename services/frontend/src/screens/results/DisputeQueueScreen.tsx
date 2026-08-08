@@ -22,9 +22,15 @@ import {
   DataTable,
   ErrorBanner,
   FormField,
+  IdChip,
+  ScreenHeader,
   Spinner,
+  StatusBadge,
   type Column,
 } from "../../components";
+import { MATCH_STATUS_LABELS } from "../../lib/labels";
+
+import "./DisputeQueueScreen.css";
 import {
   fetchDisputeQueue,
   teamName,
@@ -134,27 +140,27 @@ export default function DisputeQueueScreen(): JSX.Element {
 
   return (
     <section aria-labelledby="disputes-heading">
-      <header data-screen-header>
-        <h1 id="disputes-heading">Dispute / Override queue</h1>
-        <Button onClick={reload} disabled={loading}>
-          Refresh
-        </Button>
-      </header>
-
-      <p data-screen-intro>
-        Matches whose reported result failed corroboration. Review the teams,
-        reported outcomes, and anomaly flags, then record a decided winner. An
-        override is final and is written to the audit log.
-      </p>
+      <ScreenHeader
+        id="disputes-heading"
+        title="Dispute / Override queue"
+        intro="Matches whose reported result failed corroboration. Review the teams, reported outcomes, and anomaly flags, then record a decided winner. An override is final and is written to the audit log."
+        actions={
+          <Button variant="secondary" onClick={reload} disabled={loading}>
+            {loading ? "Refreshing…" : "Refresh"}
+          </Button>
+        }
+      />
 
       <ErrorBanner error={error} onRetry={reload} />
 
       <DataTable<DisputedMatch>
         caption="Disputed matches awaiting an admin decision"
+        hideCaption
         columns={columns}
         rows={rows}
         rowKey={(m) => m.match_id}
         loading={loading}
+        loadingRows={3}
         emptyMessage="No disputed matches. The queue is clear."
       />
 
@@ -214,11 +220,9 @@ function MatchCell({ match }: { match: DisputedMatch }): JSX.Element {
       ) : null}
       {match.round_label ? <div data-match-round>{match.round_label}</div> : null}
       <div data-match-status>
-        <span data-status-badge data-status={match.status}>
-          {match.status}
-        </span>
+        <StatusBadge status={match.status} labels={MATCH_STATUS_LABELS} />
       </div>
-      <code data-match-id>{match.match_id}</code>
+      <IdChip value={match.match_id} kind="match id" />
     </div>
   );
 }

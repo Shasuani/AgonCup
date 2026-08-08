@@ -1,0 +1,174 @@
+/* Dispute / Override queue.
+   The densest table in the app: five columns, three of which hold nested
+   lists. Every one of those lists rendered with browser defaults — disc
+   bullets, 40px indents, no rhythm — because the markup emitted style hooks
+   that no stylesheet ever matched. This is that stylesheet. */
+
+/* ---------------------------------------------------------------- match --- */
+[data-match-cell] {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-width: 150px;
+}
+
+[data-match-tournament] {
+  font-weight: 600;
+  color: var(--text);
+}
+
+[data-match-round] {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+/* ---------------------------------------------------------------- teams --- */
+[data-teams-list] {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 120px;
+}
+
+[data-teams-list] > li {
+  font-weight: 600;
+}
+
+/* Two sides of a match read as opposed, not as a bulleted list. */
+[data-teams-list] > li + li::before {
+  content: "vs";
+  display: block;
+  margin: 2px 0;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+/* -------------------------------------------------------------- reports --- */
+[data-reports-list] {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 200px;
+}
+
+[data-report-row] {
+  padding: 6px 10px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+
+[data-report-reporter] {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* The claimed winner is the disputed fact — it should be the loudest token in
+   the row, since scanning for disagreement between reports is the whole job. */
+[data-report-winner] {
+  font-weight: 600;
+  color: var(--text);
+}
+
+[data-report-note] {
+  color: var(--text-muted);
+}
+
+/* ------------------------------------------------------------ anomalies --- */
+[data-anomalies-list] {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 180px;
+}
+
+[data-anomaly-row] {
+  padding: 6px 10px;
+  background: rgba(251, 191, 36, 0.08);
+  border: 1px solid rgba(251, 191, 36, 0.28);
+  border-radius: var(--radius-sm);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+[data-anomaly-code] {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--warning);
+}
+
+[data-anomaly-severity] {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+[data-anomaly-detail] {
+  color: var(--text-muted);
+}
+
+/* ------------------------------------------------------------- override --- */
+[data-override-actions] {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 160px;
+}
+
+/* Full-width so the two candidate winners are the same size — an override is a
+   choice between equals, not a primary/secondary pair. */
+[data-override-actions] button {
+  width: 100%;
+}
+
+[data-no-permission] {
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  font-style: italic;
+}
+
+/* Cells with no data say so quietly rather than leaving a hole. Scoped to the
+   <span> form on purpose: DataTable's own empty state puts data-empty on the
+   <td>, and that panel has its own type scale in global.css. */
+span[data-empty] {
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+}
+
+/* ------------------------------------------------- confirm-dialog body --- */
+[data-override-confirm] [data-form-field] {
+  margin-bottom: var(--space-2);
+}
+
+[data-override-confirm] > p:first-child {
+  margin-bottom: var(--space-4);
+}
+
+/* Light theme: the amber anomaly wash is tuned for a dark surface. */
+:root[data-theme="light"] [data-anomaly-row] {
+  background: rgba(181, 121, 10, 0.07);
+  border-color: rgba(181, 121, 10, 0.3);
+}

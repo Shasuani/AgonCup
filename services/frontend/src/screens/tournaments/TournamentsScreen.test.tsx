@@ -75,6 +75,15 @@ function renderScreen(client: ApiClient, roles: string[] = ["guild_admin"]) {
   );
 }
 
+/**
+ * The create form is behind a toggle now — the screen opens on the tournaments,
+ * not on a wall of inputs. Every form test starts by opening it.
+ */
+async function openCreateForm(): Promise<void> {
+  await userEvent.click(await screen.findByRole("button", { name: "New tournament" }));
+  await screen.findByLabelText(/Name/);
+}
+
 describe("TournamentsScreen list", () => {
   it("renders a row per tournament from the mocked client", async () => {
     const { client, tournaments } = mockClient();
@@ -83,9 +92,11 @@ describe("TournamentsScreen list", () => {
     expect(await screen.findByRole("button", { name: "Spring Cup" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Summer Clash" })).toBeInTheDocument();
     // status + mode + format + series + size columns rendered, with the raw
-    // enum values humanised.
-    expect(screen.getByText("registration")).toBeInTheDocument();
-    expect(screen.getByText("in_progress")).toBeInTheDocument();
+    // enum values humanised. Neither fixture status is in the tournament label
+    // map, so both exercise the humanize() fallback — the point being that a
+    // user never sees `in_progress`.
+    expect(screen.getByText("Registration")).toBeInTheDocument();
+    expect(screen.getByText("In progress")).toBeInTheDocument();
     expect(screen.getAllByText("Single elim").length).toBe(2);
     expect(screen.getByText("5v5 Rift")).toBeInTheDocument();
     expect(screen.getByText("1v1 ARAM")).toBeInTheDocument();
@@ -98,7 +109,9 @@ describe("TournamentsScreen list", () => {
   it("shows the empty message when there are no tournaments", async () => {
     const { client } = mockClient({ list: vi.fn(async () => []) });
     renderScreen(client);
-    expect(await screen.findByText("No tournaments yet.")).toBeInTheDocument();
+    expect(
+      await screen.findByText(/No tournaments yet\. Create one to mint a join code/),
+    ).toBeInTheDocument();
   });
 });
 
@@ -107,7 +120,7 @@ describe("CreateTournamentForm submit", () => {
     const { client, tournaments } = mockClient();
     renderScreen(client);
 
-    await screen.findByRole("button", { name: "Spring Cup" });
+    await openCreateForm();
 
     await userEvent.type(screen.getByLabelText(/Name/), "Autumn Open");
     await userEvent.click(screen.getByRole("button", { name: "Create tournament" }));
@@ -125,7 +138,7 @@ describe("CreateTournamentForm submit", () => {
     // match runs. The form used to omit both, so every tournament was 5v5 Bo1.
     const { client, tournaments } = mockClient();
     renderScreen(client);
-    await screen.findByRole("button", { name: "Spring Cup" });
+    await openCreateForm();
 
     await userEvent.type(screen.getByLabelText(/Name/), "Duel Night");
     await userEvent.selectOptions(screen.getByLabelText(/Game mode/), "aram_1v1");
@@ -147,7 +160,7 @@ describe("CreateTournamentForm submit", () => {
   it("relabels the bracket size for a solo mode", async () => {
     const { client } = mockClient();
     renderScreen(client);
-    await screen.findByRole("button", { name: "Spring Cup" });
+    await openCreateForm();
 
     expect(screen.getByLabelText(/Bracket size \(teams\)/)).toBeInTheDocument();
     await userEvent.selectOptions(screen.getByLabelText(/Game mode/), "aram_1v1");
@@ -157,7 +170,7 @@ describe("CreateTournamentForm submit", () => {
   it("shows the join code after creating — the API returns it nowhere else", async () => {
     const { client } = mockClient();
     renderScreen(client);
-    await screen.findByRole("button", { name: "Spring Cup" });
+    await openCreateForm();
 
     await userEvent.type(screen.getByLabelText(/Name/), "Autumn Open");
     await userEvent.click(screen.getByRole("button", { name: "Create tournament" }));
@@ -168,7 +181,7 @@ describe("CreateTournamentForm submit", () => {
   it("blocks a start time that precedes registration opening", async () => {
     const { client, tournaments } = mockClient();
     renderScreen(client);
-    await screen.findByRole("button", { name: "Spring Cup" });
+    await openCreateForm();
 
     await userEvent.type(screen.getByLabelText(/Name/), "Backwards Cup");
     await userEvent.type(screen.getByLabelText(/Registration opens/), "2026-09-02T18:00");
@@ -184,6 +197,8 @@ describe("Create form gating", () => {
     const { client } = mockClient();
     renderScreen(client, ["player"]);
     await screen.findByRole("button", { name: "Spring Cup" });
+    // Neither the toggle that reveals the form nor the form's submit exists.
+    expect(screen.queryByRole("button", { name: "New tournament" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Create tournament" })).not.toBeInTheDocument();
   });
 });

@@ -23,6 +23,7 @@ import { Link } from "react-router-dom";
 import type { TournamentResponse } from "@lol/clients-ts";
 import { useApi } from "../api/ApiProvider";
 import { useAsyncData } from "../api/useAsync";
+import { ScreenHeader } from "../components/ScreenHeader";
 import { StatCard, StatCardGrid } from "../components/StatCard/StatCard";
 import { Icon, type IconName } from "../components/Icon";
 import { fetchDisputeQueue } from "./results/disputes";
@@ -180,17 +181,17 @@ function DashboardKpis(): JSX.Element {
 export default function HomeScreen(): JSX.Element {
   return (
     <section aria-labelledby="home-heading">
-      <div data-screen-header>
-        <div>
-          <h1 id="home-heading">Dashboard</h1>
-          <p data-screen-intro>Welcome to the LeagueOfLeagues admin console.</p>
-        </div>
-      </div>
+      <ScreenHeader
+        id="home-heading"
+        title="Dashboard"
+        intro="Where your tournaments stand right now, and the way in to everything else."
+      />
 
       <ScreenBoundary>
         <DashboardKpis />
       </ScreenBoundary>
 
+      <h2 data-dashboard-heading>Jump to</h2>
       <ul data-dashboard>
         {DASH_ITEMS.map((item) => (
           <li key={item.to}>

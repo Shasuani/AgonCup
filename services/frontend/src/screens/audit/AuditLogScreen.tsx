@@ -12,9 +12,13 @@ import {
   Button,
   DataTable,
   ErrorBanner,
-  FormField,
+  IdChip,
+  ScreenHeader,
   type Column,
 } from "../../components";
+import { humanize } from "../../lib/labels";
+
+import "./AuditLogScreen.css";
 import {
   fetchAuditEvents,
   formatTimestamp,
@@ -56,14 +60,18 @@ export default function AuditLogScreen(): JSX.Element {
       header: "Actor",
       cell: (e) => (
         <div data-audit-actor>
-          <span data-actor-name>{e.actor_name ?? e.actor_id}</span>
-          <code data-actor-id>{e.actor_id}</code>
+          {e.actor_name ? <span data-actor-name>{e.actor_name}</span> : null}
+          <IdChip value={e.actor_id} kind="actor id" />
         </div>
       ),
     },
     {
       id: "action",
       header: "Action",
+      // Rendered VERBATIM on purpose. Actions are namespaced codes
+      // (`result.override`) and this is the record you cite when tracing what
+      // happened — prettifying it would make the log disagree with the API.
+      // Styling carries the polish instead (see AuditLogScreen.css).
       cell: (e) => <span data-audit-action>{e.action}</span>,
     },
     {
@@ -71,16 +79,20 @@ export default function AuditLogScreen(): JSX.Element {
       header: "Entity",
       cell: (e) => (
         <div data-audit-entity>
-          <span data-entity-type>{e.entity_type}</span>
-          {" "}
-          <code data-entity-id>{e.entity_id}</code>
+          <span data-entity-type>{humanize(e.entity_type)}</span>
+          <IdChip value={e.entity_id} kind="entity id" />
         </div>
       ),
     },
     {
       id: "guild",
       header: "Guild",
-      cell: (e) => (e.guild_id ? <code data-audit-guild>{e.guild_id}</code> : <span data-empty>—</span>),
+      cell: (e) =>
+        e.guild_id ? (
+          <IdChip value={e.guild_id} kind="guild id" />
+        ) : (
+          <span data-empty>—</span>
+        ),
     },
     {
       id: "detail",
@@ -91,47 +103,51 @@ export default function AuditLogScreen(): JSX.Element {
 
   return (
     <section aria-labelledby="audit-heading">
-      <header data-screen-header>
-        <h1 id="audit-heading">Audit log</h1>
-        <Button onClick={reload} disabled={loading}>
-          Refresh
-        </Button>
-      </header>
+      <ScreenHeader
+        id="audit-heading"
+        title="Audit log"
+        intro="Append-only record of administrative actions — including dispute-queue overrides. Filter by guild to scope the view."
+        actions={
+          <Button variant="secondary" onClick={reload} disabled={loading}>
+            {loading ? "Refreshing…" : "Refresh"}
+          </Button>
+        }
+      />
 
-      <p data-screen-intro>
-        Append-only record of administrative actions — including dispute-queue
-        overrides. Filter by guild to scope the view.
-      </p>
-
+      {/* A full-width stacked FormField for one select made the filter read as
+          a form to fill in; it is a toolbar control. */}
       <div data-audit-filter>
-        <FormField label="Filter by guild">
-          {({ inputId, describedBy }) => (
-            <select
-              id={inputId}
-              aria-describedby={describedBy}
-              value={guildFilter}
-              onChange={(e) => setGuildFilter(e.target.value)}
-              data-guild-filter
-            >
-              <option value={ALL_GUILDS}>All guilds</option>
-              {guilds.map((g) => (
-                <option key={g} value={g}>
-                  {g}
-                </option>
-              ))}
-            </select>
-          )}
-        </FormField>
+        <label htmlFor="audit-guild-filter">Filter by guild</label>
+        <select
+          id="audit-guild-filter"
+          value={guildFilter}
+          onChange={(e) => setGuildFilter(e.target.value)}
+          data-guild-filter
+        >
+          <option value={ALL_GUILDS}>All guilds</option>
+          {guilds.map((g) => (
+            <option key={g} value={g}>
+              {g}
+            </option>
+          ))}
+        </select>
+        <p data-audit-count>
+          {rows.length === all.length
+            ? `${all.length} ${all.length === 1 ? "event" : "events"}`
+            : `${rows.length} of ${all.length} events`}
+        </p>
       </div>
 
       <ErrorBanner error={error} onRetry={reload} />
 
       <DataTable<AuditEvent>
         caption="Audit events"
+        hideCaption
         columns={columns}
         rows={rows}
         rowKey={(e) => e.id}
         loading={loading}
+        loadingRows={6}
         emptyMessage="No audit events match the current filter."
       />
     </section>

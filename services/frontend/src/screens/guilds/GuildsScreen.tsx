@@ -22,6 +22,9 @@ import {
   ConfirmDialog,
   DataTable,
   ErrorBanner,
+  IdChip,
+  ScreenHeader,
+  SectionHeader,
   TextInput,
   type Column,
 } from "../../components";
@@ -40,7 +43,7 @@ export default function GuildsScreen(): JSX.Element {
       anyOf={[PLATFORM_OPERATOR]}
       fallback={
         <section aria-labelledby="guilds-heading">
-          <h1 id="guilds-heading">Guilds</h1>
+          <ScreenHeader id="guilds-heading" title="Guilds" />
           <p role="alert">
             Guild administration is restricted to platform operators.
           </p>
@@ -104,8 +107,8 @@ function GuildsAdmin(): JSX.Element {
   );
 
   const columns: ReadonlyArray<Column<GuildRow>> = [
-    { id: "guild", header: "Guild ID", cell: (r) => r.guildId },
-    { id: "source", header: "Onboarded via", cell: (r) => r.source },
+    { id: "guild", header: "Guild ID", cell: (r) => <IdChip value={r.guildId} kind="guild id" /> },
+    { id: "source", header: "Onboarded via", cell: (r) => <span data-guild-source>{r.source}</span> },
     {
       id: "actions",
       header: "Actions",
@@ -122,32 +125,42 @@ function GuildsAdmin(): JSX.Element {
 
   return (
     <section aria-labelledby="guilds-heading">
-      <h1 id="guilds-heading">Guilds</h1>
-      <p>Onboarded guilds. Select a guild to view its settings or purge it.</p>
+      <ScreenHeader
+        id="guilds-heading"
+        title="Guilds"
+        intro="Onboarded Discord servers known to this session. Select one to view its settings or permanently purge its data."
+      />
 
       <DataTable
         caption="Onboarded guilds"
+        hideCaption
         columns={columns}
         rows={rows}
         rowKey={(r) => r.guildId}
         emptyMessage="No guilds known in this session. Add one by ID below."
       />
 
-      <form onSubmit={onAddGuild} aria-label="Add guild by ID">
-        <TextInput
-          label="Guild ID"
-          hint="Track another onboarded guild for this session."
-          value={newGuildId}
-          onChange={(e) => setNewGuildId(e.target.value)}
+      <div data-panel>
+        <SectionHeader
+          id="add-guild-heading"
+          title="Track another guild"
+          intro="There is no guild-list endpoint yet, so an operator can add a known guild id to work with it for this session."
         />
-        <Button
-          variant="secondary"
-          type="submit"
-          disabled={newGuildId.trim().length === 0}
-        >
-          Add guild
-        </Button>
-      </form>
+        <form onSubmit={onAddGuild} aria-label="Add guild by ID" data-inline-form>
+          <TextInput
+            label="Guild ID"
+            value={newGuildId}
+            onChange={(e) => setNewGuildId(e.target.value)}
+          />
+          <Button
+            variant="secondary"
+            type="submit"
+            disabled={newGuildId.trim().length === 0}
+          >
+            Add guild
+          </Button>
+        </form>
+      </div>
 
       {selected ? (
         <GuildSettings
@@ -185,39 +198,52 @@ function GuildSettings({ row, onClose, onPurged }: GuildSettingsProps): JSX.Elem
 
   return (
     <section aria-labelledby="guild-settings-heading" data-guild-settings>
-      <header>
-        <h2 id="guild-settings-heading">Settings — {row.guildId}</h2>
-        <Button variant="secondary" onClick={onClose}>
-          Close
-        </Button>
-      </header>
+      <SectionHeader
+        id="guild-settings-heading"
+        title="Guild settings"
+        actions={
+          <Button variant="secondary" onClick={onClose}>
+            Close
+          </Button>
+        }
+      />
 
       <dl>
-        <dt>Guild ID</dt>
-        <dd>{row.guildId}</dd>
-        <dt>Onboarded via</dt>
-        <dd>{row.source}</dd>
+        <div>
+          <dt>Guild ID</dt>
+          <dd>
+            <IdChip value={row.guildId} kind="guild id" full />
+          </dd>
+        </div>
+        <div>
+          <dt>Onboarded via</dt>
+          <dd>{row.source}</dd>
+        </div>
       </dl>
 
-      <h3>Danger zone</h3>
-      <p>
-        Purging permanently deletes all data for this guild. This cannot be
-        undone.
-      </p>
-      <ErrorBanner error={purge.error} />
-      <Button
-        variant="danger"
-        onClick={() => setConfirmOpen(true)}
-        disabled={purge.loading}
-      >
-        Purge guild
-      </Button>
-
-      {result ? (
-        <p role="status" data-purge-result>
-          Purge {result.status}: {result.total_deleted} rows removed.
+      {/* A destructive section has to LOOK destructive before the button is
+          read — this used to be an <h3> and a red button in the page flow. */}
+      <div data-panel data-tone="danger" data-danger-zone>
+        <h3>Danger zone</h3>
+        <p>
+          Purging permanently deletes all data for this guild — tournaments,
+          teams, results and audit history. This cannot be undone.
         </p>
-      ) : null}
+        <ErrorBanner error={purge.error} />
+        <Button
+          variant="danger"
+          onClick={() => setConfirmOpen(true)}
+          disabled={purge.loading}
+        >
+          Purge guild
+        </Button>
+
+        {result ? (
+          <p role="status" data-purge-result>
+            Purge {result.status}: {result.total_deleted} rows removed.
+          </p>
+        ) : null}
+      </div>
 
       <ConfirmDialog
         open={confirmOpen}

@@ -25,7 +25,7 @@ import { useApi } from "../../api/ApiProvider";
 import { useAsyncData } from "../../api/useAsync";
 import { useAuth, sessionFromTokenPair } from "../../auth/AuthProvider";
 import { useActingGuild } from "../../auth/ActingGuildProvider";
-import { Button, ErrorBanner, Spinner, EmptyState } from "../../components";
+import { Button, ErrorBanner, Spinner, EmptyState, ScreenHeader } from "../../components";
 import { useToast } from "../../components/Toast";
 
 import "./ServersScreen.css";
@@ -73,18 +73,16 @@ export default function ServersScreen(): JSX.Element {
 
   return (
     <section aria-labelledby="servers-heading">
-      <div data-screen-header>
-        <div>
-          <h1 id="servers-heading">Your Discord servers</h1>
-          <p data-screen-intro>
-            Servers where you are an administrator. Add the bot to one to start
-            running tournaments there.
-          </p>
-        </div>
-        <Button variant="secondary" onClick={guilds.reload} disabled={guilds.loading}>
-          {guilds.loading ? "Refreshing…" : "Refresh"}
-        </Button>
-      </div>
+      <ScreenHeader
+        id="servers-heading"
+        title="Your Discord servers"
+        intro="Servers where you are an administrator. Add the bot to one to start running tournaments there."
+        actions={
+          <Button variant="secondary" onClick={guilds.reload} disabled={guilds.loading}>
+            {guilds.loading ? "Refreshing…" : "Refresh"}
+          </Button>
+        }
+      />
 
       <ErrorBanner error={guilds.error} />
 

@@ -8,7 +8,22 @@
 import { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import type { EntrantResponse, StartResponse, TournamentResponse } from "@lol/clients-ts";
-import { Button, ErrorBanner, Spinner, TextInput } from "../../components";
+import {
+  Button,
+  ErrorBanner,
+  SectionHeader,
+  Spinner,
+  StatusBadge,
+  TextInput,
+} from "../../components";
+import {
+  FORMAT_LABELS,
+  GAME_MODE_LABELS,
+  TOURNAMENT_STATUS_LABELS,
+  entrantsText,
+  label as labelFor,
+  seriesText,
+} from "../../lib/labels";
 import { BracketView, type BracketMatch } from "../../components/BracketView";
 import { RoleGate } from "../../auth/RequireRole";
 import { GUILD_ADMIN, PLATFORM_OPERATOR } from "../../auth/roles";
@@ -26,9 +41,15 @@ export interface TournamentDetailProps {
    * until the tournament is started.
    */
   matches?: ReadonlyArray<BracketMatch>;
+  /** Optional dismiss action, rendered in the detail's own header. */
+  onClose?: () => void;
 }
 
-export function TournamentDetail({ tournamentId, matches = [] }: TournamentDetailProps): JSX.Element {
+export function TournamentDetail({
+  tournamentId,
+  matches = [],
+  onClose,
+}: TournamentDetailProps): JSX.Element {
   const api = useApi();
   const navigate = useNavigate();
 
@@ -90,7 +111,22 @@ export function TournamentDetail({ tournamentId, matches = [] }: TournamentDetai
 
   return (
     <section aria-labelledby="tournament-detail-heading" data-tournament-detail>
-      <h2 id="tournament-detail-heading">{t ? t.name : "Tournament"}</h2>
+      <SectionHeader
+        id="tournament-detail-heading"
+        title={t ? t.name : "Tournament"}
+        intro={
+          t
+            ? `${labelFor(GAME_MODE_LABELS, t.game_mode)} · ${labelFor(FORMAT_LABELS, t.format)} · ${seriesText(t.best_of)}`
+            : undefined
+        }
+        actions={
+          onClose ? (
+            <Button variant="secondary" onClick={onClose}>
+              Close
+            </Button>
+          ) : undefined
+        }
+      />
 
       {tournament.loading ? <Spinner label="Loading tournament" /> : null}
       {tournament.error ? (
@@ -102,30 +138,24 @@ export function TournamentDetail({ tournamentId, matches = [] }: TournamentDetai
           <div>
             <dt>Status</dt>
             <dd>
-              <span data-status-badge data-status={t.status}>
-                {t.status}
-              </span>
+              <StatusBadge status={t.status} labels={TOURNAMENT_STATUS_LABELS} />
             </dd>
           </div>
           <div>
             <dt>Mode</dt>
-            <dd>{t.game_mode === "aram_1v1" ? "1v1 ARAM" : "5v5 Summoner's Rift"}</dd>
+            <dd>{labelFor(GAME_MODE_LABELS, t.game_mode)}</dd>
           </div>
           <div>
             <dt>Format</dt>
-            <dd>
-              {t.format === "double_elimination" ? "Double elimination" : "Single elimination"}
-            </dd>
+            <dd>{labelFor(FORMAT_LABELS, t.format)}</dd>
           </div>
           <div>
             <dt>Series</dt>
-            <dd>Best of {t.best_of}</dd>
+            <dd>{seriesText(t.best_of)}</dd>
           </div>
           <div>
             <dt>Bracket size</dt>
-            <dd>
-              {t.max_teams} {t.game_mode === "aram_1v1" ? "players" : "teams"}
-            </dd>
+            <dd>{entrantsText(t.max_teams, t.game_mode)}</dd>
           </div>
           {t.registration_opens_at ? (
             <div>

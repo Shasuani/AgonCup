@@ -25,6 +25,31 @@
   --danger: #d4453f;
   --focus-ring: #5848e5;
 
+  /* --- Elevation surfaces -------------------------------------------------
+     MUST mirror every token the dark :root adds. An unmirrored token here
+     inherits the DARK value: --surface-sunken would paint inputs near-black on
+     a white page, and --hairline (a white overlay) would vanish entirely.
+     On light, depth inverts: the "lit" edge is a white surface against a grey
+     page, and the inner highlight is near-invisible by design — a soft shadow
+     does the separating instead. */
+  --surface-sunken: #f0f2f7;
+  --surface-raised: #ffffff;
+
+  --border-subtle: #e5e8ef;
+  --border-strong: #b9c0cd;
+
+  --hairline: rgba(255, 255, 255, 0.9);
+  --elevate: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.6),
+    rgba(255, 255, 255, 0) 44%
+  );
+
+  --primary-soft: rgba(88, 72, 229, 0.1);
+  --primary-softer: rgba(88, 72, 229, 0.05);
+  --primary-line: rgba(88, 72, 229, 0.3);
+  --brand-gradient: linear-gradient(135deg, var(--primary), var(--accent));
+
   /* Shadows — softer/cooler on a light surface than the heavy dark elevations. */
   --shadow-xs: 0 1px 2px rgba(20, 24, 38, 0.08);
   --shadow-sm: 0 2px 8px rgba(20, 24, 38, 0.1);
@@ -44,12 +69,94 @@
    light mode. Match the shell's selector depth here (0,3,0) so light wins. */
 :root[data-theme="light"] [data-app-header],
 :root[data-theme="light"] [data-app-shell] [data-app-header] {
-  background: rgba(255, 255, 255, 0.85);
+  background: rgba(255, 255, 255, 0.76);
 }
 
 /* Selection highlight. */
 :root[data-theme="light"] ::selection {
   background: rgba(88, 72, 229, 0.22);
+}
+
+/* Page backdrop: the dark theme's brand glow is tuned for a near-black base
+   and reads as a purple stain on white. Same idea, a third of the amplitude. */
+:root[data-theme="light"] body {
+  background:
+    radial-gradient(900px 520px at 78% -12%, rgba(88, 72, 229, 0.05), transparent 62%),
+    radial-gradient(700px 420px at 8% -6%, rgba(90, 72, 214, 0.03), transparent 60%),
+    var(--bg);
+}
+
+/* Panels: on white, an inner white highlight does nothing — the separation has
+   to come from the border and a soft shadow instead. */
+:root[data-theme="light"] [data-table],
+:root[data-theme="light"] [data-create-section],
+:root[data-theme="light"] [data-verification-panel],
+:root[data-theme="light"] [data-guild-settings],
+:root[data-theme="light"] [data-tournament-summary],
+:root[data-theme="light"] [data-report-form],
+:root[data-theme="light"] [data-registrations],
+:root[data-theme="light"] [data-start],
+:root[data-theme="light"] [data-bracket-section],
+:root[data-theme="light"] [data-panel] {
+  box-shadow: var(--shadow-sm);
+}
+
+:root[data-theme="light"] [data-panel][data-tone="danger"] {
+  background: linear-gradient(
+      0deg,
+      rgba(212, 69, 63, 0.045),
+      rgba(212, 69, 63, 0.045)
+    ),
+    var(--surface);
+  border-color: rgba(212, 69, 63, 0.28);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Primary button: same lit-gradient recipe, light-primary hue in the glow. */
+:root[data-theme="light"] button[data-variant="primary"] {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    0 1px 2px rgba(20, 24, 38, 0.12),
+    0 4px 14px rgba(88, 72, 229, 0.24);
+}
+
+:root[data-theme="light"] button[data-variant="primary"]:hover:not(:disabled) {
+  background: linear-gradient(180deg, #6a5aea, var(--primary-hover));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.26),
+    0 1px 2px rgba(20, 24, 38, 0.12),
+    0 6px 20px rgba(88, 72, 229, 0.3);
+}
+
+:root[data-theme="light"] button[data-variant="danger"] {
+  background: rgba(212, 69, 63, 0.05);
+  border-color: rgba(212, 69, 63, 0.4);
+}
+
+:root[data-theme="light"] button[data-variant="danger"]:hover:not(:disabled) {
+  background: rgba(212, 69, 63, 0.11);
+  border-color: rgba(212, 69, 63, 0.6);
+}
+
+/* Field wells: a 0.22-alpha black inset is a bruise on a white input. */
+:root[data-theme="light"] input,
+:root[data-theme="light"] select,
+:root[data-theme="light"] textarea {
+  box-shadow: inset 0 1px 2px rgba(20, 24, 38, 0.05);
+}
+
+:root[data-theme="light"] input:focus,
+:root[data-theme="light"] select:focus,
+:root[data-theme="light"] textarea:focus {
+  background: var(--surface);
+  box-shadow: inset 0 1px 2px rgba(20, 24, 38, 0.04), var(--shadow-focus);
+}
+
+/* Sidebar: keep the brand wash, drop the dark-tuned alpha. */
+:root[data-theme="light"] [data-app-sidebar] {
+  background:
+    linear-gradient(180deg, rgba(88, 72, 229, 0.05), transparent 220px),
+    var(--surface-sunken);
 }
 
 /* Modal scrim — keep a light-appropriate dim instead of near-black. */

@@ -1,0 +1,92 @@
+/* IdChip — a truncated, copyable identifier.
+   Reads as a quiet monospace token, not as row content. The "Copy" affordance
+   is present but muted until hover/focus so a table of ids stays scannable. */
+
+[data-id-chip] {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+}
+
+[data-id-chip-button] {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 100%;
+  padding: 2px 8px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+}
+
+[data-id-chip-button]:hover {
+  color: var(--text);
+  border-color: var(--primary);
+}
+
+[data-id-chip-value] {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The word "Copy" is a hint, not a label — it appears on hover/focus only, so
+   a column of chips is not a column of repeated verbs. */
+[data-id-chip-hint] {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+[data-id-chip-button]:hover [data-id-chip-hint],
+[data-id-chip-button]:focus-visible [data-id-chip-hint] {
+  opacity: 1;
+}
+
+/* Post-click feedback pins the hint open and colors it by outcome. */
+[data-id-chip][data-state] [data-id-chip-hint] {
+  opacity: 1;
+}
+
+[data-id-chip][data-state="copied"] [data-id-chip-button] {
+  color: var(--success);
+  border-color: var(--success);
+}
+
+[data-id-chip][data-state="failed"] [data-id-chip-button] {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+/* The polite announcement is for assistive tech only — the visible hint above
+   already carries the outcome for sighted users. */
+[data-id-chip-live] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-id-chip-button],
+  [data-id-chip-hint] {
+    transition: none;
+  }
+}

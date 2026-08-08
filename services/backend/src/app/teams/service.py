@@ -265,7 +265,11 @@ async def resolve_team_ref(session: AsyncSession, *, ref: str) -> Team:
 
 
 async def list_teams(session: AsyncSession) -> list[Team]:
-    return list((await session.execute(select(Team))).scalars().all())
+    # `is_solo` teams are the one-player scaffolding behind a 1v1 enrolment, not
+    # teams anyone formed — they stay out of every roster listing.
+    return list(
+        (await session.execute(select(Team).where(Team.is_solo.is_(False)))).scalars().all()
+    )
 
 
 async def get_team_by_code(session: AsyncSession, *, code: str) -> Team:
@@ -375,7 +379,7 @@ async def list_my_teams(session: AsyncSession, *, user_id: uuid.UUID) -> list[My
         await session.execute(
             select(Team.id, Team.name, TeamMember.role, TeamMember.status)
             .join(TeamMember, TeamMember.team_id == Team.id)
-            .where(TeamMember.user_id == user_id)
+            .where(TeamMember.user_id == user_id, Team.is_solo.is_(False))
             .order_by(Team.name)
         )
     ).all()

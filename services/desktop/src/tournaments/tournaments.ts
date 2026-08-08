@@ -153,6 +153,167 @@ export async function joinTournamentByCode(
   };
 }
 
+/** Look up what a join code points at, without enrolling (GET /by-code/{code}).
+ *
+ * The client must know the game mode first: a 5v5 code has to ask a captain of
+ * several teams which one is entering; a 1v1 code must never ask.
+ */
+export async function lookupTournamentByCode(
+  args: AuthedArgs & { code: string },
+  deps: HttpDeps = {},
+): Promise<JoinTournamentResult> {
+  const doFetch = deps.fetch ?? fetch;
+  const backendUrl = resolveBackendUrl(deps.backendUrl);
+
+  let res: Response;
+  try {
+    res = await doFetch(
+      `${backendUrl}/api/v1/tournaments/by-code/${encodeURIComponent(args.code)}`,
+      { method: "GET", headers: { Authorization: `Bearer ${args.accessToken}` } },
+    );
+  } catch (err) {
+    return { ok: false, status: 0, detail: `Backend unreachable: ${String(err)}` };
+  }
+
+  let json: unknown;
+  try {
+    json = await res.json();
+  } catch {
+    json = undefined;
+  }
+
+  if (res.ok) {
+    return { ok: true, tournament: asTournament(json) };
+  }
+  return {
+    ok: false,
+    status: res.status,
+    detail: detailOf(json, `Could not find that join code (HTTP ${res.status}).`),
+  };
+}
+
+// --- entrants + lock-in ---------------------------------------------------- //
+
+/** One entry in a tournament: a team in 5v5, a player (their solo team) in 1v1. */
+export interface Entrant {
+  readonly teamId: string;
+  readonly name: string;
+  readonly lockedIn: boolean;
+  readonly isSolo: boolean;
+  /** True for the caller's own entry (their solo team in 1v1, their team in 5v5). */
+  readonly isYou: boolean;
+  /** True when the caller may lock this entry in (its captain / the solo player). */
+  readonly canLockIn: boolean;
+}
+
+export type EntrantsResult =
+  | { readonly ok: true; readonly entrants: Entrant[] }
+  | { readonly ok: false; readonly status: number; readonly detail: string };
+
+export type LockInResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly status: number; readonly detail: string };
+
+function asEntrant(raw: unknown): Entrant {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  return {
+    teamId: typeof r["team_id"] === "string" ? (r["team_id"] as string) : "",
+    name: typeof r["name"] === "string" ? (r["name"] as string) : "",
+    lockedIn: r["locked_in"] === true,
+    isSolo: r["is_solo"] === true,
+    isYou: r["is_you"] === true,
+    canLockIn: r["can_lock_in"] === true,
+  };
+}
+
+/** Who has entered a tournament, and who has locked in (GET /{id}/entrants). */
+export async function listEntrants(
+  args: AuthedArgs & { tournamentId: string },
+  deps: HttpDeps = {},
+): Promise<EntrantsResult> {
+  const doFetch = deps.fetch ?? fetch;
+  const backendUrl = resolveBackendUrl(deps.backendUrl);
+
+  let res: Response;
+  try {
+    res = await doFetch(
+      `${backendUrl}/api/v1/tournaments/${encodeURIComponent(args.tournamentId)}/entrants`,
+      { method: "GET", headers: { Authorization: `Bearer ${args.accessToken}` } },
+    );
+  } catch (err) {
+    return { ok: false, status: 0, detail: `Backend unreachable: ${String(err)}` };
+  }
+
+  let json: unknown;
+  try {
+    json = await res.json();
+  } catch {
+    json = undefined;
+  }
+
+  if (res.ok) {
+    const list = Array.isArray(json) ? json : [];
+    return { ok: true, entrants: list.map(asEntrant) };
+  }
+  return {
+    ok: false,
+    status: res.status,
+    detail: detailOf(json, `Could not load the entrants (HTTP ${res.status}).`),
+  };
+}
+
+/** Lock in for a tournament (POST /{id}/check-in).
+ *
+ * The body is sent empty on purpose: a solo (1v1) entrant has no team to name,
+ * and the backend resolves the caller's own entry. `teamId` is only needed by a
+ * captain of several teams.
+ */
+export async function lockIn(
+  args: AuthedArgs & { tournamentId: string; teamId?: string },
+  deps: HttpDeps = {},
+): Promise<LockInResult> {
+  const doFetch = deps.fetch ?? fetch;
+  const backendUrl = resolveBackendUrl(deps.backendUrl);
+
+  const payload: { team_id?: string } = {};
+  if (args.teamId !== undefined && args.teamId !== "") {
+    payload.team_id = args.teamId;
+  }
+
+  let res: Response;
+  try {
+    res = await doFetch(
+      `${backendUrl}/api/v1/tournaments/${encodeURIComponent(args.tournamentId)}/check-in`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${args.accessToken}`,
+        },
+        body: JSON.stringify(payload),
+      },
+    );
+  } catch (err) {
+    return { ok: false, status: 0, detail: `Backend unreachable: ${String(err)}` };
+  }
+
+  if (res.ok) {
+    return { ok: true };
+  }
+
+  let json: unknown;
+  try {
+    json = await res.json();
+  } catch {
+    json = undefined;
+  }
+  return {
+    ok: false,
+    status: res.status,
+    detail: detailOf(json, `Could not lock in (HTTP ${res.status}).`),
+  };
+}
+
 // --- bracket (matches with team names) ------------------------------------- //
 
 /** One match in a tournament bracket. */

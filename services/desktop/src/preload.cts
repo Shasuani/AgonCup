@@ -153,6 +153,24 @@ export type ReadyBridgeResult =
   | { ok: true; side: string; bothReady: boolean }
   | { ok: false; status: number; detail: string };
 
+/** One tournament entry: a team in 5v5, a player (their solo team) in 1v1. */
+export interface EntrantBridge {
+  teamId: string;
+  name: string;
+  lockedIn: boolean;
+  isSolo: boolean;
+  isYou: boolean;
+  canLockIn: boolean;
+}
+
+export type EntrantsBridgeResult =
+  | { ok: true; entrants: EntrantBridge[] }
+  | { ok: false; status: number; detail: string };
+
+export type LockInBridgeResult =
+  | { ok: true }
+  | { ok: false; status: number; detail: string };
+
 /** A team as `createTeam` returns it (includes the shareable join code). */
 export interface CreatedTeamBridge {
   id: string;
@@ -257,6 +275,12 @@ export interface LolBridge {
   joinTournament(code: string, teamId?: string): Promise<JoinTournamentBridgeResult>;
   /** The tournament's bracket (matches with team names). */
   tournamentBracket(tournamentId: string): Promise<BracketBridgeResult>;
+  /** Look up a join code without enrolling (to learn the game mode first). */
+  lookupTournament(code: string): Promise<JoinTournamentBridgeResult>;
+  /** Who has entered a tournament, and who has locked in. */
+  tournamentEntrants(tournamentId: string): Promise<EntrantsBridgeResult>;
+  /** Lock in for a tournament. `teamId` only when captaining several teams. */
+  tournamentLockIn(tournamentId: string, teamId?: string): Promise<LockInBridgeResult>;
   /** Mark the caller's team ready for a match (team captain). */
   matchReady(matchId: string): Promise<ReadyBridgeResult>;
   /** Create a team (acting user becomes captain; response carries the join code). */
@@ -307,6 +331,15 @@ const bridge: LolBridge = {
     ipcRenderer.invoke("lol:tournament-join", { code, teamId }) as Promise<JoinTournamentBridgeResult>,
   tournamentBracket: (tournamentId) =>
     ipcRenderer.invoke("lol:tournament-bracket", { tournamentId }) as Promise<BracketBridgeResult>,
+  lookupTournament: (code) =>
+    ipcRenderer.invoke("lol:tournament-lookup", { code }) as Promise<JoinTournamentBridgeResult>,
+  tournamentEntrants: (tournamentId) =>
+    ipcRenderer.invoke("lol:tournament-entrants", { tournamentId }) as Promise<EntrantsBridgeResult>,
+  tournamentLockIn: (tournamentId, teamId) =>
+    ipcRenderer.invoke("lol:tournament-lock-in", {
+      tournamentId,
+      teamId,
+    }) as Promise<LockInBridgeResult>,
   matchReady: (matchId) =>
     ipcRenderer.invoke("lol:match-ready", { matchId }) as Promise<ReadyBridgeResult>,
   createTeam: (name) =>

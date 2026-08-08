@@ -51,12 +51,12 @@ class _Result:
     rows: list[Any]
 
     def scalar_one_or_none(self) -> Any:
-        return self.rows[0] if self.rows else None
+        return _scalar(self.rows[0]) if self.rows else None
 
     def scalar_one(self) -> Any:
         if not self.rows:
             raise LookupError("no rows for scalar_one")
-        return self.rows[0]
+        return _scalar(self.rows[0])
 
     def first(self) -> Any:
         return self.rows[0] if self.rows else None
@@ -66,6 +66,15 @@ class _Result:
 
     def all(self) -> list[Any]:
         return self.rows
+
+
+def _scalar(row: Any) -> Any:
+    """Match SQLAlchemy: ``scalar_one*`` on a single-column select yields the value.
+
+    A projected row here is a tuple, so ``select(Model.col)`` would otherwise hand
+    back a 1-tuple where the real session hands back the column value.
+    """
+    return row[0] if isinstance(row, tuple) and len(row) == 1 else row
 
 
 @dataclass
@@ -233,13 +242,30 @@ def _equality_filters(statement: Any) -> dict[str, Any]:
             # Only ``==`` clauses constrain the fake store; inequalities / IS (NOT)
             # NULL (e.g. ``start_at <= now``) can't be modelled here and are left to
             # the caller's own Python re-checks. (Mirrors tests/test_auth.py.)
-            if getattr(bool_expr, "operator", None) not in (operator.eq, None):
+            #
+            # ``col.is_(True/False)`` is the exception: it is the idiomatic way to
+            # filter a boolean column (``Team.is_solo.is_(False)``) and means plain
+            # equality. Without this it would silently drop out of the criteria and
+            # the fake would answer as if the filter were not there — a filter that
+            # tests can never catch being wrong. Restricted to boolean literals so
+            # ``.is_(None)`` keeps its current "not modelled" behaviour.
+            op = getattr(bool_expr, "operator", None)
+            if (
+                op is not operator.eq
+                and op is not None
+                and not (_is_operator(op) and isinstance(_literal(bool_expr.right), bool))
+            ):
                 continue
             left = getattr(bool_expr, "left", None)
             right = getattr(bool_expr, "right", None)
             if left is not None and hasattr(left, "key"):
                 crit[left.key] = _literal(right)
     return crit
+
+
+def _is_operator(op: Any) -> bool:
+    """True for SQLAlchemy's ``IS`` comparison operator (``col.is_(...)``)."""
+    return getattr(op, "__name__", "") == "is_"
 
 
 def _flatten_and(clause: Any) -> list[Any]:
@@ -254,6 +280,11 @@ def _flatten_and(clause: Any) -> list[Any]:
 
 
 def _literal(value: Any) -> Any:
+    # ``col.is_(True/False)`` renders its operand as SQLAlchemy's True_/False_
+    # singleton rather than a bound literal, so unwrap those to real bools.
+    cls = type(value).__name__
+    if cls in ("True_", "False_"):
+        return cls == "True_"
     return getattr(value, "value", value)
 
 
@@ -262,6 +293,13 @@ def _matches(row: Any, crit: dict[str, Any]) -> bool:
         actual = getattr(row, key, None)
         actual = getattr(actual, "value", actual)
         val = getattr(val, "value", val)
+        if isinstance(val, bool):
+            # Boolean columns here are NOT NULL with a server default, which the
+            # DB fills at INSERT. A model built in a test has not been through
+            # that, so an unset attribute means "the default" (False), not NULL.
+            if bool(actual) is not val:
+                return False
+            continue
         if str(actual) != str(val):
             return False
     return True

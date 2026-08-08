@@ -272,6 +272,12 @@ class Team(GuildScoped, TimestampMixin, Base):
     # team from the desktop client (PLAN.md §3.1). Redeemed only under the acting
     # guild (RLS), so it cannot cross tenants. Unique; NULL only for legacy rows.
     join_code: Mapped[str | None] = mapped_column(Text, nullable=True, unique=True)
+    # True for the one-player team auto-created behind a SOLO enrolment (1v1). The
+    # player never creates or sees it — it exists so bracket/lobby/results can keep
+    # keying on team_id. Every "real team" query filters it out (teams listings,
+    # and _resolve_captain_team, which would otherwise read a 1v1 player as the
+    # captain of an extra team).
+    is_solo: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
 
 
 class TeamMember(Base):

@@ -16,6 +16,8 @@ export interface JoinRequest { teamId: string; teamName: string; userId: string;
 export interface PresenceEntry { matchId: string; guildName: string; tournamentName: string; gameMode: string; startedAt: string | null; players: string[] }
 export interface BracketMatch { id: string; round: number; slot: number; teamAName: string | null; teamBName: string | null; winnerTeamId: string | null; teamAId: string | null; teamBId: string | null; status: string; readyDeadlineAt: string | null; teamAReady: boolean; teamBReady: boolean }
 
+export interface Entrant { teamId: string; name: string; lockedIn: boolean; isSolo: boolean; isYou: boolean; canLockIn: boolean }
+
 type Ok<T> = ({ ok: true } & T);
 type Err = { ok: false; status?: number; detail?: string };
 type Res<T> = Ok<T> | Err;
@@ -31,6 +33,9 @@ export interface LolBridge {
   listMyTournaments(): Promise<Res<{ tournaments: Tournament[] }>>;
   joinTournament(code: string, teamId?: string): Promise<Res<{ tournament: Tournament }>>;
   tournamentBracket(tournamentId: string): Promise<Res<{ tournament: Tournament; matches: BracketMatch[] }>>;
+  lookupTournament(code: string): Promise<Res<{ tournament: Tournament }>>;
+  tournamentEntrants(tournamentId: string): Promise<Res<{ entrants: Entrant[] }>>;
+  tournamentLockIn(tournamentId: string, teamId?: string): Promise<Res<Record<string, never>>>;
   matchReady(matchId: string): Promise<Res<{ side: string; bothReady: boolean }>>;
   createTeam(name: string): Promise<Res<{ team: { id: string; name: string; joinCode: string } }>>;
   joinTeam(code: string): Promise<Res<{ team: { id: string; name: string } }>>;

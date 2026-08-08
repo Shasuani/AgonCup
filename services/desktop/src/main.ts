@@ -49,7 +49,10 @@ import { unlinkAccount } from "./accounts/unlinkAccount.js";
 import {
   getBracket,
   joinTournamentByCode,
+  listEntrants,
   listMyTournaments,
+  lookupTournamentByCode,
+  lockIn,
   markReady,
 } from "./tournaments/tournaments.js";
 import {
@@ -673,6 +676,33 @@ async function bootstrap(): Promise<void> {
         { backendUrl: backendBaseUrl() },
       ),
     ),
+  );
+  ipcMain.handle("lol:tournament-lookup", (_event, args: { code: string }) =>
+    withSession((t) =>
+      lookupTournamentByCode({ accessToken: t, code: args.code }, { backendUrl: backendBaseUrl() }),
+    ),
+  );
+  ipcMain.handle("lol:tournament-entrants", (_event, args: { tournamentId: string }) =>
+    withSession((t) =>
+      listEntrants(
+        { accessToken: t, tournamentId: args.tournamentId },
+        { backendUrl: backendBaseUrl() },
+      ),
+    ),
+  );
+  ipcMain.handle(
+    "lol:tournament-lock-in",
+    (_event, args: { tournamentId: string; teamId?: string }) =>
+      withSession((t) =>
+        lockIn(
+          {
+            accessToken: t,
+            tournamentId: args.tournamentId,
+            ...(args.teamId ? { teamId: args.teamId } : {}),
+          },
+          { backendUrl: backendBaseUrl() },
+        ),
+      ),
   );
   ipcMain.handle("lol:match-ready", (_event, args: { matchId: string }) =>
     withSession((t) =>

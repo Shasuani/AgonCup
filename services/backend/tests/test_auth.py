@@ -30,6 +30,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 from lol_schemas.enums import GuildStatus, UserGuildRoleName
+from sqlalchemy.sql import operators as sql_operators
 
 from app.accounts import service as accounts_service
 from app.auth import discord_oauth, session_cookie
@@ -44,6 +45,7 @@ from app.auth.tokens import (
     RefreshTokenReuse,
     hash_token,
     issue_refresh_token,
+    revoke_refresh_token,
     rotate_refresh_token,
 )
 from app.config import get_settings
@@ -235,7 +237,9 @@ def _equality_filters(statement: Any) -> dict[str, Any]:
         for bool_expr in _flatten_and(clause):
             # Only equality clauses constrain the fake store; inequalities (e.g.
             # ``expires_at > now``) are ignored — the fake cannot model time.
-            if getattr(bool_expr, "operator", None) not in (operator.eq, None):
+            # ``col.is_(False)`` counts: it is how a boolean column is compared in
+            # SQL, and dropping it would silently widen every such query here.
+            if getattr(bool_expr, "operator", None) not in (operator.eq, None, sql_operators.is_):
                 continue
             left = getattr(bool_expr, "left", None)
             right = getattr(bool_expr, "right", None)
@@ -256,6 +260,10 @@ def _flatten_and(clause: Any) -> list[Any]:
 
 
 def _literal(value: Any) -> Any:
+    # ``is_(False)`` yields a False_/True_ SQL element rather than a bind param.
+    name = value.__class__.__name__
+    if name in ("False_", "True_"):
+        return name == "True_"
     return getattr(value, "value", value)
 
 
@@ -351,18 +359,93 @@ async def test_refresh_rotation_issues_new_token_same_family() -> None:
 async def test_refresh_reuse_revokes_family() -> None:
     session = FakeSession()
     uid = str(uuid.uuid4())
-    first = await issue_refresh_token(session, user_id=uid)
-    rotated = await rotate_refresh_token(session, token=first.token)
+    t0 = datetime.now(tz=UTC)
+    first = await issue_refresh_token(session, user_id=uid, now=t0)
+    rotated = await rotate_refresh_token(session, token=first.token, now=t0)
 
-    # Replaying the OLD (already-rotated) token = reuse → family revoked.
+    # Replaying the OLD (already-rotated) token WELL AFTER the rotation-race grace
+    # is what theft looks like → family revoked.
+    later = t0 + get_settings().refresh_rotation_grace + timedelta(seconds=1)
     with pytest.raises(RefreshTokenReuse):
-        await rotate_refresh_token(session, token=first.token)
+        await rotate_refresh_token(session, token=first.token, now=later)
 
     # Every token in the family is now revoked, including the (previously live) one.
     assert all(r.revoked for r in session.store[RefreshToken])
     # And the successor can no longer be rotated either.
     with pytest.raises(RefreshTokenReuse):
-        await rotate_refresh_token(session, token=rotated.token)
+        await rotate_refresh_token(session, token=rotated.token, now=later)
+
+
+@pytest.mark.asyncio
+async def test_refresh_replay_within_grace_is_a_race_not_theft() -> None:
+    """Two tabs booting together present the same cookie twice, milliseconds apart.
+
+    Burning the family there signed the user out of the session they had just
+    restored — the reported "every reload sends me back through Discord".
+    """
+    session = FakeSession()
+    uid = str(uuid.uuid4())
+    t0 = datetime.now(tz=UTC)
+    first = await issue_refresh_token(session, user_id=uid, now=t0)
+    winner = await rotate_refresh_token(session, token=first.token, now=t0)
+
+    sibling = await rotate_refresh_token(session, token=first.token, now=t0 + timedelta(seconds=1))
+
+    assert sibling.token not in (first.token, winner.token)
+    assert sibling.family_id == first.family_id
+    rows = {r.token_hash: r for r in session.store[RefreshToken]}
+    # BOTH rotation products stay live: whichever response reaches the browser
+    # last is the cookie it keeps, so revoking either would strand half the races.
+    assert rows[hash_token(winner.token)].revoked is False
+    assert rows[hash_token(sibling.token)].revoked is False
+    assert rows[hash_token(first.token)].revoked is True
+
+
+@pytest.mark.asyncio
+async def test_refresh_replay_within_grace_still_burns_once_the_chain_moved_on() -> None:
+    """The grace covers a race, not a replay of a token whose successor is dead.
+
+    Rotating the successor away means the session moved on; a straggler presenting
+    the grandparent afterwards is reuse, window or not.
+    """
+    session = FakeSession()
+    uid = str(uuid.uuid4())
+    t0 = datetime.now(tz=UTC)
+    first = await issue_refresh_token(session, user_id=uid, now=t0)
+    second = await rotate_refresh_token(session, token=first.token, now=t0)
+    await rotate_refresh_token(session, token=second.token, now=t0)
+
+    with pytest.raises(RefreshTokenReuse):
+        await rotate_refresh_token(session, token=first.token, now=t0 + timedelta(seconds=1))
+
+
+@pytest.mark.asyncio
+async def test_refresh_grace_of_zero_restores_strict_reuse_detection() -> None:
+    session = FakeSession()
+    settings = get_settings().model_copy(update={"refresh_rotation_grace_seconds": 0})
+    uid = str(uuid.uuid4())
+    t0 = datetime.now(tz=UTC)
+    first = await issue_refresh_token(session, user_id=uid, settings=settings, now=t0)
+    await rotate_refresh_token(session, token=first.token, settings=settings, now=t0)
+
+    with pytest.raises(RefreshTokenReuse):
+        await rotate_refresh_token(session, token=first.token, settings=settings, now=t0)
+
+
+@pytest.mark.asyncio
+async def test_logout_revokes_the_whole_family_not_just_the_presented_row() -> None:
+    """A graced sibling must not outlive the logout that ended its session."""
+    session = FakeSession()
+    uid = str(uuid.uuid4())
+    t0 = datetime.now(tz=UTC)
+    first = await issue_refresh_token(session, user_id=uid, now=t0)
+    winner = await rotate_refresh_token(session, token=first.token, now=t0)
+    sibling = await rotate_refresh_token(session, token=first.token, now=t0 + timedelta(seconds=1))
+
+    assert await revoke_refresh_token(session, token=winner.token) is True
+
+    rows = {r.token_hash: r for r in session.store[RefreshToken]}
+    assert rows[hash_token(sibling.token)].revoked is True
 
 
 # ---------------------------------------------------------------------------

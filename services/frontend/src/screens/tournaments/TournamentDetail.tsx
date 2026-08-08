@@ -7,11 +7,7 @@
 
 import { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import type {
-  RegistrationResponse,
-  StartResponse,
-  TournamentResponse,
-} from "@lol/clients-ts";
+import type { EntrantResponse, StartResponse, TournamentResponse } from "@lol/clients-ts";
 import { Button, ErrorBanner, Spinner, TextInput } from "../../components";
 import { BracketView, type BracketMatch } from "../../components/BracketView";
 import { RoleGate } from "../../auth/RequireRole";
@@ -41,8 +37,16 @@ export function TournamentDetail({ tournamentId, matches = [] }: TournamentDetai
     [tournamentId],
   );
 
+  // Who is actually in, read from the server. This used to be component state
+  // seeded only by registrations made in THIS browser session, so an admin who
+  // opened the screen saw "No teams registered" no matter how full the bracket
+  // was — and had no way to tell who still had to lock in before starting.
+  const entrants = useAsyncData<EntrantResponse[]>(
+    () => api.tournaments.entrants(tournamentId),
+    [tournamentId],
+  );
+
   const [teamId, setTeamId] = useState("");
-  const [registrations, setRegistrations] = useState<RegistrationResponse[]>([]);
   const [startResult, setStartResult] = useState<StartResponse | null>(null);
 
   const register = useAsyncAction(() =>
@@ -53,31 +57,24 @@ export function TournamentDetail({ tournamentId, matches = [] }: TournamentDetai
   );
   const start = useAsyncAction(() => api.tournaments.start(tournamentId));
 
-  function upsertRegistration(reg: RegistrationResponse): void {
-    setRegistrations((prev) => {
-      const next = prev.filter((r) => r.team_id !== reg.team_id);
-      next.push(reg);
-      return next;
-    });
-  }
-
   async function handleRegister(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (teamId.trim().length === 0) return;
-    const reg = await register.run();
-    upsertRegistration(reg);
+    await register.run();
     setTeamId("");
+    entrants.reload();
   }
 
   async function handleCheckIn(id: string): Promise<void> {
-    const reg = await checkIn.run(id);
-    upsertRegistration(reg);
+    await checkIn.run(id);
+    entrants.reload();
   }
 
   async function handleStart(): Promise<void> {
     const result = await start.run();
     setStartResult(result);
     tournament.reload();
+    entrants.reload();
   }
 
   function handleOverride(match: BracketMatch): void {
@@ -87,6 +84,9 @@ export function TournamentDetail({ tournamentId, matches = [] }: TournamentDetai
   }
 
   const t = tournament.data;
+  const entered = entrants.data ?? [];
+  const lockedIn = entered.filter((e) => e.locked_in).length;
+  const soloMode = t?.game_mode === "aram_1v1";
 
   return (
     <section aria-labelledby="tournament-detail-heading" data-tournament-detail>
@@ -108,58 +108,99 @@ export function TournamentDetail({ tournamentId, matches = [] }: TournamentDetai
             </dd>
           </div>
           <div>
-            <dt>Format</dt>
-            <dd>{t.format}</dd>
+            <dt>Mode</dt>
+            <dd>{t.game_mode === "aram_1v1" ? "1v1 ARAM" : "5v5 Summoner's Rift"}</dd>
           </div>
           <div>
-            <dt>Max teams</dt>
-            <dd>{t.max_teams}</dd>
+            <dt>Format</dt>
+            <dd>
+              {t.format === "double_elimination" ? "Double elimination" : "Single elimination"}
+            </dd>
           </div>
+          <div>
+            <dt>Series</dt>
+            <dd>Best of {t.best_of}</dd>
+          </div>
+          <div>
+            <dt>Bracket size</dt>
+            <dd>
+              {t.max_teams} {t.game_mode === "aram_1v1" ? "players" : "teams"}
+            </dd>
+          </div>
+          {t.registration_opens_at ? (
+            <div>
+              <dt>Registration opens</dt>
+              <dd>{new Date(t.registration_opens_at).toLocaleString()}</dd>
+            </div>
+          ) : null}
+          {t.start_at ? (
+            <div>
+              <dt>Scheduled start</dt>
+              <dd>{new Date(t.start_at).toLocaleString()}</dd>
+            </div>
+          ) : null}
         </dl>
       ) : null}
 
       <section aria-labelledby="registrations-heading" data-registrations>
-        <h3 id="registrations-heading">Registrations</h3>
+        <h3 id="registrations-heading">Entrants{entered.length > 0 ? ` (${lockedIn}/${entered.length} locked in)` : ""}</h3>
 
-        <form onSubmit={handleRegister} aria-label="Register a team">
-          <TextInput
-            label="Team ID"
-            required
-            value={teamId}
-            onChange={(e) => setTeamId(e.target.value)}
-          />
-          {register.error ? <ErrorBanner error={register.error} /> : null}
-          <Button
-            type="submit"
-            variant="primary"
-            busy={register.loading}
-            disabled={teamId.trim().length === 0 || register.loading}
-          >
-            Register team
-          </Button>
-        </form>
-
+        {entrants.loading ? <Spinner label="Loading entrants" /> : null}
+        {entrants.error ? (
+          <ErrorBanner error={entrants.error} onRetry={entrants.reload} />
+        ) : null}
         {checkIn.error ? <ErrorBanner error={checkIn.error} /> : null}
 
-        {registrations.length === 0 ? (
-          <p data-no-registrations>No teams registered in this session.</p>
+        {!entrants.loading && entered.length === 0 ? (
+          <p data-no-registrations>
+            Nobody has entered yet. Share the join code — {soloMode ? "players" : "team captains"}{" "}
+            redeem it in the desktop client.
+          </p>
         ) : (
           <ul data-registration-list>
-            {registrations.map((reg) => (
-              <li key={reg.team_id} data-registration>
-                <span data-registration-team>{reg.team_id}</span>
-                <span data-registration-status>{reg.status}</span>
-                <Button
-                  variant="secondary"
-                  busy={checkIn.loading}
-                  onClick={() => handleCheckIn(reg.team_id)}
-                >
-                  Check in
-                </Button>
+            {entered.map((e) => (
+              <li key={e.team_id} data-registration data-locked-in={e.locked_in ? "" : undefined}>
+                <span data-registration-team>{e.name}</span>
+                <span data-registration-status>
+                  {e.locked_in ? "locked in" : "not ready"}
+                </span>
+                {e.locked_in ? null : (
+                  <Button
+                    variant="secondary"
+                    busy={checkIn.loading}
+                    onClick={() => handleCheckIn(e.team_id)}
+                  >
+                    Lock in
+                  </Button>
+                )}
               </li>
             ))}
           </ul>
         )}
+
+        <RoleGate anyOf={ADMIN_ROLES}>
+          <details data-manual-register>
+            <summary>Add an entrant by team ID</summary>
+            <form onSubmit={handleRegister} aria-label="Register a team">
+              <TextInput
+                label="Team ID"
+                required
+                value={teamId}
+                onChange={(e) => setTeamId(e.target.value)}
+                hint="Escape hatch — normally a captain redeems the join code instead."
+              />
+              {register.error ? <ErrorBanner error={register.error} /> : null}
+              <Button
+                type="submit"
+                variant="primary"
+                busy={register.loading}
+                disabled={teamId.trim().length === 0 || register.loading}
+              >
+                Register team
+              </Button>
+            </form>
+          </details>
+        </RoleGate>
       </section>
 
       <RoleGate anyOf={ADMIN_ROLES}>

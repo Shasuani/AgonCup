@@ -82,19 +82,30 @@ export interface AccessTokenClaims {
 // tournaments — services/backend/src/app/tournaments/router.py
 // ---------------------------------------------------------------------------
 
-export type TournamentFormat =
-  | 'single_elimination'
-  | 'double_elimination'
-  | 'round_robin'
-  | 'swiss';
+/** Mirrors lol_schemas.enums.TournamentFormat — the bracket engine implements
+ *  these two only. (`round_robin`/`swiss` used to be listed here and are not
+ *  backend values: picking one produced a 422 from an otherwise valid form.) */
+export type TournamentFormat = 'single_elimination' | 'double_elimination';
+
+/** Mirrors lol_schemas.enums.GameMode. Drives lobby shape AND enrolment shape:
+ *  `aram_1v1` enrols individual players, `summoners_rift_5v5` enrols teams. */
+export type GameMode = 'summoners_rift_5v5' | 'aram_1v1';
 
 export interface CreateTournamentRequest {
   name: string;
   /** Defaults to single_elimination server-side when omitted. */
   format?: TournamentFormat;
+  /** Defaults to summoners_rift_5v5 server-side when omitted. */
+  game_mode?: GameMode;
+  /** Series length per match: 1, 3 or 5. Defaults to 1 server-side. */
+  best_of?: number;
   /** 2..16, defaults to 16 server-side. */
   max_teams?: number;
   ruleset?: Record<string, unknown>;
+  /** ISO-8601 UTC. Enrolment is rejected before this instant. */
+  registration_opens_at?: string;
+  /** ISO-8601 UTC scheduled kickoff; enrolment closes once it passes. */
+  start_at?: string;
 }
 
 export interface TournamentResponse {
@@ -102,8 +113,32 @@ export interface TournamentResponse {
   name: string;
   status: string;
   format: string;
+  game_mode: string;
+  best_of: number;
   max_teams: number;
   is_shared_to_central: boolean;
+  registration_opens_at: string | null;
+  start_at: string | null;
+}
+
+/** Create result — carries the join code, returned ONLY on create. */
+export interface CreatedTournamentResponse extends TournamentResponse {
+  join_code: string;
+}
+
+/** One entry in a tournament: a team in 5v5, a player (their solo team) in 1v1. */
+export interface EntrantResponse {
+  team_id: string;
+  name: string;
+  locked_in: boolean;
+  is_solo: boolean;
+  is_you: boolean;
+  can_lock_in: boolean;
+}
+
+/** Lock-in body. `team_id` is optional: a solo entrant has no team to name. */
+export interface CheckInRequest {
+  team_id?: string;
 }
 
 /** Body for register / check-in. */

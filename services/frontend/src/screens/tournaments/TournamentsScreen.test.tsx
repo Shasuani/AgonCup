@@ -13,16 +13,24 @@ const TOURNAMENTS: TournamentResponse[] = [
     name: "Spring Cup",
     status: "registration",
     format: "single_elimination",
+    game_mode: "summoners_rift_5v5",
+    best_of: 1,
     max_teams: 8,
     is_shared_to_central: false,
+    registration_opens_at: null,
+    start_at: null,
   },
   {
     id: "tour-2",
     name: "Summer Clash",
     status: "in_progress",
     format: "single_elimination",
+    game_mode: "aram_1v1",
+    best_of: 3,
     max_teams: 16,
     is_shared_to_central: true,
+    registration_opens_at: null,
+    start_at: null,
   },
 ];
 
@@ -38,8 +46,13 @@ function mockClient(overrides: Partial<ApiClient["tournaments"]> = {}): {
       name: body.name,
       status: "draft",
       format: body.format ?? "single_elimination",
+      game_mode: body.game_mode ?? "summoners_rift_5v5",
+      best_of: body.best_of ?? 1,
       max_teams: body.max_teams ?? 16,
       is_shared_to_central: false,
+      registration_opens_at: body.registration_opens_at ?? null,
+      start_at: body.start_at ?? null,
+      join_code: "ABCD2345",
     })),
     get: vi.fn(async (id: string) => TOURNAMENTS.find((t) => t.id === id) ?? TOURNAMENTS[0]),
     register: vi.fn(),
@@ -69,10 +82,16 @@ describe("TournamentsScreen list", () => {
 
     expect(await screen.findByRole("button", { name: "Spring Cup" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Summer Clash" })).toBeInTheDocument();
-    // status + format + teams columns rendered.
+    // status + mode + format + series + size columns rendered, with the raw
+    // enum values humanised.
     expect(screen.getByText("registration")).toBeInTheDocument();
     expect(screen.getByText("in_progress")).toBeInTheDocument();
-    expect(screen.getAllByText("single_elimination").length).toBe(2);
+    expect(screen.getAllByText("Single elim").length).toBe(2);
+    expect(screen.getByText("5v5 Rift")).toBeInTheDocument();
+    expect(screen.getByText("1v1 ARAM")).toBeInTheDocument();
+    expect(screen.getByText("Bo3")).toBeInTheDocument();
+    expect(screen.getByText("8 teams")).toBeInTheDocument();
+    expect(screen.getByText("16 players")).toBeInTheDocument();
     expect(tournaments.list).toHaveBeenCalledTimes(1);
   });
 
@@ -99,6 +118,64 @@ describe("CreateTournamentForm submit", () => {
     );
     // list re-fetched after a successful create (initial + reload).
     await waitFor(() => expect(tournaments.list).toHaveBeenCalledTimes(2));
+  });
+
+  it("sends the game mode and series the admin picked", async () => {
+    // These decide how players enrol (individually vs as a team) and how long a
+    // match runs. The form used to omit both, so every tournament was 5v5 Bo1.
+    const { client, tournaments } = mockClient();
+    renderScreen(client);
+    await screen.findByRole("button", { name: "Spring Cup" });
+
+    await userEvent.type(screen.getByLabelText(/Name/), "Duel Night");
+    await userEvent.selectOptions(screen.getByLabelText(/Game mode/), "aram_1v1");
+    await userEvent.selectOptions(screen.getByLabelText(/Series/), "3");
+    await userEvent.selectOptions(screen.getByLabelText(/Format/), "double_elimination");
+    await userEvent.click(screen.getByRole("button", { name: "Create tournament" }));
+
+    await waitFor(() => expect(tournaments.create).toHaveBeenCalledTimes(1));
+    expect(tournaments.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "Duel Night",
+        game_mode: "aram_1v1",
+        best_of: 3,
+        format: "double_elimination",
+      }),
+    );
+  });
+
+  it("relabels the bracket size for a solo mode", async () => {
+    const { client } = mockClient();
+    renderScreen(client);
+    await screen.findByRole("button", { name: "Spring Cup" });
+
+    expect(screen.getByLabelText(/Bracket size \(teams\)/)).toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByLabelText(/Game mode/), "aram_1v1");
+    expect(screen.getByLabelText(/Bracket size \(players\)/)).toBeInTheDocument();
+  });
+
+  it("shows the join code after creating — the API returns it nowhere else", async () => {
+    const { client } = mockClient();
+    renderScreen(client);
+    await screen.findByRole("button", { name: "Spring Cup" });
+
+    await userEvent.type(screen.getByLabelText(/Name/), "Autumn Open");
+    await userEvent.click(screen.getByRole("button", { name: "Create tournament" }));
+
+    expect(await screen.findByText("ABCD2345")).toBeInTheDocument();
+  });
+
+  it("blocks a start time that precedes registration opening", async () => {
+    const { client, tournaments } = mockClient();
+    renderScreen(client);
+    await screen.findByRole("button", { name: "Spring Cup" });
+
+    await userEvent.type(screen.getByLabelText(/Name/), "Backwards Cup");
+    await userEvent.type(screen.getByLabelText(/Registration opens/), "2026-09-02T18:00");
+    await userEvent.type(screen.getByLabelText(/Starts/), "2026-09-01T18:00");
+
+    expect(screen.getByRole("button", { name: "Create tournament" })).toBeDisabled();
+    expect(tournaments.create).not.toHaveBeenCalled();
   });
 });
 

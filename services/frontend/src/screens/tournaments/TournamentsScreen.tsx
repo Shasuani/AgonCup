@@ -52,6 +52,38 @@ function statusCell(t: TournamentResponse): ReactNode {
   );
 }
 
+const MODE_LABELS: Record<string, string> = {
+  summoners_rift_5v5: "5v5 Rift",
+  aram_1v1: "1v1 ARAM",
+};
+
+const FORMAT_LABELS: Record<string, string> = {
+  single_elimination: "Single elim",
+  double_elimination: "Double elim",
+};
+
+/** Raw enum values leaked into the table ("single_elimination"). Fall back to
+ *  the raw value so an enum added server-side still renders something. */
+function label(map: Record<string, string>, value: string): string {
+  return map[value] ?? value;
+}
+
+/** The scheduling columns are empty for most tournaments, so both times share
+ *  one column: "opens … / starts …", or an em dash when unscheduled. */
+function scheduleCell(t: TournamentResponse): ReactNode {
+  if (!t.registration_opens_at && !t.start_at) {
+    return <span data-muted>—</span>;
+  }
+  const fmt = (iso: string): string => new Date(iso).toLocaleString();
+  return (
+    <span data-schedule>
+      {t.registration_opens_at ? <>opens {fmt(t.registration_opens_at)}</> : null}
+      {t.registration_opens_at && t.start_at ? <br /> : null}
+      {t.start_at ? <>starts {fmt(t.start_at)}</> : null}
+    </span>
+  );
+}
+
 function TournamentsBody(): JSX.Element {
   const api = useApi();
   const { data, loading, error, reload } = useAsyncData<TournamentResponse[]>(
@@ -79,8 +111,15 @@ function TournamentsBody(): JSX.Element {
       ),
     },
     { id: "status", header: "Status", cell: statusCell },
-    { id: "format", header: "Format", cell: (t) => t.format },
-    { id: "max_teams", header: "Teams", cell: (t) => t.max_teams },
+    { id: "game_mode", header: "Mode", cell: (t) => label(MODE_LABELS, t.game_mode) },
+    { id: "format", header: "Format", cell: (t) => label(FORMAT_LABELS, t.format) },
+    { id: "best_of", header: "Series", cell: (t) => `Bo${t.best_of}` },
+    {
+      id: "max_teams",
+      header: "Size",
+      cell: (t) => `${t.max_teams} ${t.game_mode === "aram_1v1" ? "players" : "teams"}`,
+    },
+    { id: "schedule", header: "Schedule", cell: scheduleCell },
   ];
 
   return (

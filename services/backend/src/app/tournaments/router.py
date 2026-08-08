@@ -87,6 +87,24 @@ class TeamRef(BaseModel):
     team_id: uuid.UUID
 
 
+class CheckInRequest(BaseModel):
+    """Lock-in body. ``team_id`` is optional — a solo (1v1) entrant has no team
+    to name, and a captain of exactly one team does not need to repeat it."""
+
+    team_id: uuid.UUID | None = None
+
+
+class EntrantResponse(BaseModel):
+    """One tournament entry: a team in 5v5, a player (their solo team) in 1v1."""
+
+    team_id: str
+    name: str
+    locked_in: bool
+    is_solo: bool
+    is_you: bool
+    can_lock_in: bool
+
+
 class RegistrationResponse(BaseModel):
     id: str
     tournament_id: str
@@ -197,6 +215,28 @@ async def list_my_tournaments(
 ) -> list[TournamentResponse]:
     rows = await service.list_my_tournaments(session, user_id=uuid.UUID(principal.user_id))
     return [_to_response(t) for t in rows]
+
+
+@router.get(
+    "/by-code/{code}",
+    response_model=TournamentResponse,
+    summary="Look up a tournament by its join code, without enrolling",
+)
+async def get_by_code(
+    code: str,
+    session: Annotated[AsyncSession, Depends(get_tenant_session)],
+) -> TournamentResponse:
+    """Read-only preview of what a join code points at.
+
+    The client needs the ``game_mode`` **before** it enrols: a 5v5 code has to ask
+    a multi-team captain which team is entering, while a 1v1 code must never ask
+    that. Enrolling first and recovering from an error would join the wrong team.
+    RLS scopes the lookup, so a foreign guild's code reads as invalid.
+    """
+    try:
+        return _to_response(await service.get_tournament_by_code(session, code=code))
+    except service.InvalidJoinCodeError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="invalid join code") from exc
 
 
 @router.post(
@@ -377,18 +417,76 @@ async def register_team(
 @router.post(
     "/{tournament_id}/check-in",
     response_model=RegistrationResponse,
-    summary="Check a team in (captain)",
+    summary="Lock in for a tournament (solo player, or a team's captain)",
 )
 async def check_in(
     tournament_id: uuid.UUID,
-    body: TeamRef,
-    session: Annotated[AsyncSession, Depends(_CAPTAIN)],
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    session: Annotated[AsyncSession, Depends(get_tenant_session)],
+    body: CheckInRequest | None = None,
 ) -> RegistrationResponse:
+    """Lock in — the last step before an admin can start the bracket.
+
+    ``team_id`` is optional because a **solo (1v1) player has no team to name**:
+    omitted, the caller's own entry is resolved (their solo enrolment, else the
+    team they captain). This route is therefore NOT gated on the ``captain``
+    guild role — a 1v1 entrant is an ordinary member — so authorization is
+    enforced here instead: you may only lock in an entry that is yours.
+    """
+    team_id = body.team_id if body is not None else None
     try:
-        reg = await service.check_in(session, tournament_id=tournament_id, team_id=body.team_id)
+        if team_id is None:
+            team_id = await service.resolve_check_in_team(
+                session, tournament_id=tournament_id, user_id=uuid.UUID(principal.user_id)
+            )
+        elif UserGuildRoleName.GUILD_ADMIN not in principal.roles:
+            # An explicit team_id is a disambiguator, not a capability: only that
+            # team's captain (or an admin) may lock it in.
+            await service.assert_team_captain(
+                session, team_id=team_id, user_id=uuid.UUID(principal.user_id)
+            )
+        reg = await service.check_in(session, tournament_id=tournament_id, team_id=team_id)
+    except service.NotTeamCaptainError as exc:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, detail="only the team captain can lock the team in"
+        ) from exc
+    except service.NoCaptainTeamError as exc:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, detail="you have not joined this tournament"
+        ) from exc
+    except service.AmbiguousCaptainTeamError as exc:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, detail="you captain multiple teams — specify team_id"
+        ) from exc
     except service.InvalidStateError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return _reg_response(reg)
+
+
+@router.get(
+    "/{tournament_id}/entrants",
+    response_model=list[EntrantResponse],
+    summary="Who has entered a tournament, and who has locked in",
+)
+async def list_entrants(
+    tournament_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    session: Annotated[AsyncSession, Depends(get_tenant_session)],
+) -> list[EntrantResponse]:
+    entrants = await service.list_entrants(
+        session, tournament_id=tournament_id, user_id=uuid.UUID(principal.user_id)
+    )
+    return [
+        EntrantResponse(
+            team_id=str(e.team_id),
+            name=e.name,
+            locked_in=e.locked_in,
+            is_solo=e.is_solo,
+            is_you=e.is_you,
+            can_lock_in=e.can_lock_in,
+        )
+        for e in entrants
+    ]
 
 
 @router.post(

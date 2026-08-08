@@ -25,6 +25,7 @@ from lol_schemas.enums import (
     GameMode,
     MatchStatus,
     RegistrationStatus,
+    TeamMemberRole,
     TeamMemberStatus,
     TournamentFormat,
     TournamentStatus,
@@ -40,6 +41,7 @@ from app.models import (
     TeamMember,
     Tournament,
     TournamentParticipant,
+    User,
 )
 
 MAX_TEAMS_HARD_CAP = 16
@@ -345,10 +347,69 @@ async def join_by_code(
     return tournament, await _register_team_idempotent(session, tournament=tournament, team=team)
 
 
+async def _solo_team(session: AsyncSession, *, user_id: uuid.UUID, guild_id: uuid.UUID) -> Team:
+    """The player's own one-player team — created on first solo enrolment, reused after.
+
+    A solo player has no team, but everything downstream of the bracket (seeding,
+    matches, ready-up, lobby orchestration, results) keys on ``team_id``. So a 1v1
+    join quietly gets one: named after the player, so the bracket renders their
+    name rather than an anonymous slot, and flagged ``is_solo`` so it never shows
+    up as a real team (see the column's note in models/tables.py).
+
+    It carries **no join code** — nobody can be invited into someone's solo team.
+    One per (user, guild), reused across tournaments so a player who enters five
+    1v1s does not accumulate five phantom teams.
+    """
+    existing = (
+        await session.execute(
+            select(Team).where(Team.captain_user_id == user_id, Team.is_solo.is_(True))
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return existing
+
+    display_name = (
+        await session.execute(select(User.display_name).where(User.id == user_id))
+    ).scalar_one_or_none()
+    team = Team(
+        guild_id=guild_id,
+        name=display_name or "Player",
+        captain_user_id=user_id,
+        join_code=None,
+        is_solo=True,
+    )
+    session.add(team)
+    await session.flush()  # assign team.id before the membership row references it
+    session.add(
+        TeamMember(
+            team_id=team.id,
+            user_id=user_id,
+            guild_id=guild_id,
+            role=TeamMemberRole.CAPTAIN,
+            status=TeamMemberStatus.ACTIVE,
+        )
+    )
+    await session.flush()
+    return team
+
+
 async def _enrol_solo(
     session: AsyncSession, *, tournament: Tournament, user_id: uuid.UUID
 ) -> TournamentParticipant:
-    """Enrol a lone player (solo game modes). Idempotent on (tournament, user)."""
+    """Enrol a lone player (solo game modes). Idempotent on (tournament, user).
+
+    Writes BOTH records, on purpose: the ``TournamentParticipant`` is the "this
+    person joined" fact (and what the PII purge walks), while the ``Registration``
+    of their :func:`_solo_team` is what the bracket actually seeds from. The
+    participant's ``team_id`` links the two — exactly the denormalization that
+    column was defined for.
+
+    The registration lands ``PENDING`` like any other: the player still has to
+    lock in (:func:`check_in`) before they can be seeded.
+    """
+    guild_id = await _current_guild(session)
+    team = await _solo_team(session, user_id=user_id, guild_id=guild_id)
+
     existing = (
         await session.execute(
             select(TournamentParticipant).where(
@@ -358,15 +419,22 @@ async def _enrol_solo(
         )
     ).scalar_one_or_none()
     if existing is not None:
+        # Re-redeeming the code is idempotent, but repair a participant that
+        # predates the solo-team path (or lost its link) rather than leaving it
+        # unseedable.
+        existing.team_id = team.id
+        await _register_team_idempotent(session, tournament=tournament, team=team)
+        await session.flush()
         return existing
 
-    guild_id = await _current_guild(session)
     participant = TournamentParticipant(
         guild_id=guild_id,
         tournament_id=tournament.id,
         user_id=user_id,
+        team_id=team.id,
     )
     session.add(participant)
+    await _register_team_idempotent(session, tournament=tournament, team=team)
     await session.flush()
     return participant
 
@@ -388,8 +456,15 @@ async def _resolve_captain_team(
             raise NotTeamCaptainError(str(team_id))
         return team
 
+    # `is_solo` teams are excluded: they are auto-created 1v1 scaffolding, not
+    # teams the player captains. Counting them would make anyone who has ever
+    # entered a 1v1 look "ambiguous" the moment they redeem a 5v5 code.
     captained = list(
-        (await session.execute(select(Team).where(Team.captain_user_id == user_id))).scalars()
+        (
+            await session.execute(
+                select(Team).where(Team.captain_user_id == user_id, Team.is_solo.is_(False))
+            )
+        ).scalars()
     )
     if not captained:
         raise NoCaptainTeamError(str(user_id))
@@ -570,6 +645,65 @@ async def register_team(
     return reg
 
 
+async def assert_team_captain(
+    session: AsyncSession, *, team_id: uuid.UUID, user_id: uuid.UUID
+) -> Team:
+    """Raise unless ``user_id`` captains ``team_id`` in the acting guild."""
+    team = (await session.execute(select(Team).where(Team.id == team_id))).scalar_one_or_none()
+    if team is None:
+        raise InvalidStateError("team not found in this guild")
+    if team.captain_user_id != user_id:
+        raise NotTeamCaptainError(str(team_id))
+    return team
+
+
+async def resolve_check_in_team(
+    session: AsyncSession, *, tournament_id: uuid.UUID, user_id: uuid.UUID
+) -> uuid.UUID:
+    """Which team the caller locks in, when the client did not name one.
+
+    Solo (1v1) players have no team to name — they lock themselves in — so their
+    ``TournamentParticipant.team_id`` (their :func:`_solo_team`) answers it.
+
+    For a team tournament the answer is scoped to **this tournament**: of the teams
+    the caller captains, the one actually entered here. Falling back to
+    :func:`_resolve_captain_team` instead would reject a captain of several teams as
+    ambiguous even when only one of them is in this tournament — the common case
+    once someone runs more than one roster.
+    """
+    solo_team_id = (
+        await session.execute(
+            select(TournamentParticipant.team_id).where(
+                TournamentParticipant.tournament_id == tournament_id,
+                TournamentParticipant.user_id == user_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if solo_team_id is not None:
+        return solo_team_id
+
+    entered = {
+        team_id
+        for (team_id,) in (
+            await session.execute(
+                select(Registration.team_id).where(Registration.tournament_id == tournament_id)
+            )
+        ).all()
+    }
+    captained = [
+        team.id
+        for team in (
+            await session.execute(select(Team).where(Team.captain_user_id == user_id))
+        ).scalars()
+        if team.id in entered
+    ]
+    if not captained:
+        raise NoCaptainTeamError(str(user_id))
+    if len(captained) > 1:
+        raise AmbiguousCaptainTeamError(str(user_id))
+    return captained[0]
+
+
 async def check_in(
     session: AsyncSession, *, tournament_id: uuid.UUID, team_id: uuid.UUID
 ) -> Registration:
@@ -587,6 +721,91 @@ async def check_in(
     reg.status = RegistrationStatus.CHECKED_IN
     await session.flush()
     return reg
+
+
+@dataclass(frozen=True)
+class Entrant:
+    """One entry in a tournament, as the join/lock-in screens show it.
+
+    Deliberately mode-agnostic: a 5v5 entry is a team and a 1v1 entry is a player
+    (their :func:`_solo_team`, named after them), so a single list renders both.
+    ``is_solo`` lets the client drop the word "team" from the 1v1 wording.
+    """
+
+    team_id: uuid.UUID
+    name: str
+    locked_in: bool
+    is_solo: bool
+    #: True for the caller's own entry — what lets the client say "you're in"
+    #: without guessing by name.
+    is_you: bool
+    #: True when the caller may lock THIS entry in: its captain (which, for a solo
+    #: entry, is the player themselves). A plain 5v5 roster member is ``is_you``
+    #: but not this, so the client shows them the state without a dead button.
+    can_lock_in: bool
+
+
+async def list_entrants(
+    session: AsyncSession, *, tournament_id: uuid.UUID, user_id: uuid.UUID | None = None
+) -> list[Entrant]:
+    """Everyone registered in a tournament, in seed (registration) order.
+
+    This is what tells a player their join actually landed — and who else is in.
+    RLS scopes both the registrations and the team names to the acting guild.
+
+    ``user_id`` marks the caller's own entry. Membership is the test, so it covers
+    both shapes: their solo team in 1v1, the team they play for in 5v5.
+    """
+    regs = list(
+        (
+            await session.execute(
+                select(Registration)
+                .where(Registration.tournament_id == tournament_id)
+                .order_by(Registration.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    # Names come from a second read rather than a JOIN: a tournament holds at most
+    # MAX_TEAMS_HARD_CAP rows, so this is one extra small query, and it keeps the
+    # function exercisable by the offline fake session (which models no joins).
+    teams = {
+        t.id: t
+        for t in (await session.execute(select(Team))).scalars().all()
+        if any(t.id == r.team_id for r in regs)
+    }
+
+    my_team_ids: set[uuid.UUID] = set()
+    if user_id is not None:
+        my_team_ids = {
+            tid
+            for (tid,) in (
+                await session.execute(
+                    select(TeamMember.team_id).where(
+                        TeamMember.user_id == user_id,
+                        TeamMember.status == TeamMemberStatus.ACTIVE,
+                    )
+                )
+            ).all()
+        }
+
+    entrants: list[Entrant] = []
+    for reg in regs:
+        team = teams.get(reg.team_id)
+        if team is None:  # RLS hid it (foreign guild) — not ours to show
+            continue
+        entrants.append(
+            Entrant(
+                team_id=reg.team_id,
+                name=team.name,
+                locked_in=reg.status == RegistrationStatus.CHECKED_IN,
+                is_solo=bool(team.is_solo),
+                is_you=reg.team_id in my_team_ids,
+                can_lock_in=user_id is not None and team.captain_user_id == user_id,
+            )
+        )
+    return entrants
 
 
 async def _seeded_team_ids(session: AsyncSession, tournament_id: uuid.UUID) -> list[uuid.UUID]:

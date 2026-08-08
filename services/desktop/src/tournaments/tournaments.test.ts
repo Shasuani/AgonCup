@@ -7,7 +7,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { getBracket, joinTournamentByCode, listMyTournaments, markReady } from "./tournaments.js";
+import {
+  getBracket,
+  joinTournamentByCode,
+  listEntrants,
+  listMyTournaments,
+  lockIn,
+  lookupTournamentByCode,
+  markReady,
+} from "./tournaments.js";
 
 test("listMyTournaments: GETs /tournaments/mine with Bearer and maps rows", async () => {
   let captured: { url: string; method: string | undefined; headers: Record<string, string> } | undefined;
@@ -209,4 +217,144 @@ test("markReady: 403 surfaces the not-captain detail", async () => {
   const result = await markReady({ accessToken: "j", matchId: "m1" }, { fetch: spyFetch, backendUrl: "http://x" });
   assert.equal(result.ok, false);
   if (!result.ok) assert.equal(result.status, 403);
+});
+
+test("listEntrants: GETs /{id}/entrants and maps lock-in + ownership flags", async () => {
+  let capturedUrl = "";
+  const spyFetch: typeof fetch = (async (url: string) => {
+    capturedUrl = url;
+    return new Response(
+      JSON.stringify([
+        { team_id: "tm1", name: "KostasK", locked_in: true, is_solo: true, is_you: true, can_lock_in: true },
+        { team_id: "tm2", name: "Nikos", locked_in: false, is_solo: true, is_you: false, can_lock_in: false },
+      ]),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  }) as unknown as typeof fetch;
+
+  const result = await listEntrants(
+    { accessToken: "jwt", tournamentId: "t1" },
+    { fetch: spyFetch, backendUrl: "http://x" },
+  );
+
+  assert.equal(capturedUrl, "http://x/api/v1/tournaments/t1/entrants");
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.equal(result.entrants.length, 2);
+    assert.deepEqual(result.entrants[0], {
+      teamId: "tm1",
+      name: "KostasK",
+      lockedIn: true,
+      isSolo: true,
+      isYou: true,
+      canLockIn: true,
+    });
+    assert.equal(result.entrants[1]?.lockedIn, false);
+    assert.equal(result.entrants[1]?.isYou, false);
+  }
+});
+
+test("lockIn: POSTs an empty body — a solo player has no team to name", async () => {
+  let captured: { url: string; method: string | undefined; body: unknown } | undefined;
+  const spyFetch: typeof fetch = (async (url: string, init?: RequestInit) => {
+    captured = {
+      url,
+      method: init?.method,
+      body: init?.body ? JSON.parse(init.body as string) : undefined,
+    };
+    return new Response(JSON.stringify({ id: "r1", status: "checked_in" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as unknown as typeof fetch;
+
+  const result = await lockIn(
+    { accessToken: "jwt", tournamentId: "t1" },
+    { fetch: spyFetch, backendUrl: "http://x" },
+  );
+
+  assert.equal(captured?.url, "http://x/api/v1/tournaments/t1/check-in");
+  assert.equal(captured?.method, "POST");
+  assert.deepEqual(captured?.body, {});
+  assert.equal(result.ok, true);
+});
+
+test("lockIn: an explicit teamId is forwarded (captain of several teams)", async () => {
+  let body: unknown;
+  const spyFetch: typeof fetch = (async (_url: string, init?: RequestInit) => {
+    body = init?.body ? JSON.parse(init.body as string) : undefined;
+    return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
+  }) as unknown as typeof fetch;
+
+  await lockIn(
+    { accessToken: "jwt", tournamentId: "t1", teamId: "tm7" },
+    { fetch: spyFetch, backendUrl: "http://x" },
+  );
+
+  assert.deepEqual(body, { team_id: "tm7" });
+});
+
+test("lockIn: 400 surfaces the backend detail", async () => {
+  const spyFetch: typeof fetch = (async () =>
+    new Response(JSON.stringify({ detail: "you have not joined this tournament" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    })) as unknown as typeof fetch;
+
+  const result = await lockIn(
+    { accessToken: "j", tournamentId: "t1" },
+    { fetch: spyFetch, backendUrl: "http://x" },
+  );
+
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.equal(result.status, 400);
+    assert.equal(result.detail, "you have not joined this tournament");
+  }
+});
+
+test("lookupTournamentByCode: GETs /by-code/{code} without enrolling", async () => {
+  let captured: { url: string; method: string | undefined } | undefined;
+  const spyFetch: typeof fetch = (async (url: string, init?: RequestInit) => {
+    captured = { url, method: init?.method };
+    return new Response(
+      JSON.stringify({
+        id: "t5",
+        name: "Rift Cup",
+        status: "open",
+        format: "single_elimination",
+        game_mode: "summoners_rift_5v5",
+        best_of: 1,
+        max_teams: 8,
+        is_shared_to_central: false,
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  }) as unknown as typeof fetch;
+
+  const result = await lookupTournamentByCode(
+    { accessToken: "jwt", code: "ABCD2345" },
+    { fetch: spyFetch, backendUrl: "http://x" },
+  );
+
+  assert.equal(captured?.url, "http://x/api/v1/tournaments/by-code/ABCD2345");
+  assert.equal(captured?.method, "GET");
+  assert.equal(result.ok, true);
+  if (result.ok) assert.equal(result.tournament.gameMode, "summoners_rift_5v5");
+});
+
+test("lookupTournamentByCode: 404 on an unknown code", async () => {
+  const spyFetch: typeof fetch = (async () =>
+    new Response(JSON.stringify({ detail: "invalid join code" }), {
+      status: 404,
+      headers: { "Content-Type": "application/json" },
+    })) as unknown as typeof fetch;
+
+  const result = await lookupTournamentByCode(
+    { accessToken: "j", code: "NOPE" },
+    { fetch: spyFetch, backendUrl: "http://x" },
+  );
+
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.detail, "invalid join code");
 });

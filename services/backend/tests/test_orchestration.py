@@ -304,8 +304,27 @@ def test_default_lobby_credentials_are_deterministic() -> None:
     name, pw = default_lobby_credentials(mid)
     assert (name, pw) == default_lobby_credentials(mid)  # stable per match
     assert name.startswith("LoL-")
-    assert pw.isupper() and len(pw) == 6
+    assert len(pw) == 6
+    # The password is uppercased hex, so it may legitimately be ALL DIGITS
+    # ("088151"). `pw.isupper()` — what this asserted — is False for a string with
+    # no cased characters at all, which flaked this test on roughly 6% of random
+    # match ids ((10/16)**6). Assert the property that was actually meant: nothing
+    # lowercase survives the .upper().
+    assert pw == pw.upper()
+    assert all(c in "0123456789ABCDEF" for c in pw)
     assert default_lobby_credentials(uuid.uuid4())[0] != name  # match-bound
+
+
+def test_default_lobby_password_handles_an_all_digit_match_id() -> None:
+    """The regression the flake was pointing at: a hex id with no letters.
+
+    Pinned rather than random so it cannot silently stop covering this case.
+    """
+    mid = uuid.UUID("08815100-0000-4000-8000-000000000000")
+    name, pw = default_lobby_credentials(mid)
+
+    assert pw == "088151"
+    assert name == "LoL-08815100"
 
 
 @pytest.mark.asyncio

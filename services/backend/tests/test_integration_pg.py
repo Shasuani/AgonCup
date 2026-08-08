@@ -468,3 +468,64 @@ async def test_list_teams_overview_joins_captain_and_counts_under_rls() -> None:
     finally:
         await owner_engine.dispose()
         await app_engine.dispose()
+
+
+async def test_discord_admin_role_sync_runs_under_rls() -> None:
+    """(4) ``guilds.sync_discord_admin_roles`` against the real policies.
+
+    The sync writes ``user_guild_roles`` as the non-BYPASSRLS ``app_rw`` role, so
+    only a live Postgres proves the ``guild_isolation`` policy actually admits
+    both halves: the INSERT must satisfy WITH CHECK for the tenant it seeds, and
+    the DELETE must be scoped to that tenant — a ``guild_admin`` row in a guild
+    the user is not acting on (and that Discord did not report) must survive.
+    """
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.guilds import service as guilds_service
+
+    owner_engine = create_async_engine(OWNER_URL)
+    app_engine = create_async_engine(APP_URL)
+    try:
+        async with owner_engine.begin() as owner:
+            g_a = await _seed_guild(owner, 960001)  # user holds guild_admin here
+            g_b = await _seed_guild(owner, 960002)  # ...and none here
+            g_c = await _seed_guild(owner, 960003)  # ...and one here, off Discord's list
+            user_id = g_a.admin_user_id
+            await owner.execute(
+                text("INSERT INTO user_guild_roles (user_id, guild_id, role) VALUES (:u, :g, :r)"),
+                {"u": user_id, "g": g_c.guild_id, "r": GUILD_ADMIN},
+            )
+
+        session_factory = async_sessionmaker(app_engine, expire_on_commit=False)
+        async with session_factory() as session, session.begin():
+            result = await guilds_service.sync_discord_admin_roles(
+                session,
+                user_id=user_id,
+                # Discord says: admin of B only, and C is not in their guild list.
+                admin_discord_guild_ids=[960002],
+                member_discord_guild_ids=[960001, 960002],
+            )
+        assert result.granted == (str(g_b.guild_id),)
+        assert result.revoked == (str(g_a.guild_id),)
+
+        # Read back over the OWNER connection (bypasses RLS) — the ground truth.
+        async with owner_engine.begin() as owner:
+            rows = (
+                (
+                    await owner.execute(
+                        text(
+                            "SELECT guild_id FROM user_guild_roles "
+                            "WHERE user_id = :u AND role = :r ORDER BY guild_id"
+                        ),
+                        {"u": str(user_id), "r": GUILD_ADMIN},
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        assert sorted(str(g) for g in rows) == sorted([str(g_b.guild_id), str(g_c.guild_id)]), (
+            "B granted, A revoked, and C — absent from Discord's list — left alone"
+        )
+    finally:
+        await owner_engine.dispose()
+        await app_engine.dispose()

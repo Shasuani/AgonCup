@@ -14,6 +14,8 @@ Offline by design — no network, no real DB (a dict-backed fake session, mirror
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 from lol_schemas.enums import GuildStatus, UserGuildRoleName
 
@@ -221,3 +223,162 @@ async def test_ensure_admin_rejects_plain_member() -> None:
         await guilds.ensure_guild_admin(
             session, user=user, guild=guild, is_discord_guild_admin=False
         )
+
+
+# ---------------------------------------------------------------------------
+# sync_discord_admin_roles — Discord's ADMINISTRATOR bit mirrored to role rows
+# ---------------------------------------------------------------------------
+OTHER_DISCORD_GUILD = 222333444555666
+
+
+def _add_guild(
+    session: FakeSession, discord_guild_id: int, *, status: GuildStatus = GuildStatus.ACTIVE
+) -> Guild:
+    guild = Guild(discord_guild_id=discord_guild_id, name="G", status=status, settings={})
+    guild.id = uuid.uuid4()
+    session.store[Guild].append(guild)
+    return guild
+
+
+def _roles(session: FakeSession, guild: Guild) -> list[UserGuildRoleName]:
+    return [r.role for r in session.store[UserGuildRole] if str(r.guild_id) == str(guild.id)]
+
+
+@pytest.mark.asyncio
+async def test_sync_grants_guild_admin_to_a_discord_administrator() -> None:
+    """The gap this closes: a Discord admin who never invited the bot had no row,
+    so every tenant request 403'd on ``get_tenant_session``."""
+    session = FakeSession()
+    user = await guilds.upsert_user_by_discord_id(session, discord_user_id=DISCORD_ADMIN)
+    guild = _add_guild(session, DISCORD_GUILD)
+
+    result = await guilds.sync_discord_admin_roles(
+        session,
+        user_id=user.id,
+        admin_discord_guild_ids=[DISCORD_GUILD],
+        member_discord_guild_ids=[DISCORD_GUILD],
+    )
+
+    assert _roles(session, guild) == [UserGuildRoleName.GUILD_ADMIN]
+    assert result.granted == (str(guild.id),)
+    assert result.revoked == ()
+
+
+@pytest.mark.asyncio
+async def test_sync_is_idempotent_and_does_not_duplicate_the_row() -> None:
+    session = FakeSession()
+    user = await guilds.upsert_user_by_discord_id(session, discord_user_id=DISCORD_ADMIN)
+    guild = _add_guild(session, DISCORD_GUILD)
+    ids = {"admin_discord_guild_ids": [DISCORD_GUILD], "member_discord_guild_ids": [DISCORD_GUILD]}
+
+    await guilds.sync_discord_admin_roles(session, user_id=user.id, **ids)
+    second = await guilds.sync_discord_admin_roles(session, user_id=user.id, **ids)
+
+    assert _roles(session, guild) == [UserGuildRoleName.GUILD_ADMIN]
+    assert second.granted == ()
+
+
+@pytest.mark.asyncio
+async def test_sync_revokes_when_the_discord_admin_bit_is_gone() -> None:
+    """The half that makes this a sync, not a grant: losing ADMINISTRATOR on
+    Discord loses ``guild_admin`` here at the next login."""
+    session = FakeSession()
+    user = await guilds.upsert_user_by_discord_id(session, discord_user_id=DISCORD_ADMIN)
+    guild = _add_guild(session, DISCORD_GUILD)
+    session.store[UserGuildRole].append(
+        UserGuildRole(user_id=user.id, guild_id=guild.id, role=UserGuildRoleName.GUILD_ADMIN)
+    )
+
+    result = await guilds.sync_discord_admin_roles(
+        session,
+        user_id=user.id,
+        admin_discord_guild_ids=[],
+        member_discord_guild_ids=[DISCORD_GUILD],
+    )
+
+    assert _roles(session, guild) == []
+    assert result.revoked == (str(guild.id),)
+
+
+@pytest.mark.asyncio
+async def test_sync_only_touches_guild_admin_rows() -> None:
+    session = FakeSession()
+    user = await guilds.upsert_user_by_discord_id(session, discord_user_id=DISCORD_ADMIN)
+    guild = _add_guild(session, DISCORD_GUILD)
+    session.store[UserGuildRole].extend(
+        [
+            UserGuildRole(user_id=user.id, guild_id=guild.id, role=UserGuildRoleName.GUILD_ADMIN),
+            UserGuildRole(user_id=user.id, guild_id=guild.id, role=UserGuildRoleName.CAPTAIN),
+            UserGuildRole(
+                user_id=user.id, guild_id=guild.id, role=UserGuildRoleName.PLATFORM_OPERATOR
+            ),
+        ]
+    )
+
+    await guilds.sync_discord_admin_roles(
+        session,
+        user_id=user.id,
+        admin_discord_guild_ids=[],
+        member_discord_guild_ids=[DISCORD_GUILD],
+    )
+
+    # Revoking admin must not demote a captain or strip cross-tenant staff.
+    assert sorted(r.value for r in _roles(session, guild)) == ["captain", "platform_operator"]
+
+
+@pytest.mark.asyncio
+async def test_sync_leaves_guilds_the_user_is_not_in_alone() -> None:
+    """A guild absent from the Discord list (they left, or the page truncated) is
+    NOT evidence of a revocation, so its role row must survive."""
+    session = FakeSession()
+    user = await guilds.upsert_user_by_discord_id(session, discord_user_id=DISCORD_ADMIN)
+    present = _add_guild(session, DISCORD_GUILD)
+    absent = _add_guild(session, OTHER_DISCORD_GUILD)
+    session.store[UserGuildRole].append(
+        UserGuildRole(user_id=user.id, guild_id=absent.id, role=UserGuildRoleName.GUILD_ADMIN)
+    )
+
+    await guilds.sync_discord_admin_roles(
+        session,
+        user_id=user.id,
+        admin_discord_guild_ids=[DISCORD_GUILD],
+        member_discord_guild_ids=[DISCORD_GUILD],
+    )
+
+    assert _roles(session, present) == [UserGuildRoleName.GUILD_ADMIN]
+    assert _roles(session, absent) == [UserGuildRoleName.GUILD_ADMIN]
+
+
+@pytest.mark.asyncio
+async def test_sync_ignores_discord_guilds_that_never_onboarded() -> None:
+    session = FakeSession()
+    user = await guilds.upsert_user_by_discord_id(session, discord_user_id=DISCORD_ADMIN)
+    removed = _add_guild(session, DISCORD_GUILD, status=GuildStatus.REMOVED)
+
+    result = await guilds.sync_discord_admin_roles(
+        session,
+        user_id=user.id,
+        # Admin of a removed guild AND of one we have never heard of.
+        admin_discord_guild_ids=[DISCORD_GUILD, OTHER_DISCORD_GUILD],
+        member_discord_guild_ids=[DISCORD_GUILD, OTHER_DISCORD_GUILD],
+    )
+
+    assert result.granted == ()
+    assert _roles(session, removed) == []
+
+
+@pytest.mark.asyncio
+async def test_sync_clears_the_tenant_guc_when_done() -> None:
+    """Login reads roles ACROSS guilds next; a lingering GUC would scope that read."""
+    session = FakeSession()
+    user = await guilds.upsert_user_by_discord_id(session, discord_user_id=DISCORD_ADMIN)
+    _add_guild(session, DISCORD_GUILD)
+
+    await guilds.sync_discord_admin_roles(
+        session,
+        user_id=user.id,
+        admin_discord_guild_ids=[DISCORD_GUILD],
+        member_discord_guild_ids=[DISCORD_GUILD],
+    )
+
+    assert not session.current_guild

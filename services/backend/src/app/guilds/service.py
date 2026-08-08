@@ -19,6 +19,9 @@ What it owns
 * :func:`ensure_guild_admin` — gate a guild-admin action on the asserted
   Manage-Guild permission OR a persisted ``guild_admin`` role, seeding the role row
   on first admin action so the membership becomes durable.
+* :func:`sync_discord_admin_roles` — reconcile a web (OAuth) user's durable
+  ``guild_admin`` rows against Discord's live ``ADMINISTRATOR`` bit: grant where
+  they administer, revoke where they no longer do.
 * :func:`get_settings` / :func:`update_settings` — read/merge the typed
   :class:`~app.guilds.settings.GuildSettings` on ``guilds.settings``.
 
@@ -35,10 +38,11 @@ JWT request path.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Collection
 from dataclasses import dataclass
 
 from lol_schemas.enums import GuildStatus, UserGuildRoleName
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.guilds.settings import GuildSettings, GuildSettingsPatch
@@ -71,6 +75,14 @@ class OnboardResult:
     created: bool
     admin_seeded: bool
     settings: GuildSettings
+
+
+@dataclass(frozen=True, slots=True)
+class AdminRoleSync:
+    """Outcome of :func:`sync_discord_admin_roles` — our guild ids, not Discord's."""
+
+    granted: tuple[str, ...]
+    revoked: tuple[str, ...]
 
 
 # ---------------------------------------------------------------------------
@@ -278,6 +290,106 @@ async def ensure_guild_admin(
     ).first()
     if has_role is None:
         raise NotGuildAdminError(str(user.id))
+
+
+async def sync_discord_admin_roles(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    admin_discord_guild_ids: Collection[int],
+    member_discord_guild_ids: Collection[int],
+) -> AdminRoleSync:
+    """Reconcile a user's durable ``guild_admin`` rows against Discord's live bit.
+
+    The web SPA has no Manage-Guild assertion to lean on the way the bot bridge
+    does (:func:`ensure_guild_admin`), so a Discord admin who never invited the
+    bot held **no** ``user_guild_roles`` row and every tenant request died on
+    ``get_tenant_session``'s 403 ("principal has no role in the acting guild") —
+    only the inviting owner, seeded at onboarding, could use the site.
+
+    This closes that gap without reintroducing the backdoor
+    :func:`ensure_guild_admin` warns about: it is a **sync**, not a grant. Discord
+    stays the source of truth, and the role row is a cache of it that is refreshed
+    (both directions) on every login:
+
+    * in ``admin_discord_guild_ids`` (Discord ``ADMINISTRATOR`` / owner) → ensure
+      a ``guild_admin`` row exists;
+    * a member of the guild but NOT in that set → **delete** any ``guild_admin``
+      row, so losing the permission on Discord loses it here at the next login.
+
+    Only guilds the caller is actually in are touched — a guild absent from
+    ``member_discord_guild_ids`` (they left, or Discord truncated the page) is left
+    alone rather than treated as a revocation. Only ``guild_admin`` rows are
+    touched; ``platform_operator`` / ``captain`` / ``player`` are never affected.
+
+    ``guilds`` is global, so the lookup needs no GUC; the per-guild role write is
+    wrapped in :func:`set_tenant_guild` so it runs under that tenant's RLS policy
+    (``self_role_read`` is SELECT-only and cannot carry a write). The GUC is reset
+    afterwards so the caller's later queries do not inherit a stray tenant.
+    """
+    admin_ids = {int(g) for g in admin_discord_guild_ids}
+    all_ids = admin_ids | {int(g) for g in member_discord_guild_ids}
+    if not all_ids:
+        return AdminRoleSync(granted=(), revoked=())
+
+    guilds = (
+        (
+            await session.execute(
+                select(Guild).where(
+                    Guild.discord_guild_id.in_(all_ids),
+                    Guild.status != GuildStatus.REMOVED,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not guilds:
+        return AdminRoleSync(granted=(), revoked=())
+
+    granted: list[str] = []
+    revoked: list[str] = []
+    for guild in guilds:
+        await set_tenant_guild(session, guild_id=guild.id)
+        if guild.discord_guild_id in admin_ids:
+            if await _seed_guild_admin(session, user_id=user_id, guild_id=guild.id):
+                granted.append(str(guild.id))
+            continue
+        held = (
+            await session.execute(
+                select(UserGuildRole.id).where(
+                    UserGuildRole.user_id == user_id,
+                    UserGuildRole.guild_id == guild.id,
+                    UserGuildRole.role == GUILD_ADMIN,
+                )
+            )
+        ).first()
+        if held is None:
+            continue
+        await session.execute(
+            delete(UserGuildRole).where(
+                UserGuildRole.user_id == user_id,
+                UserGuildRole.guild_id == guild.id,
+                UserGuildRole.role == GUILD_ADMIN,
+            )
+        )
+        revoked.append(str(guild.id))
+
+    # Leave no tenant selected: the caller (login) next reads roles ACROSS guilds
+    # via `self_role_read`, and a lingering GUC would be a silently-scoped session.
+    await session.execute(
+        text("SELECT set_config('app.current_guild', :gid, true)"),
+        {"gid": ""},
+    )
+
+    if granted or revoked:
+        log.info(
+            "discord_admin_roles_synced",
+            user_id=str(user_id),
+            granted=len(granted),
+            revoked=len(revoked),
+        )
+    return AdminRoleSync(granted=tuple(granted), revoked=tuple(revoked))
 
 
 # ---------------------------------------------------------------------------

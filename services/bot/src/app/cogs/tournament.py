@@ -12,6 +12,7 @@ a ``lol_discord`` embed.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import discord
@@ -21,6 +22,24 @@ from lol_discord import tournament_created
 
 from app.backend_client import BackendClient, BackendError
 from app.cogs._helpers import context_of, embed_from, error_embed, info_embed
+
+# Bracket sizes offered in the form. Mirrors the backend's MAX_TEAMS_HARD_CAP, so
+# an out-of-range bracket is unpickable rather than rejected after a round trip.
+_MIN_TEAMS, _MAX_TEAMS = 2, 16
+
+_MODE_OPTIONS = [
+    discord.SelectOption(label="5v5 — Summoner's Rift", value="summoners_rift_5v5"),
+    discord.SelectOption(label="1v1 — ARAM duel", value="aram_1v1"),
+]
+_SERIES_OPTIONS = [
+    discord.SelectOption(label="Best of 1 (single game)", value="1"),
+    discord.SelectOption(label="Best of 3", value="3"),
+    discord.SelectOption(label="Best of 5", value="5"),
+]
+_SIZE_OPTIONS = [
+    discord.SelectOption(label=f"{n} teams", value=str(n))
+    for n in range(_MIN_TEAMS, _MAX_TEAMS + 1)
+]
 
 
 def _parse_utc(value: str | None) -> str | None:
@@ -41,47 +60,143 @@ def _parse_utc(value: str | None) -> str | None:
     return dt.astimezone(UTC).isoformat()
 
 
-class ScheduleModal(discord.ui.Modal, title="Schedule (optional)"):
-    """The two optional scheduling fields, asked as a form after the required ones.
+@dataclass(frozen=True, slots=True)
+class TournamentBasics:
+    """The four required settings, carried from the first form to the second."""
 
-    Why a modal at all: Discord only walks the admin through **required** options,
-    and a required option cannot be submitted empty. So "ask for the optional ones
-    in order too, and let me skip them with an empty answer" is not expressible as
-    slash-command options. A modal is — both inputs are ``required=False``, so the
-    admin sees them labelled, in order, and submits the form untouched to skip.
+    name: str
+    max_teams: int
+    game_mode: str
+    best_of: int
 
-    It must be the interaction's FIRST response (Discord forbids a modal after a
-    defer), which is why :meth:`TournamentAdminCog.create` does not defer.
+
+class BasicsModal(discord.ui.Modal, title="New tournament — settings"):
+    """Form 1: the four REQUIRED settings.
+
+    Why a modal rather than slash options: as slash options the admin answers them
+    one prompt at a time in the command bar, with no way to review or correct an
+    earlier answer before sending. A modal shows all four at once, and the three
+    dropdowns (``required=True``) make size/mode/series unmissable and untypoable.
+
+    Discord caps a modal at 5 components, which is why the two optional scheduling
+    fields live in a second form (:class:`ScheduleModal`) reached from
+    :class:`ScheduleView` — a modal cannot be opened directly from a modal submit.
     """
 
-    registration_opens: discord.ui.TextInput[ScheduleModal] = discord.ui.TextInput(
-        label="Registration opens — UTC (optional)",
-        placeholder="2026-08-01 18:00 — leave blank to skip",
-        required=False,
-        max_length=32,
-    )
-    starts: discord.ui.TextInput[ScheduleModal] = discord.ui.TextInput(
-        label="Starts — UTC (optional)",
-        placeholder="2026-08-02 20:00 — leave blank to skip",
-        required=False,
-        max_length=32,
-    )
-
-    def __init__(
-        self,
-        *,
-        cog: TournamentAdminCog,
-        name: str,
-        max_teams: int,
-        game_mode: str,
-        best_of: int,
-    ) -> None:
+    def __init__(self, *, cog: TournamentAdminCog) -> None:
         super().__init__()
         self._cog = cog
-        self._name = name
-        self._max_teams = max_teams
-        self._game_mode = game_mode
-        self._best_of = best_of
+        self.name_input: discord.ui.TextInput[BasicsModal] = discord.ui.TextInput(
+            placeholder="Summer Cup",
+            required=True,
+            max_length=80,
+        )
+        self.size_select: discord.ui.Select[BasicsModal] = discord.ui.Select(
+            options=_SIZE_OPTIONS, required=True
+        )
+        self.mode_select: discord.ui.Select[BasicsModal] = discord.ui.Select(
+            options=_MODE_OPTIONS, required=True
+        )
+        self.series_select: discord.ui.Select[BasicsModal] = discord.ui.Select(
+            options=_SERIES_OPTIONS, required=True
+        )
+        self.add_item(discord.ui.Label(text="Tournament name", component=self.name_input))
+        self.add_item(
+            discord.ui.Label(
+                text="Bracket size",
+                description="How many teams/players can enter. Non-powers of two get byes.",
+                component=self.size_select,
+            )
+        )
+        self.add_item(discord.ui.Label(text="Game mode", component=self.mode_select))
+        self.add_item(
+            discord.ui.Label(
+                text="Series length",
+                description="How many games decide one match.",
+                component=self.series_select,
+            )
+        )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        basics = TournamentBasics(
+            name=self.name_input.value.strip(),
+            max_teams=int(self.size_select.values[0]),
+            game_mode=self.mode_select.values[0],
+            best_of=int(self.series_select.values[0]),
+        )
+        await interaction.response.send_message(
+            embed=info_embed(
+                "Step 2 — scheduling (optional)",
+                f"**{basics.name}** · {basics.max_teams} teams · "
+                f"`{basics.game_mode}` · Bo{basics.best_of}\n\n"
+                "Add registration/start times, or skip and set them later.",
+            ),
+            view=ScheduleView(cog=self._cog, basics=basics),
+            ephemeral=True,
+        )
+
+
+class ScheduleView(discord.ui.View):
+    """The bridge between the two forms.
+
+    Discord forbids answering a modal submit with another modal, so the second form
+    has to hang off a button press. "Skip" is a first-class button so the common
+    case (no schedule yet) is one click, not an empty form.
+    """
+
+    def __init__(self, *, cog: TournamentAdminCog, basics: TournamentBasics) -> None:
+        super().__init__(timeout=600)
+        self._cog = cog
+        self._basics = basics
+
+    @discord.ui.button(label="Add dates…", style=discord.ButtonStyle.primary, emoji="📅")
+    async def schedule(
+        self, interaction: discord.Interaction, button: discord.ui.Button[ScheduleView]
+    ) -> None:
+        await interaction.response.send_modal(ScheduleModal(cog=self._cog, basics=self._basics))
+
+    @discord.ui.button(label="Skip — create now", style=discord.ButtonStyle.secondary)
+    async def skip(
+        self, interaction: discord.Interaction, button: discord.ui.Button[ScheduleView]
+    ) -> None:
+        # edit_message IS this interaction's response: it drops the buttons (so the
+        # tournament cannot be created twice) and leaves followup.send available.
+        await interaction.response.edit_message(view=None)
+        self.stop()
+        await self._cog.create_tournament(
+            interaction, basics=self._basics, registration_opens_at=None, start_at=None
+        )
+
+
+class ScheduleModal(discord.ui.Modal, title="New tournament — schedule"):
+    """Form 2: the two OPTIONAL scheduling fields.
+
+    Both inputs are ``required=False``, so submitting the form untouched is a valid
+    "no schedule yet" — which is exactly what a slash option cannot express (Discord
+    never walks through optional options, and will not accept an empty required one).
+    """
+
+    def __init__(self, *, cog: TournamentAdminCog, basics: TournamentBasics) -> None:
+        super().__init__()
+        self._cog = cog
+        self._basics = basics
+        self.registration_opens: discord.ui.TextInput[ScheduleModal] = discord.ui.TextInput(
+            placeholder="2026-08-01 18:00 — leave blank to skip",
+            required=False,
+            max_length=32,
+        )
+        self.starts: discord.ui.TextInput[ScheduleModal] = discord.ui.TextInput(
+            placeholder="2026-08-02 20:00 — leave blank to skip",
+            required=False,
+            max_length=32,
+        )
+        self.add_item(
+            discord.ui.Label(
+                text="Registration opens — UTC (optional)",
+                component=self.registration_opens,
+            )
+        )
+        self.add_item(discord.ui.Label(text="Starts — UTC (optional)", component=self.starts))
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -95,10 +210,7 @@ class ScheduleModal(discord.ui.Modal, title="Schedule (optional)"):
             return
         await self._cog.create_tournament(
             interaction,
-            name=self._name,
-            max_teams=self._max_teams,
-            game_mode=self._game_mode,
-            best_of=self._best_of,
+            basics=self._basics,
             registration_opens_at=opens_iso,
             start_at=start_iso,
         )
@@ -114,87 +226,38 @@ class TournamentAdminCog(commands.Cog):
         name="tournament-create",
         description="Create a tournament (server admins only).",
     )
-    @app_commands.describe(
-        name="Tournament name.",
-        max_teams="Bracket size: how many teams/players can enter (2-16).",
-        mode="Game mode: 5v5 Summoner's Rift or 1v1 ARAM duel.",
-        series="Series length per match: best of 1, 3, or 5.",
-    )
-    @app_commands.choices(
-        mode=[
-            app_commands.Choice(name="5v5 (Summoner's Rift)", value="summoners_rift_5v5"),
-            app_commands.Choice(name="1v1 (ARAM duel)", value="aram_1v1"),
-        ]
-    )
-    @app_commands.choices(
-        series=[
-            app_commands.Choice(name="Best of 1 (single game)", value=1),
-            app_commands.Choice(name="Best of 3", value=3),
-            app_commands.Choice(name="Best of 5", value=5),
-        ]
-    )
     @app_commands.default_permissions(manage_guild=True)
-    async def create(
-        self,
-        interaction: discord.Interaction,
-        name: str,
-        max_teams: app_commands.Range[int, 2, 16],
-        mode: app_commands.Choice[str],
-        series: app_commands.Choice[int],
-    ) -> None:
-        """Create a tournament (guild admin; backend re-checks the role).
+    async def create(self, interaction: discord.Interaction) -> None:
+        """Open the tournament creation form (backend re-checks the guild-admin role).
 
-        Every setting is asked for, in order, and none of them can be missed:
+        The command itself takes no options: every setting is asked for in a form, so
+        nothing can be silently missed. Required settings in :class:`BasicsModal`,
+        optional scheduling in :class:`ScheduleModal` behind :class:`ScheduleView`.
 
-        * ``name``/``max_teams``/``mode``/``series`` are REQUIRED slash options —
-          required options are what Discord walks the admin through one at a time,
-          and dropdowns keep ``mode``/``series`` unambiguous. As optional
-          parameters (the old shape) all four sat behind the "+" affordance, so an
-          admin who never opened it silently got 16 teams, 5v5 and Bo1.
-        * the two **scheduling** fields follow in a :class:`ScheduleModal`,
-          labelled "(optional)" and skippable by submitting the form untouched.
-          They cannot be slash options and still behave that way: Discord neither
-          walks through optional options nor accepts an empty required one.
-
-        ``Range[int, 2, 16]`` mirrors the backend's ``MAX_TEAMS_HARD_CAP`` so the
-        client rejects an out-of-range bracket before a round trip.
-
-        No ``defer`` here — sending a modal must be the interaction's first
-        response, and the modal defers on submit instead.
+        No ``defer`` here — sending a modal must be the interaction's first response.
         """
-        await interaction.response.send_modal(
-            ScheduleModal(
-                cog=self,
-                name=name,
-                max_teams=int(max_teams),
-                game_mode=mode.value,
-                best_of=series.value,
-            )
-        )
+        await interaction.response.send_modal(BasicsModal(cog=self))
 
     async def create_tournament(
         self,
         interaction: discord.Interaction,
         *,
-        name: str,
-        max_teams: int,
-        game_mode: str,
-        best_of: int,
+        basics: TournamentBasics,
         registration_opens_at: str | None,
         start_at: str | None,
     ) -> None:
-        """Create the tournament and render the result (called from the modal).
+        """Create the tournament and render the result (called once the forms are done).
 
-        Split out of :meth:`create` because the settings now arrive across two
-        interactions: the slash options, then the schedule modal.
+        Split out of :meth:`create` because the settings arrive across several
+        interactions: the basics form, then either the skip button or the schedule form.
         """
         try:
             t = await self._backend.create_tournament(
                 context_of(interaction),
-                name=name,
-                max_teams=max_teams,
-                game_mode=game_mode,
-                best_of=best_of,
+                name=basics.name,
+                max_teams=basics.max_teams,
+                game_mode=basics.game_mode,
+                best_of=basics.best_of,
                 registration_opens_at=registration_opens_at,
                 start_at=start_at,
             )
@@ -247,4 +310,4 @@ class TournamentAdminCog(commands.Cog):
         )
 
 
-__all__ = ["TournamentAdminCog"]
+__all__ = ["BasicsModal", "ScheduleModal", "ScheduleView", "TournamentAdminCog"]

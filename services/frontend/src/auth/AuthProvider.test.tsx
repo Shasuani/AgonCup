@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { render, screen, act } from "@testing-library/react";
 import { AuthProvider, useAuth } from "./AuthProvider";
@@ -114,6 +115,38 @@ describe("AuthProvider session restore (HttpOnly cookie)", () => {
     const [url, init] = fetchMock.mock.calls[0]!;
     expect(String(url)).toContain("/api/v1/auth/refresh");
     expect(init?.credentials).toBe("same-origin");
+    vi.unstubAllGlobals();
+  });
+
+  it("issues ONE refresh even when the effect is double-invoked (StrictMode)", async () => {
+    // /auth/refresh rotates, and re-presenting a rotated token reads as theft and
+    // burns the family. StrictMode double-mounts in dev, so an unguarded boot
+    // refresh fired twice with the same cookie and revoked the session it had
+    // just restored — every reload bounced the user back through Discord.
+    const session = makeSession({ sub: "u1", roles: ["guild_admin"] });
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            access_token: session.accessToken,
+            refresh_token: "ignored",
+            token_type: "bearer",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <StrictMode>
+        <AuthProvider>
+          <ProbeWithRestoring />
+        </AuthProvider>
+      </StrictMode>,
+    );
+
+    await screen.findByText("true", { selector: '[data-testid="auth"]' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     vi.unstubAllGlobals();
   });
 

@@ -16,6 +16,9 @@
 // cleared. Clearing React state alone (what it used to do) left the session
 // alive server-side until it expired — invisible while the token died with the
 // tab, but a real hole now that the cookie outlives it.
+//
+// That mount-time refresh MUST happen at most once per page load — see
+// `silentRefresh` below for why firing it twice logs the user straight back out.
 
 import {
   createContext,
@@ -39,6 +42,53 @@ function authEndpoint(path: string): string {
 /** The backend `/auth/login` URL the browser is redirected to. */
 function backendLoginUrl(): string {
   return authEndpoint("login");
+}
+
+/**
+ * The in-flight cold-start refresh, shared by every caller in this document.
+ *
+ * `/auth/refresh` ROTATES: the presented token is revoked and a successor
+ * issued, and re-presenting a revoked token is read as theft, which burns the
+ * whole token family (see `rotate_refresh_token` in app/auth/tokens.py). Two
+ * concurrent boot refreshes both send the SAME cookie — the second one arrives
+ * before the first's `Set-Cookie` lands — so the second is indistinguishable
+ * from a replay and revokes the session that was just restored.
+ *
+ * `React.StrictMode` double-invokes effects in development, so without this
+ * guard EVERY page reload signed the user out and bounced them back through
+ * Discord. Module-level (not a ref) because StrictMode's second mount gets fresh
+ * refs, and because a second provider anywhere in the tree must join the same
+ * request rather than start a competing one.
+ */
+let inFlightRestore: Promise<TokenPair | null> | null = null;
+
+/** POST /auth/refresh at most once concurrently. `null` = no usable cookie. */
+function silentRefresh(url: string): Promise<TokenPair | null> {
+  if (inFlightRestore) return inFlightRestore;
+  const attempt = (async (): Promise<TokenPair | null> => {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      return res.ok ? ((await res.json()) as TokenPair) : null;
+    } catch {
+      // Offline / backend down: fall through to the login screen.
+      return null;
+    }
+  })();
+  inFlightRestore = attempt;
+  // Released only once settled, and only if nothing newer claimed the slot. The
+  // reset must not run inside the async body: were `fetch` to throw
+  // synchronously the body would finish before the assignment above and cache a
+  // settled promise forever, so every later mount would replay that one failure.
+  const release = (): void => {
+    if (inFlightRestore === attempt) inFlightRestore = null;
+  };
+  void attempt.then(release, release);
+  return attempt;
 }
 
 export interface AuthSession {
@@ -112,24 +162,11 @@ export function AuthProvider({
   useEffect(() => {
     if (initialSession !== null) return;
     let cancelled = false;
-    void (async () => {
-      try {
-        const res = await fetch(authEndpoint("refresh"), {
-          method: "POST",
-          credentials: "same-origin",
-          headers: { "Content-Type": "application/json" },
-          body: "{}",
-        });
-        if (!cancelled && res.ok) {
-          const pair = (await res.json()) as TokenPair;
-          setSessionState({ accessToken: pair.access_token });
-        }
-      } catch {
-        // Offline / backend down: fall through to the login screen.
-      } finally {
-        if (!cancelled) setIsRestoring(false);
-      }
-    })();
+    void silentRefresh(authEndpoint("refresh")).then((pair) => {
+      if (cancelled) return;
+      if (pair) setSessionState({ accessToken: pair.access_token });
+      setIsRestoring(false);
+    });
     return () => {
       cancelled = true;
     };

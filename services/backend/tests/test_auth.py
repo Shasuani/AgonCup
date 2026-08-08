@@ -1165,15 +1165,26 @@ async def test_refresh_clears_a_cookie_it_cannot_use(monkeypatch: pytest.MonkeyP
     assert "Max-Age=0" in set_cookie
 
 
-def test_a_raised_401_actually_delivers_the_clear_cookie_header() -> None:
+def test_a_raised_401_actually_delivers_the_clear_cookie_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Through the real ASGI stack — the unit test above cannot prove delivery.
 
     A `response.delete_cookie(...)` before `raise HTTPException` looks correct and
     passes when the handler is called directly, but the header never reaches the
     browser. Only a request through the app catches that.
+
+    The FakeSession is not incidental: going through the app means the handler
+    runs for real, and its first act is to look the presented token up. Left on
+    the real `SessionLocal` this test passes on any machine with a dev Postgres
+    running and dies in CI on `getaddrinfo`, which is exactly the offline-unit
+    rule this suite is built on. An EMPTY store is also the state under test —
+    the token was never issued, so the lookup must miss and 401.
     """
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(auth_router, "SessionLocal", FakeSession)
 
     app = FastAPI()
     app.include_router(auth_router.router, prefix="/api/v1")

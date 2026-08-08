@@ -6,6 +6,7 @@ name: CI
 #   lint        - ruff over all Python packages
 #   typecheck   - mypy over all Python packages
 #   test        - pytest (uv-managed envs) over all Python packages
+#   frontend    - tsc + vitest + vite build for the admin SPA (services/frontend)
 #   db-rls      - alembic upgrade head + RLS cross-guild isolation matrix
 #   cve-scan    - Trivy filesystem + (best-effort) image scan
 #   lol-lcu-fixtures - placeholder for the LCU fixture-validation harness
@@ -32,6 +33,7 @@ concurrency:
 env:
   UV_VERSION: "0.5.11"
   PYTHON_VERSION: "3.12"
+  NODE_VERSION: "22"
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -174,6 +176,50 @@ jobs:
           if [ "$found" -eq 0 ]; then
             echo "No Python packages with pyproject.toml yet; skipping."
           fi
+
+  # ---------------------------------------------------------------------------
+  # Frontend — the admin SPA (services/frontend). Until this job landed, NOTHING
+  # in CI ran TypeScript: the lint/typecheck/test jobs above discover packages by
+  # `pyproject.toml`, so the SPA's suite only ever ran on a dev box, by hand.
+  #
+  # Scope note: this gates the SPA's own correctness. It CANNOT catch the client
+  # types in libs/lol-clients-ts drifting from the backend routers, because those
+  # types are hand-mirrored — `tsc` happily agrees with a type that is wrong (a
+  # `substitute` role the backend spells `sub`). Closing that hole needs the
+  # OpenAPI codegen the Makefile still stubs out as `make gen-clients`.
+  # ---------------------------------------------------------------------------
+  frontend:
+    name: frontend (tsc + vitest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: services/frontend/package-lock.json
+
+      # A lockfile IS committed here (unlike services/desktop), so `npm ci` gives
+      # reproducible installs. @lol/clients-ts is a `file:` dep that needs no
+      # build: tsconfig `paths` + the Vite alias both resolve it to its src/.
+      - name: Install deps
+        run: npm ci --no-audit --no-fund
+
+      - name: typecheck (tsc --noEmit)
+        run: npm run typecheck
+
+      - name: test (vitest)
+        run: npm test
+
+      # Catches what a typecheck cannot: an unresolvable asset import, a broken
+      # CSS reference, a Vite config regression.
+      - name: build (vite)
+        run: npx vite build
 
   # ---------------------------------------------------------------------------
   # DB + RLS — applies the Alembic migrations against a real Postgres, then runs

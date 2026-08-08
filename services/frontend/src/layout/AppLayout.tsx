@@ -48,6 +48,9 @@ interface NavItem {
 }
 
 const NAV_ITEMS: ReadonlyArray<NavItem> = [
+  // No `anyOf`: this is where a role-less new user installs the bot and thereby
+  // GETS a role. Gating it would hide the only door in.
+  { to: "/servers", label: "Servers", icon: "teams" },
   { to: "/tournaments", label: "Tournaments", icon: "tournaments", anyOf: [GUILD_ADMIN, PLATFORM_OPERATOR] },
   { to: "/teams", label: "Teams", icon: "teams", anyOf: [GUILD_ADMIN, PLATFORM_OPERATOR] },
   { to: "/accounts", label: "Accounts", icon: "accounts", anyOf: [GUILD_ADMIN, PLATFORM_OPERATOR] },

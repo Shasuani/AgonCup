@@ -1,0 +1,84 @@
+/* Bot-install picker — a list of server cards.
+   All colors/spacing/radii come from the :root design tokens (theme.css) so the
+   screen follows the light/dark theme like every other surface. */
+
+[data-server-list] {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-3);
+}
+
+[data-server-card] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xs);
+}
+
+[data-server-identity] {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+[data-server-icon] {
+  width: 40px;
+  height: 40px;
+  flex: none;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+/* Servers with no Discord icon get a monogram chip instead of a broken image. */
+[data-server-icon-fallback] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-alt);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  font-weight: 600;
+}
+
+[data-server-name] {
+  margin: 0;
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+
+[data-server-role] {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+[data-server-actions] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+[data-server-status] {
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+[data-server-status][data-ok] {
+  color: var(--success);
+  font-weight: 600;
+}
+
+[data-servers-reauth] {
+  margin-bottom: var(--space-3);
+  color: var(--text-muted);
+}

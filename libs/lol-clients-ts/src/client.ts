@@ -14,6 +14,7 @@
 import { createRequestRunner, type ClientConfig, type RequestRunner } from './http.js';
 import type {
   AddMemberRequest,
+  AdminGuild,
   AttemptStatusResponse,
   CreateTeamRequest,
   CreateTournamentRequest,
@@ -67,6 +68,13 @@ export interface AuthApi {
   refresh(body: RefreshRequest): Promise<TokenPair>;
   /** Revoke the presented refresh token. */
   logout(body: LogoutRequest): Promise<LogoutResponse>;
+  /**
+   * Discord servers the caller administers, each flagged with whether the bot is
+   * already installed. Unlike the rest of this namespace it DOES require the
+   * Bearer token (it reads the caller's stored Discord credential). A 409
+   * `discord_reauth_required` means the user must sign in again.
+   */
+  adminGuilds(): Promise<AdminGuild[]>;
 }
 
 export interface TournamentsApi {
@@ -165,6 +173,9 @@ export function createClient(config: ClientConfig): ApiClient {
       request<TokenPair>({ method: 'POST', path: '/auth/refresh', body, auth: false, tenant: false }),
     logout: (body) =>
       request<LogoutResponse>({ method: 'POST', path: '/auth/logout', body, auth: false, tenant: false }),
+    // Authenticated, but deliberately NOT tenant-scoped: the whole point is to
+    // answer "which servers can I install into?" before any guild is selected.
+    adminGuilds: () => request<AdminGuild[]>({ method: 'GET', path: '/auth/guilds', tenant: false }),
   };
 
   const tournaments: TournamentsApi = {

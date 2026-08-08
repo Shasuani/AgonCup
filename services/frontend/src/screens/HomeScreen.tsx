@@ -38,6 +38,12 @@ interface DashItem {
 
 const DASH_ITEMS: ReadonlyArray<DashItem> = [
   {
+    to: "/servers",
+    label: "Servers",
+    description: "Add the bot to a Discord server you administer.",
+    icon: "teams",
+  },
+  {
     to: "/tournaments",
     label: "Tournaments",
     description: "Create brackets, seed teams, and run custom matches.",

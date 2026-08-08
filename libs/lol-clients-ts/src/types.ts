@@ -15,7 +15,11 @@
 // auth — services/backend/src/app/auth/router.py
 // ---------------------------------------------------------------------------
 
-/** Issued by `/auth/callback` and `/auth/refresh`. */
+/**
+ * Issued by `/auth/refresh`, and by `/auth/callback` — which does not return it
+ * as a body but 303s to `<frontend>/auth/callback#access_token=..&refresh_token=..`
+ * (parsed by the SPA's AuthCallback screen).
+ */
 export interface TokenPair {
   access_token: string;
   refresh_token: string;
@@ -34,6 +38,28 @@ export interface LogoutRequest {
 /** Response body of `POST /auth/logout`. */
 export interface LogoutResponse {
   status: string;
+}
+
+/**
+ * One row of `GET /auth/guilds` — a Discord server the caller administers, and
+ * therefore a place they may install the bot.
+ *
+ * Ids are strings because Discord snowflakes exceed `Number.MAX_SAFE_INTEGER`
+ * and would lose precision as JSON numbers.
+ */
+export interface AdminGuild {
+  /** Discord snowflake of the server. */
+  discord_guild_id: string;
+  name: string;
+  icon_url?: string | null;
+  /** True when the caller owns the server (vs. merely holding ADMINISTRATOR). */
+  owner: boolean;
+  /** True when our bot is already in this server. */
+  installed: boolean;
+  /** Our internal guild UUID (the `X-Guild-Id` value). Null until installed. */
+  guild_id?: string | null;
+  /** Discord "add the bot" URL, preselected to this server. */
+  invite_url: string;
 }
 
 /**

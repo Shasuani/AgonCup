@@ -32,6 +32,7 @@ const DisputeQueueScreen = lazy(() => import("./screens/results/DisputeQueueScre
 const MatchHistoryScreen = lazy(() => import("./screens/results/MatchHistoryScreen"));
 const AuditLogScreen = lazy(() => import("./screens/audit/AuditLogScreen"));
 const GuildsScreen = lazy(() => import("./screens/guilds/GuildsScreen"));
+const ServersScreen = lazy(() => import("./screens/servers/ServersScreen"));
 const NotFound = lazy(() => import("./screens/NotFound"));
 
 const ADMIN_ROLES = [GUILD_ADMIN, PLATFORM_OPERATOR] as const;
@@ -77,6 +78,11 @@ export function AppRoutes(): JSX.Element {
         <Route element={<RequireAuth />}>
           <Route element={<AppLayout />}>
             <Route index element={<HomeScreen />} />
+
+            {/* Deliberately UNGATED: installing the bot is how a user becomes a
+                guild_admin, so requiring that role here would be circular and
+                would leave every new account with nowhere to go. */}
+            <Route path="servers" element={<ServersScreen />} />
 
             <Route element={<RequireRole anyOf={ADMIN_ROLES} />}>
               <Route path="accounts" element={<AccountsScreen />} />

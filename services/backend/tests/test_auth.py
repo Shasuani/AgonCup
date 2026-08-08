@@ -23,11 +23,12 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import parse_qsl
 
 import httpx
 import pytest
 from fastapi import HTTPException
-from lol_schemas.enums import UserGuildRoleName
+from lol_schemas.enums import GuildStatus, UserGuildRoleName
 
 from app.accounts import service as accounts_service
 from app.auth import discord_oauth
@@ -46,6 +47,7 @@ from app.auth.tokens import (
 )
 from app.config import get_settings
 from app.models import (
+    Guild,
     OAuthCredential,
     RefreshToken,
     RiotAccount,
@@ -54,7 +56,7 @@ from app.models import (
     VerificationAttempt,
 )
 from app.ratelimit import FixedWindowLimiter
-from app.security import decrypt
+from app.security import decrypt, encrypt
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +104,7 @@ class FakeSession:
             UserGuildRole: [],
             VerificationAttempt: [],
             RiotAccount: [],
+            Guild: [],
         }
 
     # --- unit-of-work -----------------------------------------------------
@@ -186,7 +189,7 @@ def _model_of(entity: Any) -> type:
         return entity.entity
     # a Table -> map back to model by name
     name = getattr(entity, "name", None)
-    for model in (User, RefreshToken, OAuthCredential, UserGuildRole):
+    for model in (User, RefreshToken, OAuthCredential, UserGuildRole, Guild):
         if model.__tablename__ == name:
             return model
     return entity
@@ -406,12 +409,20 @@ async def test_oauth_callback_upserts_user_and_encrypts_credential(
     result = await auth_router.callback(
         request=req, response=resp, code="auth-code-123", state=state, settings=get_settings()
     )
-    assert result.access_token
-    assert result.refresh_token
+
+    # The browser is 303'd back to the SPA with the pair in the URL FRAGMENT
+    # (never the query string — a fragment is not sent to servers/proxies/logs).
+    assert result.status_code == 303
+    location = result.headers["location"]
+    base, _, fragment = location.partition("#")
+    assert base == f"{get_settings().frontend_origin}/auth/callback"
+    tokens = dict(parse_qsl(fragment))
+    assert tokens["access_token"]
+    assert tokens["refresh_token"]
 
     # The access JWT verifies and carries our user id.
     user = session.store[User][0]
-    claims = verify_access_token(result.access_token)
+    claims = verify_access_token(tokens["access_token"])
     assert claims.user_id == str(user.id)
     assert user.discord_user_id == 123456789012345678
 
@@ -472,6 +483,142 @@ def test_build_authorize_url_includes_state_and_pkce() -> None:
     pkce = discord_oauth.build_authorize_url(state="s2", code_challenge="CHAL")
     assert "code_challenge=CHAL" in pkce
     assert "code_challenge_method=S256" in pkce
+
+
+def test_login_requests_the_guilds_scope() -> None:
+    # Without `guilds`, /users/@me/guilds 403s and the server picker cannot exist.
+    assert "guilds" in discord_oauth.DEFAULT_SCOPES
+    url = discord_oauth.build_authorize_url(state="s")
+    assert "scope=identify+guilds" in url
+
+
+# ---------------------------------------------------------------------------
+# Bot-invite URL + "which servers do I administer?"
+# ---------------------------------------------------------------------------
+def test_build_bot_invite_url_preselects_guild() -> None:
+    generic = discord_oauth.build_bot_invite_url()
+    assert "scope=bot+applications.commands" in generic
+    assert f"permissions={get_settings().discord_bot_permissions}" in generic
+    # No guild_id → Discord shows its own picker (no preselection to lock).
+    assert "guild_id" not in generic
+    assert "disable_guild_select" not in generic
+
+    targeted = discord_oauth.build_bot_invite_url(guild_id=42)
+    assert "guild_id=42" in targeted
+    assert "disable_guild_select=true" in targeted
+
+
+class _MockGuildsClient:
+    """httpx stand-in for ``/users/@me/guilds`` with a configurable status."""
+
+    payload: list[dict[str, Any]] = []
+    status_code: int = 200
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+    async def __aenter__(self) -> _MockGuildsClient:
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        return None
+
+    async def get(self, url: str, **kwargs: Any) -> _MockResponse:
+        return _MockResponse(type(self).status_code, type(self).payload)  # type: ignore[arg-type]
+
+
+def _seed_discord_credential(session: FakeSession, user_id: str) -> None:
+    session.add(
+        OAuthCredential(
+            user_id=user_id,
+            provider=auth_router.DISCORD_PROVIDER,
+            access_token_enc=encrypt("discord-access-xyz"),
+            refresh_token_enc=None,
+            scopes=["identify", "guilds"],
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_admin_guilds_filters_non_admin_and_marks_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    user_id = str(uuid.uuid4())
+    _seed_discord_credential(session, user_id)
+
+    # The bot is already in guild 111; 222 is an install target; 333 the user is
+    # only a member of (no ADMINISTRATOR bit, not owner) and must be hidden.
+    installed = Guild(discord_guild_id=111, name="Installed", status=GuildStatus.ACTIVE)
+    session.add(installed)
+
+    _MockGuildsClient.status_code = 200
+    _MockGuildsClient.payload = [
+        {"id": "111", "name": "Installed", "icon": "abc", "owner": True, "permissions": "8"},
+        {"id": "222", "name": "Fresh", "icon": None, "owner": False, "permissions": "8"},
+        {"id": "333", "name": "Just a member", "icon": None, "owner": False, "permissions": "0"},
+    ]
+    monkeypatch.setattr(auth_router, "SessionLocal", lambda: session)
+    monkeypatch.setattr(httpx, "AsyncClient", _MockGuildsClient)
+
+    result = await auth_router.list_admin_guilds(
+        principal=Principal(user_id=user_id, guild_id=None, roles=()),
+        settings=get_settings(),
+    )
+
+    assert [g.discord_guild_id for g in result] == ["111", "222"]
+
+    already_in, target = result
+    assert already_in.installed is True
+    assert already_in.guild_id == str(installed.id)
+    assert already_in.icon_url == "https://cdn.discordapp.com/icons/111/abc.png"
+
+    assert target.installed is False
+    assert target.guild_id is None
+    assert target.icon_url is None
+    # Every row carries a ready-to-click invite locked to that exact server.
+    assert "guild_id=222" in target.invite_url
+
+
+@pytest.mark.asyncio
+async def test_list_admin_guilds_demands_reauth_when_scope_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Accounts that logged in BEFORE `guilds` joined DEFAULT_SCOPES hold a token
+    # Discord answers 403 for — that must read as "sign in again", not a 502.
+    session = FakeSession()
+    user_id = str(uuid.uuid4())
+    _seed_discord_credential(session, user_id)
+
+    _MockGuildsClient.status_code = 403
+    _MockGuildsClient.payload = []
+    monkeypatch.setattr(auth_router, "SessionLocal", lambda: session)
+    monkeypatch.setattr(httpx, "AsyncClient", _MockGuildsClient)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await auth_router.list_admin_guilds(
+            principal=Principal(user_id=user_id, guild_id=None, roles=()),
+            settings=get_settings(),
+        )
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == "discord_reauth_required"
+
+
+@pytest.mark.asyncio
+async def test_list_admin_guilds_without_a_stored_credential_demands_reauth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # e.g. a dev-login session: authenticated to US, but never to Discord.
+    session = FakeSession()
+    monkeypatch.setattr(auth_router, "SessionLocal", lambda: session)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await auth_router.list_admin_guilds(
+            principal=Principal(user_id=str(uuid.uuid4()), guild_id=None, roles=()),
+            settings=get_settings(),
+        )
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == "discord_reauth_required"
 
 
 # ---------------------------------------------------------------------------

@@ -1,8 +1,8 @@
 // OAuth callback handler.
 //
-// The backend completes Discord OAuth and (ASSUMED — see REQUIRED FOLLOW-UP in
-// AuthProvider.tsx) redirects the browser to:
+// The backend completes Discord OAuth and 303s the browser to:
 //     /auth/callback#access_token=<jwt>&refresh_token=<jwt>
+// (built by `_callback_redirect` in services/backend/src/app/auth/router.py).
 // We read the tokens from the URL fragment (NOT the query string — a fragment is
 // never sent to servers / proxies / logs), install the session, scrub the
 // fragment from history, and navigate into the app.

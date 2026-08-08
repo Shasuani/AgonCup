@@ -168,11 +168,22 @@ export interface StartResponse {
 // teams — services/backend/src/app/teams/router.py
 // ---------------------------------------------------------------------------
 
-export type TeamMemberRole = 'player' | 'substitute' | 'captain';
+/** `lol_schemas.enums.TeamMemberRole` — the wire values, verbatim.
+ *
+ * NOTE the substitute role is `sub` on the wire, NOT `substitute`: the backend
+ * validates against the StrEnum, so any other spelling is a 422. Render it
+ * through a label map; never ship the display text as the value. */
+export type TeamMemberRole = 'player' | 'sub' | 'captain';
+
+/** The subset assignable via `addMember`. `captain` is created with the team and
+ * is never granted afterwards — the service rejects it with a 400
+ * (`InvalidRoleError`), so it is excluded at the type level. */
+export type AddableTeamMemberRole = Exclude<TeamMemberRole, 'captain'>;
 
 export interface CreateTeamRequest {
   name: string;
-  captain_user_id: string;
+  /** Optional: omitted, the acting principal becomes the team's captain. */
+  captain_user_id?: string;
 }
 
 export interface TeamResponse {
@@ -180,18 +191,34 @@ export interface TeamResponse {
   name: string;
   captain_user_id: string;
   guild_id: string;
+  /** Captain's Discord display name. Populated by the LIST route only; null
+   * elsewhere (and if the user row is gone). Prefer it over captain_user_id. */
+  captain_name?: string | null;
+  /** Roster size, captain included. LIST route only — null means "not fetched
+   * on this route", never "zero members". */
+  member_count?: number | null;
+}
+
+/** Create result — carries the `join_code` the captain shares with players.
+ * Mirrors the router's `CreatedTeamResponse`; the code is returned ONLY here,
+ * never on list/get, so possession of it stays the captain's gate on who joins. */
+export interface CreatedTeamResponse extends TeamResponse {
+  join_code: string;
 }
 
 export interface AddMemberRequest {
   user_id: string;
   /** Defaults to "player" server-side when omitted. */
-  role?: TeamMemberRole;
+  role?: AddableTeamMemberRole;
 }
 
 export interface TeamMemberResponse {
   team_id: string;
   user_id: string;
   role: string;
+  /** Present on roster listings (JOINed to `users`); absent on a bare approve
+   * result. Prefer it over `user_id` whenever it is set. */
+  display_name?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -219,9 +246,11 @@ export interface LinkAccountResponse {
 
 export interface AttemptStatusResponse {
   attempt_id: string;
-  puuid: string;
+  /** Nullable server-side: an attempt can exist before a PUUID is resolved. */
+  puuid: string | null;
   status: string;
-  target_icon_id: number;
+  /** Nullable server-side — do not render without a null check. */
+  target_icon_id: number | null;
   /** ISO-8601 datetime. */
   expires_at: string;
   verified: boolean;
@@ -275,22 +304,45 @@ export interface MatchResultResponse {
 // orchestration — services/backend/src/app/orchestration/router.py
 // ---------------------------------------------------------------------------
 
+/** `lol_schemas.enums.LobbyPhase` — the phase-gated lobby state machine
+ * (PLAN.md §3.6.1). The ordered `assigned_host -> ... -> result_pending` happy
+ * path, plus the terminal `ended`/`aborted`/`host_lost` states.
+ *
+ * This union previously listed `pending`, `creating`, `champ_select` and
+ * `completed` — none of which are backend values — while omitting eight that
+ * are. `HeartbeatRequest.phase` is validated against the StrEnum, so every one
+ * of those spellings was a guaranteed 422. Kept in the enum's declared order. */
 export type LobbyPhase =
-  | 'pending'
-  | 'creating'
+  | 'assigned_host'
+  | 'awaiting_create'
   | 'lobby_open'
-  | 'champ_select'
+  | 'filling'
+  | 'ready'
+  | 'starting'
   | 'in_game'
-  | 'completed'
-  | 'aborted';
+  | 'result_pending'
+  | 'ended'
+  | 'aborted'
+  | 'host_lost';
 
+/** `lol_core.orchestration.LobbyEvent` — the legitimate phase-advancing signals
+ * consumed by `decide_transition`.
+ *
+ * Same drift as {@link LobbyPhase}: `players_joined`, `game_completed` and
+ * `aborted` are not backend values (the real ones are `all_members_present`,
+ * `game_ended` and `abort`), and seven were missing. Comments give the
+ * transition each event drives. */
 export type LobbyEvent =
-  | 'lobby_created'
-  | 'players_joined'
-  | 'champ_select_started'
-  | 'game_started'
-  | 'game_completed'
-  | 'aborted';
+  | 'host_designated' // assigned_host -> awaiting_create
+  | 'lobby_created' // awaiting_create -> lobby_open
+  | 'invites_sent' // lobby_open -> filling
+  | 'all_members_present' // filling -> ready
+  | 'champ_select_started' // ready -> starting
+  | 'game_started' // starting -> in_game
+  | 'game_ended' // in_game -> result_pending
+  | 'result_finalized' // result_pending -> ended
+  | 'abort' // any non-terminal -> aborted
+  | 'host_lost_terminal'; // pre-game exhaustion -> host_lost
 
 export interface InitializeLobbyRequest {
   lobby_name: string;

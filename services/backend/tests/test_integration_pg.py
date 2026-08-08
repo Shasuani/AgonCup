@@ -44,6 +44,8 @@ from lol_schemas.enums import UserGuildRoleName
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 
+from tests.dbseed import clean_seed_rows
+
 pytestmark = [
     pytest.mark.skipif(
         os.environ.get("LOL_DB_TESTS") != "1",
@@ -59,6 +61,12 @@ APP_URL = os.environ.get(
 
 GUILD_ADMIN = UserGuildRoleName.GUILD_ADMIN.value
 PLAYER = UserGuildRoleName.PLAYER.value
+
+
+@pytest.fixture(autouse=True)
+async def _clean_seed_rows() -> None:
+    """Make the committed seeds re-runnable against a persistent dev database."""
+    await clean_seed_rows(OWNER_URL)
 
 
 @dataclass(frozen=True, slots=True)
@@ -361,6 +369,102 @@ async def test_cross_guild_row_isolation_tournament_participants() -> None:
                     await conn.execute(text("SELECT count(*) FROM tournament_participants"))
                 ).scalar_one()
                 assert count == 0
+    finally:
+        await owner_engine.dispose()
+        await app_engine.dispose()
+
+
+async def test_list_teams_overview_joins_captain_and_counts_under_rls() -> None:
+    """``list_teams_overview`` resolves the captain's NAME and the roster size in
+    one RLS-bound query (PLAN.md §3.1 teams).
+
+    The listing previously returned ``Team`` alone, so the admin SPA could only
+    show ``captain_user_id`` — a bare UUID. This covers the three things the new
+    query has to get right and that a fake session cannot prove:
+
+      1. the LEFT JOIN to the GLOBAL ``users`` table resolves under the
+         non-BYPASSRLS ``app_rw`` role (``users`` carries no policy);
+      2. the correlated ``team_members`` count is itself guild-isolated, so a
+         same-id member row in another tenant cannot inflate it;
+      3. ``is_solo`` scaffolding teams stay out of the listing.
+    """
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.teams.service import list_teams_overview
+
+    owner_engine = create_async_engine(OWNER_URL)
+    app_engine = create_async_engine(APP_URL)
+    try:
+        async with owner_engine.begin() as owner:
+            g_a = await _seed_guild(owner, 950001)
+            g_b = await _seed_guild(owner, 950002)
+            # Two members on A's team: the captain plus one player.
+            player_id = (
+                await owner.execute(
+                    text(
+                        "INSERT INTO users (discord_user_id, display_name) "
+                        "VALUES (:d, :n) RETURNING id"
+                    ),
+                    {"d": 950003, "n": "Second Player"},
+                )
+            ).scalar_one()
+            for uid, role in ((g_a.admin_user_id, "captain"), (player_id, "player")):
+                await owner.execute(
+                    text(
+                        "INSERT INTO team_members (team_id, user_id, guild_id, role, status) "
+                        "VALUES (:t, :u, :g, :r, 'active')"
+                    ),
+                    {"t": g_a.team_id, "u": uid, "g": g_a.guild_id, "r": role},
+                )
+            # A PENDING join request on A's team. It is NOT roster membership, so
+            # it must not inflate the count: the listing would otherwise say 3
+            # where the roster view, and the MAX_TEAM_SIZE cap, both say 2.
+            pending_id = (
+                await owner.execute(
+                    text(
+                        "INSERT INTO users (discord_user_id, display_name) "
+                        "VALUES (:d, :n) RETURNING id"
+                    ),
+                    {"d": 950004, "n": "Hopeful Applicant"},
+                )
+            ).scalar_one()
+            await owner.execute(
+                text(
+                    "INSERT INTO team_members (team_id, user_id, guild_id, role, status) "
+                    "VALUES (:t, :u, :g, 'player', 'pending')"
+                ),
+                {"t": g_a.team_id, "u": pending_id, "g": g_a.guild_id},
+            )
+            # Guild B's own team gets a member too — it must not bleed into A.
+            await owner.execute(
+                text(
+                    "INSERT INTO team_members (team_id, user_id, guild_id, role, status) "
+                    "VALUES (:t, :u, :g, 'captain', 'active')"
+                ),
+                {"t": g_b.team_id, "u": g_b.admin_user_id, "g": g_b.guild_id},
+            )
+            # A solo scaffolding team in guild A: must be filtered out entirely.
+            await owner.execute(
+                text(
+                    "INSERT INTO teams (name, guild_id, captain_user_id, is_solo) "
+                    "VALUES ('solo-scaffold', :g, :u, true)"
+                ),
+                {"g": g_a.guild_id, "u": g_a.admin_user_id},
+            )
+
+        session_factory = async_sessionmaker(app_engine, expire_on_commit=False)
+        async with session_factory() as session:
+            await _set_current_guild(await session.connection(), g_a.guild_id)
+            rows = await list_teams_overview(session)
+
+            assert [r.team.id for r in rows] == [g_a.team_id], "solo team must be excluded"
+            (row,) = rows
+            assert row.captain_name == "admin-950001"
+            assert row.member_count == 2, (
+                "the count must be the ACTIVE roster only: guild B's member row "
+                "must not bleed in, and A's PENDING request is not a member yet"
+            )
+            await session.rollback()
     finally:
         await owner_engine.dispose()
         await app_engine.dispose()

@@ -272,6 +272,61 @@ async def list_teams(session: AsyncSession) -> list[Team]:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class TeamOverview:
+    """One row of the teams listing, with the two facts a list actually needs.
+
+    ``Team`` alone only carries ``captain_user_id`` — a UUID — so every caller
+    that wanted to SHOW who leads a team had to fetch the roster per row just to
+    resolve one name. The captain's display name and the roster size are joined
+    here instead, in a single query (PLAN.md §3.1 teams).
+    """
+
+    team: Team
+    #: The captain's Discord display name. None only if the user row vanished.
+    captain_name: str | None
+    #: Active roster size, the captain included.
+    member_count: int
+
+
+async def list_teams_overview(session: AsyncSession) -> list[TeamOverview]:
+    """Teams in the acting guild with the captain's name and roster size.
+
+    One query: LEFT JOIN ``users`` for the captain's name (``users`` is a global
+    table with no RLS policy, so it joins cleanly under the tenant session), and
+    a correlated count over ``team_members`` — which IS guild-scoped, so the
+    count is RLS-bound to the acting guild like everything else.
+    """
+    member_count = (
+        select(func.count())
+        .select_from(TeamMember)
+        .where(
+            TeamMember.team_id == Team.id,
+            # ACTIVE only — the same definition of "roster" every other reader
+            # uses (:func:`list_roster`, :func:`_active_member_count`, and the
+            # MAX_TEAM_SIZE cap). Counting PENDING rows too would report 7/5 on
+            # a team at its cap with two requests waiting, and disagree with the
+            # roster the very next click shows.
+            TeamMember.status == TeamMemberStatus.ACTIVE,
+        )
+        .correlate(Team)
+        .scalar_subquery()
+    )
+    rows = (
+        await session.execute(
+            select(Team, User.display_name, member_count)
+            # LEFT: a team whose captain row was purged still has to list.
+            .outerjoin(User, User.id == Team.captain_user_id)
+            .where(Team.is_solo.is_(False))
+            .order_by(Team.name)
+        )
+    ).all()
+    return [
+        TeamOverview(team=team, captain_name=captain_name, member_count=count)
+        for team, captain_name, count in rows
+    ]
+
+
 async def get_team_by_code(session: AsyncSession, *, code: str) -> Team:
     """Resolve a team by its join code within the acting guild (RLS-scoped).
 

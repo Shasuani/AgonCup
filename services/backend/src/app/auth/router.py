@@ -793,6 +793,7 @@ _DEV_DISCORD_USER = 100000000000000002
     summary="DEV ONLY: mint a platform_operator session without Discord OAuth",
 )
 async def dev_login(
+    response: Response,
     settings: Annotated[Settings, Depends(_get_settings_dep)],
 ) -> TokenPair:
     """Mint a real admin token for local development — **disabled in production**.
@@ -801,6 +802,10 @@ async def dev_login(
     a normal access/refresh pair, so the SPA AND the backend API both work without
     a configured Discord OAuth app. Returns 404 when ``ENVIRONMENT=production`` so
     it can never be a production backdoor.
+
+    Sets the same session cookie the OAuth callback does. Without it a dev session
+    died on the first page reload — the very behaviour the cookie exists to fix,
+    left broken on the path developers actually use.
     """
     if settings.is_production:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")
@@ -849,4 +854,5 @@ async def dev_login(
         pair = await _issue_pair(session, str(user.id), settings)
 
     log.warning("dev_login_used", user_id=str(user.id))
+    set_session_cookie(response, user_id=str(user.id), pair=pair, settings=settings)
     return pair

@@ -432,3 +432,45 @@ async def test_5v5_team_is_only_checked_in_once_every_member_locked_in() -> None
 
     reg = await service.check_in_self(session, tournament_id=tournament.id, user_id=player)
     assert reg.status is RegistrationStatus.CHECKED_IN
+
+
+async def test_a_participant_without_a_registration_still_appears_and_can_lock_in() -> None:
+    """The "you're in" / "nobody has joined" contradiction, reproduced and closed.
+
+    Solo enrolments written before the solo-team path created a
+    ``TournamentParticipant`` and no ``Registration``. The tournament list reads
+    the first table and said *you're in*; the entrants list reads the second and
+    said *nobody has joined*, with no Lock in button anywhere — the player was
+    stuck, and could not re-redeem a code for a tournament they were already in.
+    """
+    guild_id, player = uuid.uuid4(), uuid.uuid4()
+    session = FakeSession()
+    session.current_guild = str(guild_id)
+    tournament = _tournament(guild_id=guild_id, game_mode=GameMode.ARAM_1V1)
+    solo_team = _team(guild_id=guild_id, captain_user_id=player, name="Max")
+    solo_team.is_solo = True
+    session.store[Tournament].append(tournament)
+    session.store[Team].append(solo_team)
+    session.store[TeamMember].append(await _member(team=solo_team, user_id=player))
+    # The broken shape: enrolled, but the registration half was never written.
+    session.store[TournamentParticipant].append(
+        TournamentParticipant(
+            guild_id=guild_id,
+            tournament_id=tournament.id,
+            user_id=player,
+            team_id=solo_team.id,
+        )
+    )
+
+    entrants = await service.list_entrants(session, tournament_id=tournament.id, user_id=player)
+    assert len(entrants) == 1, "the entry exists — do not report an empty tournament"
+    assert entrants[0].name == "Max"
+    assert entrants[0].is_you is True
+    assert entrants[0].can_lock_in is True, "there has to be a button to press"
+    assert entrants[0].locked_in is False
+
+    reg = await service.check_in_self(session, tournament_id=tournament.id, user_id=player)
+
+    assert reg.status is RegistrationStatus.CHECKED_IN, "locking in repairs and completes"
+    assert len(session.store[Registration]) == 1, "the missing half was written once"
+    assert (await service.list_entrants(session, tournament_id=tournament.id))[0].locked_in

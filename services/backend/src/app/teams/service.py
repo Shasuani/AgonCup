@@ -25,13 +25,18 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 
-from lol_schemas.enums import TeamMemberRole, TeamMemberStatus
+from lol_schemas.enums import (
+    RegistrationStatus,
+    TeamMemberRole,
+    TeamMemberStatus,
+    TournamentStatus,
+)
 from sqlalchemy import String, cast, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.joincodes import generate_join_code, normalize_join_code
 from app.logging import get_logger
-from app.models import Team, TeamMember, User
+from app.models import Registration, Team, TeamMember, Tournament, User
 
 logger = get_logger(__name__)
 
@@ -551,6 +556,7 @@ async def approve_join_request(
         raise TeamFullError(str(MAX_TEAM_SIZE))
     member.status = TeamMemberStatus.ACTIVE
     await session.flush()
+    await unready_registrations(session, team_id=team_id)
     return member
 
 
@@ -605,6 +611,43 @@ async def _member_role(
     ).scalar_one_or_none()
 
 
+async def unready_registrations(session: AsyncSession, *, team_id: uuid.UUID) -> int:
+    """Un-check-in the team wherever it is entered but not yet started.
+
+    Lock-in means "every one of us is here", so growing the roster invalidates it:
+    a team that locked in with four and then took a fifth would otherwise be seeded
+    into a bracket carrying a player who never confirmed. The newcomer (and only
+    they) then has to press Lock in, which flips the registration back.
+
+    Scoped to tournaments that have not started — a running bracket's registrations
+    are history and must not be rewritten under it.
+    """
+    unstarted = {
+        t.id
+        for t in (await session.execute(select(Tournament))).scalars().all()
+        if t.status in (TournamentStatus.DRAFT, TournamentStatus.OPEN, TournamentStatus.CHECK_IN)
+    }
+    regs = [
+        reg
+        for reg in (
+            await session.execute(
+                select(Registration).where(
+                    Registration.team_id == team_id,
+                    Registration.status == RegistrationStatus.CHECKED_IN,
+                )
+            )
+        )
+        .scalars()
+        .all()
+        if reg.tournament_id in unstarted
+    ]
+    for reg in regs:
+        reg.status = RegistrationStatus.PENDING
+    if regs:
+        await session.flush()
+    return len(regs)
+
+
 async def add_member(
     session: AsyncSession,
     *,
@@ -630,6 +673,8 @@ async def add_member(
     )
     session.add(member)
     await session.flush()
+    if status == TeamMemberStatus.ACTIVE:
+        await unready_registrations(session, team_id=team_id)
     return member
 
 

@@ -25,7 +25,16 @@ from lol_core import FailoverAction, LobbyEvent
 from lol_realtime import CreateLobbyCommand, PromoteHostCommand
 from lol_schemas.enums import LobbyPhase
 
-from app.models import ClientSession, Match, MatchLobby, RiotAccount, Team, TeamMember
+from app.models import (
+    ClientSession,
+    Match,
+    MatchLobby,
+    RiotAccount,
+    Team,
+    TeamMember,
+    Tournament,
+    User,
+)
 from app.orchestration import service
 from app.orchestration.service import (
     RecordingPublisher,
@@ -80,6 +89,8 @@ class FakeSession:
             RiotAccount: [],
             Team: [],
             TeamMember: [],
+            Tournament: [],
+            User: [],
         }
         self.guild_id = guild_id
 
@@ -144,7 +155,16 @@ def _model_of(entity: Any) -> type:
     if hasattr(entity, "entity"):
         return entity.entity
     name = getattr(entity, "name", None)
-    for model in (Match, MatchLobby, ClientSession, RiotAccount, Team, TeamMember):
+    for model in (
+        Match,
+        MatchLobby,
+        ClientSession,
+        RiotAccount,
+        Team,
+        TeamMember,
+        Tournament,
+        User,
+    ):
         if model.__tablename__ == name:
             return model
     return entity
@@ -762,3 +782,94 @@ def test_invite_order_survives_a_host_with_no_resolvable_team() -> None:
 
     assert set(ordered) == {"p-a", "p-b"}, "everyone else is still invited"
     assert ordered[0] == "p-b", "captains still lead their side"
+
+
+@pytest.mark.asyncio
+async def test_initialize_lobby_tells_the_humans_the_lobby_exists(monkeypatch) -> None:
+    """A created lobby nobody was told about is a match that never starts.
+
+    Every step of the automation is an LCU write, and writes get refused (opted
+    out, kill-switch, League not running) or break on a patch. When that happens
+    the players need the lobby name and password in hand — publicly for everyone,
+    and by DM for the host and captains, who are the ones expected to act.
+    """
+    session, match_id, succession = _seeded_session(opt_ins=3)
+    match = session.store[Match][0]
+    ours, theirs = uuid.uuid4(), uuid.uuid4()
+    match.team_a, match.team_b = ours, theirs
+    session.store[Tournament].append(
+        Tournament(id=match.tournament_id, guild_id=_GUILD, name="Summer Cup")
+    )
+
+    captain = session.store[ClientSession][0].user_id
+    session.store[Team].extend(
+        [
+            Team(id=ours, guild_id=_GUILD, name="Ours", captain_user_id=captain),
+            Team(id=theirs, guild_id=_GUILD, name="Theirs", captain_user_id=uuid.uuid4()),
+        ]
+    )
+    for cs in session.store[ClientSession]:
+        session.store[TeamMember].append(
+            TeamMember(team_id=ours, user_id=cs.user_id, guild_id=_GUILD)
+        )
+        session.store[User].append(
+            User(id=cs.user_id, discord_user_id=1000 + len(session.store[User]), display_name="P")
+        )
+
+    sent: list[Any] = []
+
+    class _Recorder:
+        async def publish(self, envelope: Any) -> None:
+            sent.append(envelope)
+
+    # The publisher is imported inside the function, so patch it at its source.
+    import app.notifications as notifications_module
+    import app.realtime.redis_client as redis_module
+
+    monkeypatch.setattr(notifications_module, "RedisNotificationPublisher", lambda *_: _Recorder())
+    monkeypatch.setattr(redis_module, "get_redis", lambda: None)
+
+    await initialize_lobby(
+        session,
+        match_id=match_id,
+        lobby_name="LoL-abc123",
+        lobby_password="ABC123",
+        publisher=RecordingPublisher(),
+        server_secret=_SECRET,
+    )
+
+    kinds = [e.kind.value for e in sent]
+    assert "match_ready" in kinds, "the guild channel gets the name + password"
+    assert "lobby_credentials" in kinds, "the host/captains get a DM"
+
+    public = next(e for e in sent if e.kind.value == "match_ready")
+    assert public.payload.lobby_name == "LoL-abc123"
+    assert public.payload.lobby_password == "ABC123"
+
+    dm = next(e for e in sent if e.kind.value == "lobby_credentials")
+    assert dm.payload.discord_user_id, "a DM needs a snowflake to address"
+    assert dm.payload.tournament_name == "Summer Cup"
+
+
+@pytest.mark.asyncio
+async def test_a_notification_failure_never_fails_a_created_lobby(monkeypatch) -> None:
+    """The lobby is real and the commands are out — telling people is advisory."""
+    session, match_id, _ = _seeded_session(opt_ins=2)
+
+    def _boom(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("redis is down")
+
+    import app.notifications as notifications_module
+
+    monkeypatch.setattr(notifications_module, "RedisNotificationPublisher", _boom)
+
+    result = await initialize_lobby(
+        session,
+        match_id=match_id,
+        lobby_name="LoL-x",
+        lobby_password="X1",
+        publisher=RecordingPublisher(),
+        server_secret=_SECRET,
+    )
+
+    assert result.state == LobbyPhase.AWAITING_CREATE

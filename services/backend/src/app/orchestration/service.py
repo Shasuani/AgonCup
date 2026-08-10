@@ -81,7 +81,16 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from app.config import get_settings
 from app.logging import get_logger
-from app.models import ClientSession, Match, MatchLobby, RiotAccount, Team, TeamMember, Tournament
+from app.models import (
+    ClientSession,
+    Match,
+    MatchLobby,
+    RiotAccount,
+    Team,
+    TeamMember,
+    Tournament,
+    User,
+)
 
 logger = get_logger(__name__)
 
@@ -558,6 +567,15 @@ async def initialize_lobby(
     await publisher.publish(wrap_envelope(create_cmd, guild_id=guild_id, match_id=match_id))
     await publisher.publish(wrap_envelope(invite_cmd, guild_id=guild_id, match_id=match_id))
 
+    await _announce_lobby(
+        session,
+        match=match,
+        lobby=lobby,
+        host_puuid=host,
+        guild_id=guild_id,
+        candidates=candidates,
+    )
+
     logger.info(
         "orchestration.initialize_lobby",
         match_id=str(match_id),
@@ -566,6 +584,110 @@ async def initialize_lobby(
         succession_len=len(succession),
     )
     return _init_result(lobby)
+
+
+async def _announce_lobby(
+    session: AsyncSession,
+    *,
+    match: Match,
+    lobby: MatchLobby,
+    host_puuid: str,
+    guild_id: uuid.UUID,
+    candidates: Sequence[InviteCandidate],
+) -> None:
+    """Tell the humans the lobby exists, and how to reach it by hand.
+
+    Everything above this point assumes the automation works: the host's client
+    creates the lobby and the other nine accept invites. Every step of that is an
+    LCU write, and writes are refused (opted out, kill-switch, League not
+    running) or simply break on a patch. When that happens the match is ready and
+    nobody knows anything — which is the state this closes.
+
+    Two surfaces, deliberately: a public ``match_ready`` embed in the guild
+    channel so everyone sees the same name/password, and a DM to the host and
+    both captains, who are the ones expected to act. Best-effort throughout — a
+    notification failure must never fail a lobby that was created successfully.
+    """
+    from app.notifications import (
+        RedisNotificationPublisher,
+        publish_lobby_credentials,
+        publish_match_ready,
+    )
+    from app.realtime.redis_client import get_redis
+
+    if not lobby.lobby_name or not lobby.lobby_password:
+        return
+
+    try:
+        names = await _display_names(session, user_ids=[c.user_id for c in candidates])
+        host = next((c for c in candidates if c.puuid == host_puuid), None)
+        tournament_name = await _tournament_name_for_match(session, match=match)
+        notifier = RedisNotificationPublisher(get_redis())
+
+        await publish_match_ready(
+            notifier,
+            origin_guild_id=str(guild_id),
+            match_label=f"Round {match.round + 1} · Match {match.bracket_slot + 1}",
+            host_name=names.get(host.user_id, "the host") if host else "the host",
+            lobby_name=lobby.lobby_name,
+            lobby_password=lobby.lobby_password,
+        )
+
+        # The host must be able to create the lobby by hand; the captains are who
+        # everyone else will ask. Anyone without a Discord id is simply skipped.
+        recipients = {c.user_id for c in candidates if c.is_captain}
+        if host is not None:
+            recipients.add(host.user_id)
+        for user_id, discord_user_id in (
+            await _discord_ids(session, user_ids=sorted(recipients))
+        ).items():
+            await publish_lobby_credentials(
+                notifier,
+                origin_guild_id=str(guild_id),
+                discord_user_id=discord_user_id,
+                lobby_name=lobby.lobby_name,
+                lobby_password=lobby.lobby_password,
+                tournament_name=tournament_name,
+                opponent_name=None,
+            )
+            logger.info("orchestration.lobby_credentials_sent", user_id=str(user_id))
+    except Exception:  # noqa: BLE001 — advisory: never fail a created lobby.
+        logger.exception("orchestration.announce_lobby_failed", match_id=str(match.id))
+
+
+async def _display_names(
+    session: AsyncSession, *, user_ids: Sequence[uuid.UUID]
+) -> dict[uuid.UUID, str]:
+    if not user_ids:
+        return {}
+    return {
+        u.id: u.display_name
+        for u in (await session.execute(select(User).where(User.id.in_(list(user_ids)))))
+        .scalars()
+        .all()
+    }
+
+
+async def _discord_ids(
+    session: AsyncSession, *, user_ids: Sequence[uuid.UUID]
+) -> dict[uuid.UUID, str]:
+    """user id -> Discord snowflake (as a string), for the users that have one."""
+    if not user_ids:
+        return {}
+    return {
+        u.id: str(u.discord_user_id)
+        for u in (await session.execute(select(User).where(User.id.in_(list(user_ids)))))
+        .scalars()
+        .all()
+        if u.discord_user_id
+    }
+
+
+async def _tournament_name_for_match(session: AsyncSession, *, match: Match) -> str:
+    tournament = (
+        await session.execute(select(Tournament).where(Tournament.id == match.tournament_id))
+    ).scalar_one_or_none()
+    return tournament.name if tournament is not None else "your tournament"
 
 
 def _init_result(lobby: MatchLobby) -> InitResult:

@@ -57,6 +57,7 @@ from app.logging import get_logger
 from app.notifications.events import (
     NOTIFICATIONS_CHANNEL,
     CheckInReminderPayload,
+    LobbyCredentialsPayload,
     MatchReadyPayload,
     NotificationEnvelope,
     NotificationPayload,
@@ -206,6 +207,36 @@ async def publish_registration_verified(
     return envelope
 
 
+async def publish_lobby_credentials(
+    publisher: NotificationPublisher,
+    *,
+    origin_guild_id: str,
+    discord_user_id: str,
+    lobby_name: str,
+    lobby_password: str,
+    tournament_name: str,
+    opponent_name: str | None = None,
+) -> NotificationEnvelope:
+    """Emit ``lobby_credentials`` (PLAN.md §3.3 manual fallback).
+
+    PRIVACY EXCEPTION: the second of the two ``publish_*`` helpers whose payload
+    carries a ``discord_user_id`` — DM-routed, never projected onto the central
+    feed. See :class:`LobbyCredentialsPayload`.
+    """
+    envelope = build_envelope(
+        origin_guild_id=origin_guild_id,
+        payload=LobbyCredentialsPayload(
+            discord_user_id=discord_user_id,
+            lobby_name=lobby_name,
+            lobby_password=lobby_password,
+            tournament_name=tournament_name,
+            opponent_name=opponent_name,
+        ),
+    )
+    await publisher.publish(envelope)
+    return envelope
+
+
 async def publish_check_in_reminder(
     publisher: NotificationPublisher,
     *,
@@ -278,6 +309,7 @@ __all__ = [
     "RedisNotificationPublisher",
     "build_envelope",
     "publish_check_in_reminder",
+    "publish_lobby_credentials",
     "publish_match_ready",
     "publish_registration_approved",
     "publish_registration_verified",

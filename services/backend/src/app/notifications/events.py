@@ -53,6 +53,7 @@ class NotificationKind(StrEnum):
 
     REGISTRATION_APPROVED = "registration_approved"
     REGISTRATION_VERIFIED = "registration_verified"
+    LOBBY_CREDENTIALS = "lobby_credentials"
     CHECK_IN_REMINDER = "check_in_reminder"
     MATCH_READY = "match_ready"
     RESULT_RECORDED = "result_recorded"
@@ -94,6 +95,32 @@ class RegistrationVerifiedPayload(_Strict):
     riot_id: str = Field(description="Resolved Riot ID display string, e.g. 'Chama#Shasu'.")
     region: str = Field(description="Display region label, e.g. 'EUNE'.")
     rank_text: str = Field(description="Solo/Duo rank snapshot display, or 'Unranked'.")
+
+
+class LobbyCredentialsPayload(_Strict):
+    """The custom-lobby name + password, DMed to the people who must act on it.
+
+    PRIVACY EXCEPTION (by design), the second of only two: like
+    :class:`RegistrationVerifiedPayload` this carries a ``discord_user_id``
+    because it is **DM-routed**, and it is therefore exempt from the central-feed
+    ``_FORBIDDEN_CENTRAL_KEYS`` guard and must never be projected there.
+
+    Unlike ``match_ready`` — the same strings posted to the guild's public
+    channel — this reaches the host directly, which is what matters when the
+    client's lobby-creation write did not happen and somebody has to make the
+    lobby by hand. The credentials are shareable by construction (they exist so
+    ten people can join), so DMing them discloses nothing the public embed does
+    not already.
+    """
+
+    kind: Literal[NotificationKind.LOBBY_CREDENTIALS] = NotificationKind.LOBBY_CREDENTIALS
+    discord_user_id: str = Field(description="Snowflake of the user to DM (DM-routed kind).")
+    lobby_name: str = Field(description="Backend-owned custom-lobby name.")
+    lobby_password: str = Field(description="Backend-owned lobby password (not an auth secret).")
+    tournament_name: str = Field(description="Display name of the tournament.")
+    opponent_name: str | None = Field(
+        default=None, description="Resolved display name of the opposing team, if known."
+    )
 
 
 class CheckInReminderPayload(_Strict):
@@ -152,6 +179,7 @@ class TournamentAnnouncedPayload(_Strict):
 NotificationPayload = Annotated[
     RegistrationApprovedPayload
     | RegistrationVerifiedPayload
+    | LobbyCredentialsPayload
     | CheckInReminderPayload
     | MatchReadyPayload
     | ResultRecordedPayload
@@ -184,6 +212,7 @@ __all__ = [
     "NOTIFICATIONS_CHANNEL",
     "NOTIFICATION_SCHEMA_VERSION",
     "CheckInReminderPayload",
+    "LobbyCredentialsPayload",
     "MatchReadyPayload",
     "NotificationEnvelope",
     "NotificationKind",

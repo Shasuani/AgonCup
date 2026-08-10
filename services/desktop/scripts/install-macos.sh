@@ -128,9 +128,18 @@ for expected in "$BACKEND_URL" "$REALTIME_URL"; do
   grep -qF "\"$expected\"" "$MAIN_JS" \
     || die "FAILED to bake $expected — the fallback literal in src/main.ts changed."
 done
-if grep -qF 'localhost:8000' "$MAIN_JS"; then
-  die "A localhost:8000 fallback survived baking."
-fi
+# Only meaningful when we baked something ELSE in: installing a deliberately
+# local build (BACKEND_URL=http://localhost:8000, to test against `make
+# dev-backend`) leaves the literal in place by design, and this guard used to
+# reject that as a failed bake.
+case "$BACKEND_URL$REALTIME_URL" in
+  *localhost:8000*) ;;
+  *)
+    if grep -qF 'localhost:8000' "$MAIN_JS"; then
+      die "A localhost:8000 fallback survived baking."
+    fi
+    ;;
+esac
 
 # --- 5. install --------------------------------------------------------------
 # Quit the running copy first: replacing a bundle under a live process leaves it

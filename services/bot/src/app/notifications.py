@@ -68,6 +68,7 @@ def _build_embed(kind: str, payload: dict[str, Any]) -> dict[str, Any] | None:
     # Imported lazily inside the function so the heavy import only happens on the
     # hot path, keeping module import trivial.
     from lol_discord import (
+        lobby_credentials,
         match_ready,
         match_result,
         registration_approved,
@@ -94,6 +95,15 @@ def _build_embed(kind: str, payload: dict[str, Any]) -> dict[str, Any] | None:
             riot_id=payload.get("riot_id", "Your account"),
             region=payload.get("region"),
             rank_text=payload.get("rank_text"),
+        )
+    if kind == "lobby_credentials":
+        # DM-routed: the custom-lobby name + password, so the host can make the
+        # lobby by hand when the client's LCU write did not happen.
+        return lobby_credentials(
+            lobby_name=payload.get("lobby_name", "?"),
+            lobby_password=payload.get("lobby_password", "?"),
+            tournament_name=payload.get("tournament_name", "your tournament"),
+            opponent_name=payload.get("opponent_name"),
         )
     if kind == "check_in_reminder":
         return tournament_check_in(name=payload["tournament_name"], deadline=payload["deadline"])
@@ -223,6 +233,16 @@ class NotificationSubscriber:
                     "registration_verified DM not delivered; dropping (DM-only, no public fallback)"
                 )
             return
+
+        # Also DM-routed, but the opposite fallback: a lobby name + password is
+        # shareable by construction (ten people join with it, and ``match_ready``
+        # already posts the same strings publicly). Dropping it because the host
+        # closed their DMs would strand a match that is otherwise ready, so this
+        # one falls through to the guild channel.
+        if kind == "lobby_credentials":
+            if await self._try_dm(payload.get("discord_user_id"), embed_dict):
+                return
+            log.info("lobby_credentials DM not delivered; posting to the guild channel")
 
         channel = await self._resolve_channel(origin_guild_id)
         if channel is None:

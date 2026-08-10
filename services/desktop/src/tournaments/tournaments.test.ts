@@ -225,7 +225,7 @@ test("listEntrants: GETs /{id}/entrants and maps lock-in + ownership flags", asy
     capturedUrl = url;
     return new Response(
       JSON.stringify([
-        { team_id: "tm1", name: "KostasK", locked_in: true, is_solo: true, is_you: true, can_lock_in: true },
+        { team_id: "tm1", name: "KostasK", locked_in: true, is_solo: true, is_you: true, can_lock_in: true, players: [{ user_id: "u1", name: "KostasK", locked_in: true, is_you: true }] },
         { team_id: "tm2", name: "Nikos", locked_in: false, is_solo: true, is_you: false, can_lock_in: false },
       ]),
       { status: 200, headers: { "Content-Type": "application/json" } },
@@ -248,8 +248,12 @@ test("listEntrants: GETs /{id}/entrants and maps lock-in + ownership flags", asy
       isSolo: true,
       isYou: true,
       canLockIn: true,
+      players: [{ userId: "u1", name: "KostasK", lockedIn: true, isYou: true }],
     });
     assert.equal(result.entrants[1]?.lockedIn, false);
+    // A payload without `players` (an older backend) maps to an empty roster
+    // rather than undefined — the screen indexes it unconditionally.
+    assert.deepEqual(result.entrants[1]?.players, []);
     assert.equal(result.entrants[1]?.isYou, false);
   }
 });

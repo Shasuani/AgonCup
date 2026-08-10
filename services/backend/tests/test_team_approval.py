@@ -12,9 +12,16 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from lol_schemas.enums import TeamMemberRole, TeamMemberStatus
+from lol_schemas.enums import (
+    GameMode,
+    RegistrationStatus,
+    TeamMemberRole,
+    TeamMemberStatus,
+    TournamentFormat,
+    TournamentStatus,
+)
 
-from app.models import Team, TeamMember
+from app.models import Registration, Team, TeamMember, Tournament
 from app.teams import service
 from tests._fake_session import FakeSession
 
@@ -224,3 +231,65 @@ async def test_transfer_to_current_captain_is_noop() -> None:
     result = await service.transfer_captain(session, team_id=team.id, new_captain_user_id=captain)
     assert result.captain_user_id == captain
     assert _role_of(session, team.id, captain) == TeamMemberRole.CAPTAIN
+
+
+async def test_growing_the_roster_un_readies_an_unstarted_registration() -> None:
+    """A locked-in team that takes another player is not locked in any more.
+
+    Lock-in means "every one of us is here". Letting the flag survive a roster
+    change would seed a bracket with a player who never confirmed — the exact
+    thing per-player lock-in exists to prevent. The newcomer pressing Lock in is
+    what flips it back.
+    """
+    session, team = _session_with_team(captain=uuid.uuid4())
+    tournament = Tournament(
+        id=uuid.uuid4(),
+        guild_id=_GUILD,
+        name="Open Cup",
+        status=TournamentStatus.OPEN,
+        format=TournamentFormat.SINGLE_ELIMINATION,
+        game_mode=GameMode.SUMMONERS_RIFT_5V5,
+        best_of=1,
+        max_teams=8,
+    )
+    reg = Registration(
+        id=uuid.uuid4(),
+        guild_id=_GUILD,
+        tournament_id=tournament.id,
+        team_id=team.id,
+        status=RegistrationStatus.CHECKED_IN,
+    )
+    session.store[Tournament].append(tournament)
+    session.store[Registration].append(reg)
+
+    await service.add_member(session, team_id=team.id, user_id=uuid.uuid4())
+
+    assert reg.status is RegistrationStatus.PENDING
+
+
+async def test_a_running_tournaments_registration_is_left_alone() -> None:
+    """History is not rewritten under a bracket that already started."""
+    session, team = _session_with_team(captain=uuid.uuid4())
+    tournament = Tournament(
+        id=uuid.uuid4(),
+        guild_id=_GUILD,
+        name="Live Cup",
+        status=TournamentStatus.RUNNING,
+        format=TournamentFormat.SINGLE_ELIMINATION,
+        game_mode=GameMode.SUMMONERS_RIFT_5V5,
+        best_of=1,
+        max_teams=8,
+    )
+    reg = Registration(
+        id=uuid.uuid4(),
+        guild_id=_GUILD,
+        tournament_id=tournament.id,
+        team_id=team.id,
+        status=RegistrationStatus.CHECKED_IN,
+    )
+    session.store[Tournament].append(tournament)
+    session.store[Registration].append(reg)
+
+    await service.add_member(session, team_id=team.id, user_id=uuid.uuid4())
+
+    assert reg.status is RegistrationStatus.CHECKED_IN

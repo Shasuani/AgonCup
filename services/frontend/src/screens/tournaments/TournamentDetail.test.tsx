@@ -29,6 +29,10 @@ const ENTRANTS: EntrantResponse[] = [
     is_solo: false,
     is_you: false,
     can_lock_in: true,
+    players: [
+      { user_id: "u-1", name: "Ana", locked_in: true, is_you: false },
+      { user_id: "u-2", name: "Bo", locked_in: true, is_you: false },
+    ],
   },
   {
     team_id: "team-2",
@@ -37,6 +41,12 @@ const ENTRANTS: EntrantResponse[] = [
     is_solo: false,
     is_you: false,
     can_lock_in: true,
+    // Half the roster has not pressed Lock in — this is what the admin's
+    // "Lock in" button overrides.
+    players: [
+      { user_id: "u-3", name: "Cy", locked_in: true, is_you: false },
+      { user_id: "u-4", name: "Di", locked_in: false, is_you: false },
+    ],
   },
 ];
 
@@ -123,7 +133,9 @@ describe("TournamentDetail registration + check-in", () => {
     expect(await screen.findByText("Alpha")).toBeInTheDocument();
     expect(screen.getByText("Beta")).toBeInTheDocument();
     expect(screen.getByText("locked in")).toBeInTheDocument();
-    expect(screen.getByText("not ready")).toBeInTheDocument();
+    // Lock-in is per player, so a team that is not ready says WHO is missing —
+    // "not ready" alone left an admin with no way to chase the holdout.
+    expect(screen.getByText("1/2 locked in")).toBeInTheDocument();
     expect(tournaments.entrants).toHaveBeenCalledWith("tour-1");
     // Only the entrant that has NOT locked in offers the action.
     expect(screen.getAllByRole("button", { name: "Lock in" })).toHaveLength(1);

@@ -81,7 +81,7 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from app.config import get_settings
 from app.logging import get_logger
-from app.models import ClientSession, Match, MatchLobby, Tournament
+from app.models import ClientSession, Match, MatchLobby, RiotAccount, Team, TeamMember, Tournament
 
 logger = get_logger(__name__)
 
@@ -312,6 +312,102 @@ async def _get_match(session: AsyncSession, match_id: uuid.UUID) -> Match:
     return match
 
 
+@dataclass(frozen=True, slots=True)
+class InviteCandidate:
+    """One person the host has to pull into the custom lobby."""
+
+    puuid: str
+    user_id: uuid.UUID
+    #: Which side of the match they play for (``None`` = roster not resolvable).
+    team_id: uuid.UUID | None
+    is_captain: bool
+
+
+def order_invitees(
+    candidates: Sequence[InviteCandidate], *, host_puuid: str
+) -> list[InviteCandidate]:
+    """Order the invite list so a lobby fills up in a way humans can follow.
+
+    The host sees ten strangers' invites land in whatever order the roster query
+    happened to return, which is exactly when someone accepts into the wrong slot
+    or assumes the lobby is for the other match. So the order is deliberate:
+
+    1. **The host's own four teammates** — their side of the lobby fills first.
+    2. **The opposing captain** — one person to talk to, already in, before their
+       roster arrives.
+    3. **The rest of the opposing team.**
+
+    The host is dropped (you cannot invite yourself). Anyone whose team could not
+    be resolved goes last rather than being silently dropped — a missing roster
+    row must not cost somebody their game. Ties inside each group keep the input
+    order, so the result is deterministic for a given roster.
+    """
+    host = next((c for c in candidates if c.puuid == host_puuid), None)
+    host_team = host.team_id if host is not None else None
+    others = [c for c in candidates if c.puuid != host_puuid]
+
+    own = [c for c in others if host_team is not None and c.team_id == host_team]
+    opposing = [
+        c for c in others if c.team_id is not None and (host_team is None or c.team_id != host_team)
+    ]
+    unknown = [c for c in others if c.team_id is None]
+
+    opposing_captains = [c for c in opposing if c.is_captain]
+    opposing_rest = [c for c in opposing if not c.is_captain]
+    return [*own, *opposing_captains, *opposing_rest, *unknown]
+
+
+async def _invite_candidates(
+    session: AsyncSession, *, match: Match, sessions: Sequence[ClientSession]
+) -> list[InviteCandidate]:
+    """Attach each connected client to its side of the match, and flag captains."""
+    team_ids = [t for t in (match.team_a, match.team_b) if t is not None]
+    if not team_ids:
+        return [
+            InviteCandidate(puuid=s.puuid, user_id=s.user_id, team_id=None, is_captain=False)
+            for s in sessions
+        ]
+
+    # Whole rows rather than two columns: a match roster is at most ten people,
+    # and it keeps the query inside what the offline fake session can model.
+    membership: dict[uuid.UUID, uuid.UUID] = {}
+    for member in (
+        await session.execute(select(TeamMember).where(TeamMember.team_id.in_(team_ids)))
+    ).scalars():
+        membership[member.user_id] = member.team_id
+
+    captains = {
+        team.captain_user_id
+        for team in (await session.execute(select(Team).where(Team.id.in_(team_ids))))
+        .scalars()
+        .all()
+    }
+
+    return [
+        InviteCandidate(
+            puuid=s.puuid,
+            user_id=s.user_id,
+            team_id=membership.get(s.user_id),
+            is_captain=s.user_id in captains,
+        )
+        for s in sessions
+    ]
+
+
+async def _summoner_ids_for(session: AsyncSession, *, puuids: Sequence[str]) -> dict[str, str]:
+    """PUUID -> per-region numeric summonerId, which is what an LCU invite takes.
+
+    Absent for anyone who has not finished account verification; they are left out
+    of the invite payload rather than sent as a null the LCU would reject.
+    """
+    if not puuids:
+        return {}
+    rows = (
+        await session.execute(select(RiotAccount).where(RiotAccount.puuid.in_(list(puuids))))
+    ).scalars()
+    return {r.puuid: r.summoner_id for r in rows if r.summoner_id}
+
+
 async def _game_mode_for_match_id(session: AsyncSession, match_id: uuid.UUID) -> GameMode:
     """Resolve the tournament's game mode for a match id (drives the lobby config).
 
@@ -389,7 +485,7 @@ async def initialize_lobby(
     publisher = publisher or CommandPublisher()
     server_secret = server_secret or get_settings().jwt_secret
     guild_id = await _current_guild(session)
-    await _get_match(session, match_id)  # RLS membership / existence check
+    match = await _get_match(session, match_id)  # RLS membership / existence check
     game_mode = await _game_mode_for_match_id(session, match_id)
 
     existing = (
@@ -425,14 +521,29 @@ async def initialize_lobby(
     lobby.state = decide_transition(lobby.state, LobbyEvent.HOST_DESIGNATED)
     await session.flush()
 
+    # Deliberate invite order: the host's own side first, then the opposing
+    # captain, then their roster (see `order_invitees`). The summonerId join
+    # happens HERE rather than on the host: the client has no way to resolve a
+    # PUUID, so leaving the list empty meant the lobby was created and then
+    # nobody was invited at all.
+    candidates = await _invite_candidates(session, match=match, sessions=sessions)
+    ordered = order_invitees(candidates, host_puuid=host)
+    summoner_ids = await _summoner_ids_for(session, puuids=[c.puuid for c in ordered])
+    invitee_puuids = [c.puuid for c in ordered if c.puuid in summoner_ids]
+    invitee_summoner_ids = [summoner_ids[p] for p in invitee_puuids]
+    if len(invitee_puuids) != len(ordered):
+        logger.warning(
+            "orchestration.invite.unresolved_summoner_ids",
+            match_id=str(match_id),
+            missing=len(ordered) - len(invitee_puuids),
+        )
+
     spec = build_lobby_spec(
         match_id=match_id,
         lobby_name=lobby_name,
         lobby_password=lobby_password,
-        # ClientSession carries only puuid; summonerId resolution (RiotAccount) is
-        # a downstream join the host performs — puuid is the collision-immune key.
-        invitee_summoner_ids=[],
-        invitee_puuids=[s.puuid for s in sessions],
+        invitee_summoner_ids=invitee_summoner_ids,
+        invitee_puuids=invitee_puuids,
         game_mode=game_mode,
     )
     create_cmd = build_create_lobby_command(

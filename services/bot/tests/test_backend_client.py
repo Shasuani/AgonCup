@@ -165,12 +165,13 @@ def test_create_tournament_payload(monkeypatch: Any) -> None:
     client = _client(
         monkeypatch, _MockResponse(200, {"id": "t1", "name": "Cup", "format": "single_elim"})
     )
-    asyncio.run(client.create_tournament(CTX, name="Cup", max_teams=8))
+    asyncio.run(client.create_tournament(CTX, name="Cup", max_teams=8, format="double_elimination"))
 
     sent = _MockAsyncClient.last_post
     assert sent["url"].endswith("/tournaments/create")
     assert sent["json"]["name"] == "Cup"
     assert sent["json"]["max_teams"] == 8
+    assert sent["json"]["format"] == "double_elimination"
 
 
 def test_leave_team_returns_none_on_204(monkeypatch: Any) -> None:

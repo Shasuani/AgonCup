@@ -195,15 +195,26 @@ export async function lookupTournamentByCode(
 // --- entrants + lock-in ---------------------------------------------------- //
 
 /** One entry in a tournament: a team in 5v5, a player (their solo team) in 1v1. */
+/** A roster member of an entry, with their own lock-in state. */
+export interface EntrantPlayer {
+  readonly userId: string;
+  readonly name: string;
+  readonly lockedIn: boolean;
+  readonly isYou: boolean;
+}
+
 export interface Entrant {
   readonly teamId: string;
   readonly name: string;
+  /** The TEAM is ready — true only once every roster member has locked in. */
   readonly lockedIn: boolean;
   readonly isSolo: boolean;
   /** True for the caller's own entry (their solo team in 1v1, their team in 5v5). */
   readonly isYou: boolean;
-  /** True when the caller may lock this entry in (its captain / the solo player). */
+  /** True while the caller still has to lock THEMSELVES in on this entry. */
   readonly canLockIn: boolean;
+  /** The roster — what makes "waiting on two teammates" visible. */
+  readonly players: EntrantPlayer[];
 }
 
 export type EntrantsResult =
@@ -223,6 +234,17 @@ function asEntrant(raw: unknown): Entrant {
     isSolo: r["is_solo"] === true,
     isYou: r["is_you"] === true,
     canLockIn: r["can_lock_in"] === true,
+    players: Array.isArray(r["players"]) ? (r["players"] as unknown[]).map(asEntrantPlayer) : [],
+  };
+}
+
+function asEntrantPlayer(raw: unknown): EntrantPlayer {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  return {
+    userId: typeof r["user_id"] === "string" ? (r["user_id"] as string) : "",
+    name: typeof r["name"] === "string" ? (r["name"] as string) : "",
+    lockedIn: r["locked_in"] === true,
+    isYou: r["is_you"] === true,
   };
 }
 

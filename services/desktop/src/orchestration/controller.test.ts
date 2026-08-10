@@ -67,6 +67,7 @@ function makeScheduler() {
 // A minimal fake LcuAdapter. Branded return types are cast (runtime is plain).
 function makeAdapter(over: Partial<Record<string, unknown>> = {}) {
   const calls: string[] = [];
+  const invited: string[] = [];
   const adapter = {
     async readLockfileAuth() {
       return {} as never;
@@ -78,6 +79,10 @@ function makeAdapter(over: Partial<Record<string, unknown>> = {}) {
     },
     async invite(ids: readonly unknown[]) {
       calls.push(`invite:${ids.length}`);
+      // Recorded verbatim: the backend orders the invite list deliberately
+      // (own team, then the rival captain, then their roster) and a controller
+      // that reordered or dropped ids would silently undo that.
+      invited.push(...(ids as string[]));
     },
     async autoAcceptInvite() {
       calls.push("autoAcceptInvite");
@@ -107,7 +112,7 @@ function makeAdapter(over: Partial<Record<string, unknown>> = {}) {
       } as never;
     },
   };
-  return { adapter: adapter as never, calls };
+  return { adapter: adapter as never, calls, invited };
 }
 
 function makeController(t: ReturnType<typeof makeTransport>, a: ReturnType<typeof makeAdapter>, s: ReturnType<typeof makeScheduler>, heartbeatMs = 2000) {
@@ -234,3 +239,34 @@ async function runTickAsync(s: ReturnType<typeof makeScheduler>): Promise<void> 
   s.runTick();
   await tickMicrotasks();
 }
+
+test("host create: invites the exact list the backend ordered, in order", async () => {
+  // The backend sorts the roster deliberately — the host's own four teammates,
+  // then the opposing captain, then their players — so ten invites do not land
+  // as an unreadable jumble. The controller must pass that through untouched.
+  const t = makeTransport();
+  const a = makeAdapter();
+  const s = makeScheduler();
+  const ordered = ["mate-1", "mate-2", "mate-3", "mate-4", "rival-captain", "rival-1", "rival-2", "rival-3", "rival-4"];
+  makeController(t, a, s).start();
+  t.emit(createCmd({ spec: { matchId: MATCH, invitees: ordered } } as never));
+  await tickMicrotasks();
+
+  assert.deepEqual(a.invited, ordered);
+  assert.equal(t.acks[0]?.ok, true);
+});
+
+test("host create: an empty invitee list is a lobby nobody can join", async () => {
+  // Regression: the backend used to send `invitee_summoner_ids: []`, so the host
+  // created the lobby and invited nobody. The controller cannot detect that on
+  // its own — this pins the shape the backend must keep sending.
+  const t = makeTransport();
+  const a = makeAdapter();
+  const s = makeScheduler();
+  makeController(t, a, s).start();
+  t.emit(createCmd({ spec: { matchId: MATCH, invitees: [] } } as never));
+  await tickMicrotasks();
+
+  assert.deepEqual(a.calls, ["createCustomLobby", "invite:0"]);
+  assert.deepEqual(a.invited, [], "nobody invited — what the bug looked like");
+});

@@ -134,6 +134,27 @@ async def test_create_tournament_1v1_aram_mode() -> None:
 
 
 @pytest.mark.asyncio
+async def test_create_tournament_honours_the_requested_format() -> None:
+    """The bot can pick the bracket shape, like the web console always could.
+
+    The bridge used to take no ``format`` at all, so every tournament created from
+    Discord was single-elimination whatever the admin asked for.
+    """
+    from lol_schemas.enums import TournamentFormat
+
+    session = FakeSession()
+    await _seed_onboarded_guild(session)
+
+    t = await bridge.create_tournament(
+        session,
+        ctx=_ctx(discord_user_id=DISCORD_ADMIN, is_admin=True),
+        name="Double Cup",
+        format=TournamentFormat.DOUBLE_ELIMINATION,
+    )
+    assert t.format == TournamentFormat.DOUBLE_ELIMINATION
+
+
+@pytest.mark.asyncio
 async def test_create_tournament_rejects_invalid_best_of() -> None:
     from app.tournaments import service as tournaments_service
 

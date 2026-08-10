@@ -22,7 +22,7 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from lol_schemas.enums import GameMode
+from lol_schemas.enums import GameMode, TournamentFormat
 from pydantic import BaseModel, Field
 
 from app.accounts import service as accounts_service
@@ -191,6 +191,9 @@ class TournamentCreateRequest(BaseModel):
     ctx: DiscordContextIn
     name: str = Field(min_length=1, max_length=120)
     max_teams: int = Field(default=16, ge=2, le=16)
+    # Defaulted, not required, so an older bot build (which sent no format) keeps
+    # creating the single-elimination tournaments it always did.
+    format: TournamentFormat = TournamentFormat.SINGLE_ELIMINATION
     game_mode: GameMode = GameMode.SUMMONERS_RIFT_5V5
     best_of: int = Field(default=1, description="Series length: 1, 3, or 5.")
     registration_opens_at: datetime | None = None
@@ -560,6 +563,7 @@ async def create_tournament(body: TournamentCreateRequest) -> TournamentResponse
                 ctx=body.ctx.to_ctx(),
                 name=body.name,
                 max_teams=body.max_teams,
+                format=body.format,
                 game_mode=body.game_mode,
                 best_of=body.best_of,
                 registration_opens_at=body.registration_opens_at,

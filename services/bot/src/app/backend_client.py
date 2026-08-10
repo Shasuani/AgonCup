@@ -216,12 +216,16 @@ class BackendClient:
         *,
         name: str,
         max_teams: int = 16,
+        format: str = "single_elimination",
         game_mode: str = "summoners_rift_5v5",
         best_of: int = 1,
         registration_opens_at: str | None = None,
         start_at: str | None = None,
     ) -> dict[str, Any]:
         """Create a tournament (guild admin). ``game_mode`` = 5v5 or 1v1 ARAM; ``best_of`` 1/3/5.
+
+        ``format`` is the bracket shape (single/double elimination) — the same set
+        the web admin console offers, so both surfaces create the same tournaments.
 
         ``registration_opens_at`` / ``start_at`` are ISO-8601 UTC strings for a
         scheduled tournament (PLAN.md §3.2); omit both for an immediately-open one.
@@ -230,6 +234,7 @@ class BackendClient:
             "ctx": _ctx_payload(ctx),
             "name": name,
             "max_teams": max_teams,
+            "format": format,
             "game_mode": game_mode,
             "best_of": best_of,
         }

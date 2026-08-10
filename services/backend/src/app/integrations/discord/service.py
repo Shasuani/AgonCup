@@ -25,7 +25,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 
-from lol_schemas.enums import GameMode
+from lol_schemas.enums import GameMode, TournamentFormat
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.accounts import service as accounts_service
@@ -272,6 +272,7 @@ async def create_tournament(
     ctx: DiscordContext,
     name: str,
     max_teams: int = tournaments_service.MAX_TEAMS_HARD_CAP,
+    format: TournamentFormat = TournamentFormat.SINGLE_ELIMINATION,
     game_mode: GameMode = GameMode.SUMMONERS_RIFT_5V5,
     best_of: int = 1,
     registration_opens_at: datetime | None = None,
@@ -283,6 +284,7 @@ async def create_tournament(
         session,
         name=name,
         max_teams=max_teams,
+        format=format,
         game_mode=game_mode,
         best_of=best_of,
         registration_opens_at=registration_opens_at,

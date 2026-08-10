@@ -514,7 +514,62 @@ async def _register_team_idempotent(
     )
     session.add(reg)
     await session.flush()
+    await _sync_team_participants(session, tournament=tournament, team_id=team.id)
     return reg
+
+
+async def _active_member_ids(session: AsyncSession, *, team_id: uuid.UUID) -> list[uuid.UUID]:
+    """The team's active roster — the set that must lock in for the team to be ready."""
+    return [
+        uid
+        for (uid,) in (
+            await session.execute(
+                select(TeamMember.user_id).where(
+                    TeamMember.team_id == team_id,
+                    TeamMember.status == TeamMemberStatus.ACTIVE,
+                )
+            )
+        ).all()
+    ]
+
+
+async def _sync_team_participants(
+    session: AsyncSession, *, tournament: Tournament, team_id: uuid.UUID
+) -> None:
+    """Give every active member of a registered team their own participant row.
+
+    The captain redeems the code once and the whole roster is entered — no teammate
+    ever needs the code. Each of them still owns a ``TournamentParticipant``, because
+    lock-in is per player and needs somewhere to land.
+
+    Idempotent (``(tournament_id, user_id)`` is unique), so re-redeeming the code or a
+    late-joining member simply tops the set up. Members who joined the team *after*
+    registration are covered by :func:`check_in_self`, which creates the row on demand
+    rather than requiring a sweep.
+    """
+    guild_id = await _current_guild(session)
+    existing = {
+        uid
+        for (uid,) in (
+            await session.execute(
+                select(TournamentParticipant.user_id).where(
+                    TournamentParticipant.tournament_id == tournament.id
+                )
+            )
+        ).all()
+    }
+    for user_id in await _active_member_ids(session, team_id=team_id):
+        if user_id in existing:
+            continue
+        session.add(
+            TournamentParticipant(
+                guild_id=guild_id,
+                tournament_id=tournament.id,
+                user_id=user_id,
+                team_id=team_id,
+            )
+        )
+    await session.flush()
 
 
 async def list_my_tournaments(session: AsyncSession, *, user_id: uuid.UUID) -> list[Tournament]:
@@ -690,24 +745,63 @@ async def resolve_check_in_team(
             )
         ).all()
     }
-    captained = [
-        team.id
-        for team in (
-            await session.execute(select(Team).where(Team.captain_user_id == user_id))
-        ).scalars()
-        if team.id in entered
+    # Membership, not captaincy, is the test: the captain enrols the team but every
+    # player locks themselves in, so an ordinary member must resolve to their team
+    # here too. Scoped to teams actually entered in THIS tournament, so belonging to
+    # several rosters is only ambiguous when more than one of them is competing.
+    mine: list[uuid.UUID] = [
+        team_id
+        for (team_id,) in (
+            await session.execute(
+                select(TeamMember.team_id).where(
+                    TeamMember.user_id == user_id,
+                    TeamMember.status == TeamMemberStatus.ACTIVE,
+                )
+            )
+        ).all()
+        if team_id in entered
     ]
-    if not captained:
+    if not mine:
+        # Fallback for a captain with no membership row of their own (older teams,
+        # or one repaired by hand): they plainly belong to the team they captain.
+        mine = [
+            team.id
+            for team in (
+                await session.execute(select(Team).where(Team.captain_user_id == user_id))
+            ).scalars()
+            if team.id in entered
+        ]
+    if not mine:
         raise NoCaptainTeamError(str(user_id))
-    if len(captained) > 1:
+    if len(set(mine)) > 1:
         raise AmbiguousCaptainTeamError(str(user_id))
-    return captained[0]
+    return mine[0]
 
 
 async def check_in(
     session: AsyncSession, *, tournament_id: uuid.UUID, team_id: uuid.UUID
 ) -> Registration:
-    """Move an approved registration to CHECKED_IN (eligible for the bracket)."""
+    """Force a whole team CHECKED_IN — the admin override, not the player path.
+
+    Players lock themselves in one by one (:func:`check_in_self`). This bypasses
+    that: it marks every member locked in and flips the registration, for an admin
+    unblocking a bracket held up by a teammate who never showed.
+    """
+    reg = await _registration_for(session, tournament_id=tournament_id, team_id=team_id)
+    now = _utcnow()
+    for participant in await _participants_for_team(
+        session, tournament_id=tournament_id, team_id=team_id
+    ):
+        if participant.locked_in_at is None:
+            participant.locked_in_at = now
+    reg.status = RegistrationStatus.CHECKED_IN
+    await session.flush()
+    return reg
+
+
+async def _registration_for(
+    session: AsyncSession, *, tournament_id: uuid.UUID, team_id: uuid.UUID
+) -> Registration:
     reg = (
         await session.execute(
             select(Registration).where(
@@ -718,9 +812,87 @@ async def check_in(
     ).scalar_one_or_none()
     if reg is None:
         raise InvalidStateError("registration not found")
-    reg.status = RegistrationStatus.CHECKED_IN
+    return reg
+
+
+async def _participants_for_team(
+    session: AsyncSession, *, tournament_id: uuid.UUID, team_id: uuid.UUID
+) -> list[TournamentParticipant]:
+    return list(
+        (
+            await session.execute(
+                select(TournamentParticipant).where(
+                    TournamentParticipant.tournament_id == tournament_id,
+                    TournamentParticipant.team_id == team_id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+async def check_in_self(
+    session: AsyncSession, *, tournament_id: uuid.UUID, user_id: uuid.UUID
+) -> Registration:
+    """Lock the **caller themselves** in — the button every entrant presses.
+
+    Works the same for both shapes, which is the point: a 1v1 player is a roster of
+    one, so "everyone locked in" and "I locked in" coincide and no branch is needed.
+
+    The participant row is created on demand rather than assumed, so someone who
+    joined the team after the captain redeemed the code can still lock in without a
+    backfill sweep. Idempotent — pressing it twice keeps the first timestamp.
+
+    The team's registration flips to CHECKED_IN only once **every active member** has
+    locked in; until then it stays PENDING and the team cannot be seeded. That is the
+    whole reason lock-in moved off the captain: their word is not evidence that four
+    other people are at their keyboards.
+    """
+    team_id = await resolve_check_in_team(session, tournament_id=tournament_id, user_id=user_id)
+    reg = await _registration_for(session, tournament_id=tournament_id, team_id=team_id)
+
+    participant = (
+        await session.execute(
+            select(TournamentParticipant).where(
+                TournamentParticipant.tournament_id == tournament_id,
+                TournamentParticipant.user_id == user_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if participant is None:
+        participant = TournamentParticipant(
+            guild_id=await _current_guild(session),
+            tournament_id=tournament_id,
+            user_id=user_id,
+            team_id=team_id,
+        )
+        session.add(participant)
+    if participant.locked_in_at is None:
+        participant.locked_in_at = _utcnow()
+    participant.team_id = team_id
+    await session.flush()
+
+    locked = {
+        p.user_id
+        for p in await _participants_for_team(session, tournament_id=tournament_id, team_id=team_id)
+        if p.locked_in_at is not None
+    }
+    roster = await _active_member_ids(session, team_id=team_id)
+    if roster and all(uid in locked for uid in roster):
+        reg.status = RegistrationStatus.CHECKED_IN
     await session.flush()
     return reg
+
+
+@dataclass(frozen=True)
+class EntrantPlayer:
+    """One player inside an entry, and whether they personally locked in."""
+
+    user_id: uuid.UUID
+    name: str
+    locked_in: bool
+    is_you: bool
 
 
 @dataclass(frozen=True)
@@ -739,10 +911,13 @@ class Entrant:
     #: True for the caller's own entry — what lets the client say "you're in"
     #: without guessing by name.
     is_you: bool
-    #: True when the caller may lock THIS entry in: its captain (which, for a solo
-    #: entry, is the player themselves). A plain 5v5 roster member is ``is_you``
-    #: but not this, so the client shows them the state without a dead button.
+    #: True when the caller still has to lock THEMSELVES in on this entry — i.e.
+    #: it is their team and they have not pressed it yet. Lock-in is per player,
+    #: so this is never true for somebody else's team.
     can_lock_in: bool
+    #: The roster, each with their own lock-in state. This is what makes "waiting
+    #: on two teammates" visible instead of a team that is silently not ready.
+    players: tuple[EntrantPlayer, ...] = ()
 
 
 async def list_entrants(
@@ -790,19 +965,77 @@ async def list_entrants(
             ).all()
         }
 
+    # Rosters come from team_members (the source of truth), so a player who joined
+    # the team after the captain redeemed the code shows up immediately — this is a
+    # GET and must not write the participant rows a backfill would need.
+    roster: dict[uuid.UUID, list[uuid.UUID]] = {}
+    for team_id, member_id in (
+        await session.execute(
+            select(TeamMember.team_id, TeamMember.user_id).where(
+                TeamMember.team_id.in_([r.team_id for r in regs]),
+                TeamMember.status == TeamMemberStatus.ACTIVE,
+            )
+        )
+    ).all():
+        roster.setdefault(team_id, []).append(member_id)
+
+    locked_user_ids = {
+        p.user_id
+        for p in (
+            await session.execute(
+                select(TournamentParticipant).where(
+                    TournamentParticipant.tournament_id == tournament_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+        if p.locked_in_at is not None
+    }
+    member_names: dict[uuid.UUID, str] = {}
+    for uid, display_name in (
+        await session.execute(
+            select(User.id, User.display_name).where(
+                User.id.in_([uid for ids in roster.values() for uid in ids])
+            )
+        )
+    ).all():
+        member_names[uid] = display_name
+
     entrants: list[Entrant] = []
     for reg in regs:
         team = teams.get(reg.team_id)
         if team is None:  # RLS hid it (foreign guild) — not ours to show
             continue
+        players = tuple(
+            EntrantPlayer(
+                user_id=uid,
+                name=member_names.get(uid) or "Player",
+                locked_in=uid in locked_user_ids,
+                is_you=uid == user_id,
+            )
+            for uid in roster.get(reg.team_id, [])
+        )
+        mine = reg.team_id in my_team_ids
         entrants.append(
             Entrant(
                 team_id=reg.team_id,
                 name=team.name,
-                locked_in=reg.status == RegistrationStatus.CHECKED_IN,
+                # Derived from the roster, not read off the registration: a team
+                # that locked in and THEN gained a member is not ready any more,
+                # and a stored flag would keep claiming it was while the new
+                # player sits there marked "not ready".
+                locked_in=(
+                    all(p.locked_in for p in players)
+                    if players
+                    else reg.status == RegistrationStatus.CHECKED_IN
+                ),
                 is_solo=bool(team.is_solo),
-                is_you=reg.team_id in my_team_ids,
-                can_lock_in=user_id is not None and team.captain_user_id == user_id,
+                is_you=mine,
+                # Only your own entry, and only while you personally have not
+                # pressed it — the captain no longer locks in on anyone's behalf.
+                can_lock_in=mine and user_id is not None and user_id not in locked_user_ids,
+                players=players,
             )
         )
     return entrants

@@ -191,8 +191,14 @@ export function TournamentDetail({
             {entered.map((e) => (
               <li key={e.team_id} data-registration data-locked-in={e.locked_in ? "" : undefined}>
                 <span data-registration-team>{e.name}</span>
+                {/* Lock-in is per player, so "not ready" alone would leave an
+                    admin guessing who is holding the bracket up. */}
                 <span data-registration-status>
-                  {e.locked_in ? "locked in" : "not ready"}
+                  {e.locked_in
+                    ? "locked in"
+                    : e.players.length > 0
+                      ? `${e.players.filter((p) => p.locked_in).length}/${e.players.length} locked in`
+                      : "not ready"}
                 </span>
                 {e.locked_in ? null : (
                   <Button

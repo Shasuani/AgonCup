@@ -17,7 +17,8 @@ export interface JoinRequest { teamId: string; teamName: string; userId: string;
 export interface PresenceEntry { matchId: string; guildName: string; tournamentName: string; gameMode: string; startedAt: string | null; players: string[] }
 export interface BracketMatch { id: string; round: number; slot: number; teamAName: string | null; teamBName: string | null; winnerTeamId: string | null; teamAId: string | null; teamBId: string | null; status: string; readyDeadlineAt: string | null; teamAReady: boolean; teamBReady: boolean }
 
-export interface Entrant { teamId: string; name: string; lockedIn: boolean; isSolo: boolean; isYou: boolean; canLockIn: boolean }
+export interface EntrantPlayer { userId: string; name: string; lockedIn: boolean; isYou: boolean }
+export interface Entrant { teamId: string; name: string; lockedIn: boolean; isSolo: boolean; isYou: boolean; canLockIn: boolean; players: EntrantPlayer[] }
 
 type Ok<T> = ({ ok: true } & T);
 type Err = { ok: false; status?: number; detail?: string };

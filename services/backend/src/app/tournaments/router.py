@@ -94,6 +94,15 @@ class CheckInRequest(BaseModel):
     team_id: uuid.UUID | None = None
 
 
+class EntrantPlayerResponse(BaseModel):
+    """A roster member of an entry, with their own lock-in state."""
+
+    user_id: str
+    name: str
+    locked_in: bool
+    is_you: bool
+
+
 class EntrantResponse(BaseModel):
     """One tournament entry: a team in 5v5, a player (their solo team) in 1v1."""
 
@@ -103,6 +112,7 @@ class EntrantResponse(BaseModel):
     is_solo: bool
     is_you: bool
     can_lock_in: bool
+    players: list[EntrantPlayerResponse] = []
 
 
 class RegistrationResponse(BaseModel):
@@ -427,25 +437,31 @@ async def check_in(
 ) -> RegistrationResponse:
     """Lock in — the last step before an admin can start the bracket.
 
-    ``team_id`` is optional because a **solo (1v1) player has no team to name**:
-    omitted, the caller's own entry is resolved (their solo enrolment, else the
-    team they captain). This route is therefore NOT gated on the ``captain``
-    guild role — a 1v1 entrant is an ordinary member — so authorization is
-    enforced here instead: you may only lock in an entry that is yours.
+    **Every player locks themselves in.** The captain redeems the join code and the
+    whole roster is entered, but their word is not evidence that four other people
+    are at their keyboards, so the team's registration only reaches CHECKED_IN once
+    each active member has pressed this. A 1v1 entrant is a roster of one, so the
+    same call covers them.
+
+    Omitting ``team_id`` — what every client does — means "lock me in". Passing one
+    is the **admin override**: it forces that whole team in, for a bracket held up
+    by a teammate who never showed. Not gated on the ``captain`` guild role (a 1v1
+    entrant is an ordinary member), so authorization is enforced here.
     """
     team_id = body.team_id if body is not None else None
     try:
         if team_id is None:
-            team_id = await service.resolve_check_in_team(
+            reg = await service.check_in_self(
                 session, tournament_id=tournament_id, user_id=uuid.UUID(principal.user_id)
             )
-        elif UserGuildRoleName.GUILD_ADMIN not in principal.roles:
-            # An explicit team_id is a disambiguator, not a capability: only that
-            # team's captain (or an admin) may lock it in.
-            await service.assert_team_captain(
-                session, team_id=team_id, user_id=uuid.UUID(principal.user_id)
-            )
-        reg = await service.check_in(session, tournament_id=tournament_id, team_id=team_id)
+        else:
+            if UserGuildRoleName.GUILD_ADMIN not in principal.roles:
+                # Forcing a whole team in is an admin capability; a captain naming
+                # their own team gets the same override, nobody else does.
+                await service.assert_team_captain(
+                    session, team_id=team_id, user_id=uuid.UUID(principal.user_id)
+                )
+            reg = await service.check_in(session, tournament_id=tournament_id, team_id=team_id)
     except service.NotTeamCaptainError as exc:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, detail="only the team captain can lock the team in"
@@ -484,6 +500,15 @@ async def list_entrants(
             is_solo=e.is_solo,
             is_you=e.is_you,
             can_lock_in=e.can_lock_in,
+            players=[
+                EntrantPlayerResponse(
+                    user_id=str(p.user_id),
+                    name=p.name,
+                    locked_in=p.locked_in,
+                    is_you=p.is_you,
+                )
+                for p in e.players
+            ],
         )
         for e in entrants
     ]

@@ -356,8 +356,13 @@ async def test_5v5_lock_in_is_rejected_for_someone_with_no_entry() -> None:
         await service.resolve_check_in_team(session, tournament_id=tournament.id, user_id=outsider)
 
 
-async def test_entrants_marks_a_plain_member_as_yours_but_not_lockable() -> None:
-    """Only the captain gets the Lock in button; the roster sees the state."""
+async def test_entrants_gives_every_roster_member_their_own_lock_in() -> None:
+    """The captain enrols the team; each player still locks themselves in.
+
+    Nobody but the captain ever touches the join code, so a plain member must find
+    themselves already entered — and holding a live Lock in button, not a read-only
+    view of their captain's decision.
+    """
     guild_id, captain, player = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
     session = FakeSession()
     session.current_guild = str(guild_id)
@@ -384,5 +389,46 @@ async def test_entrants_marks_a_plain_member_as_yours_but_not_lockable() -> None
     assert as_captain[0].is_you is True
     assert as_captain[0].can_lock_in is True
     assert as_captain[0].is_solo is False
+    # The teammate never redeemed the code, yet is in and can lock in.
     assert as_player[0].is_you is True
-    assert as_player[0].can_lock_in is False
+    assert as_player[0].can_lock_in is True
+    assert {p.user_id for p in as_player[0].players} == {captain, player}
+    assert all(p.locked_in is False for p in as_player[0].players)
+
+
+async def test_5v5_team_is_only_checked_in_once_every_member_locked_in() -> None:
+    """One captain pressing Lock in must not seed a bracket for five people.
+
+    The captain's word is not evidence that the rest of the roster is at their
+    keyboards — so the registration stays PENDING (unseedable) until the last
+    member locks in, and only then flips to CHECKED_IN.
+    """
+    guild_id, captain, player = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    session = FakeSession()
+    session.current_guild = str(guild_id)
+    team = _team(guild_id=guild_id, captain_user_id=captain)
+    tournament = _tournament(guild_id=guild_id, game_mode=GameMode.SUMMONERS_RIFT_5V5)
+    session.store[Tournament].append(tournament)
+    session.store[Team].append(team)
+    session.store[TeamMember].append(await _member(team=team, user_id=captain))
+    session.store[TeamMember].append(
+        TeamMember(
+            team_id=team.id,
+            user_id=player,
+            guild_id=guild_id,
+            role=TeamMemberRole.PLAYER,
+            status=TeamMemberStatus.ACTIVE,
+        )
+    )
+
+    await service.join_by_code(session, code=_CODE, user_id=captain)
+
+    reg = await service.check_in_self(session, tournament_id=tournament.id, user_id=captain)
+    assert reg.status is RegistrationStatus.PENDING, "one of two locked in is not a ready team"
+
+    entrants = await service.list_entrants(session, tournament_id=tournament.id, user_id=captain)
+    assert entrants[0].can_lock_in is False, "already locked in — no second button"
+    assert {p.user_id for p in entrants[0].players if p.locked_in} == {captain}
+
+    reg = await service.check_in_self(session, tournament_id=tournament.id, user_id=player)
+    assert reg.status is RegistrationStatus.CHECKED_IN

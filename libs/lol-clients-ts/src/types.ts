@@ -130,17 +130,31 @@ export interface CreatedTournamentResponse extends TournamentResponse {
   join_code: string;
 }
 
+/** A roster member of an entry, with their own lock-in state. */
+export interface EntrantPlayerResponse {
+  user_id: string;
+  name: string;
+  locked_in: boolean;
+  is_you: boolean;
+}
+
 /** One entry in a tournament: a team in 5v5, a player (their solo team) in 1v1. */
 export interface EntrantResponse {
   team_id: string;
   name: string;
+  /** The TEAM is ready — true only once every roster member has locked in. */
   locked_in: boolean;
   is_solo: boolean;
   is_you: boolean;
+  /** True while the caller still has to lock THEMSELVES in on this entry. */
   can_lock_in: boolean;
+  players: EntrantPlayerResponse[];
 }
 
-/** Lock-in body. `team_id` is optional: a solo entrant has no team to name. */
+/**
+ * Lock-in body. Omit `team_id` — that means "lock me in", the player path.
+ * Passing one is the admin override that forces a whole team in.
+ */
 export interface CheckInRequest {
   team_id?: string;
 }

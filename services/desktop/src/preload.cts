@@ -158,6 +158,14 @@ export type ReadyBridgeResult =
   | { ok: true; side: string; bothReady: boolean }
   | { ok: false; status: number; detail: string };
 
+/** A roster member of an entry, with their own lock-in state. */
+export interface EntrantPlayerBridge {
+  userId: string;
+  name: string;
+  lockedIn: boolean;
+  isYou: boolean;
+}
+
 /** One tournament entry: a team in 5v5, a player (their solo team) in 1v1. */
 export interface EntrantBridge {
   teamId: string;
@@ -166,6 +174,7 @@ export interface EntrantBridge {
   isSolo: boolean;
   isYou: boolean;
   canLockIn: boolean;
+  players: EntrantPlayerBridge[];
 }
 
 export type EntrantsBridgeResult =

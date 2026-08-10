@@ -435,6 +435,11 @@ class TournamentParticipant(GuildScoped, Base):
     # team membership itself is the source of truth via team_members); this is a
     # convenience denormalization for the "my tournaments" view.
     team_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+    # When this individual player locked in. Lock-in is per PLAYER, not per team:
+    # the captain redeems the code and everyone on the roster is entered, but each
+    # of them still confirms they are actually here. The team's Registration flips
+    # to CHECKED_IN only once every active member has (see `check_in_self`).
+    locked_in_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = created_at_col()
 
 

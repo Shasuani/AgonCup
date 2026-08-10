@@ -114,7 +114,13 @@ export default function TournamentsScreen() {
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <AsyncState loading={loading} error={error}>
-          {tournaments.length === 0 && <div style={{ color: t.textDim, fontSize: 14 }}>You haven&rsquo;t joined any tournaments yet. Paste a join code above.</div>}
+          {tournaments.length === 0 && (
+            <div style={{ color: t.textDim, fontSize: 14, lineHeight: 1.6 }}>
+              You&rsquo;re not in any tournament yet.<br />
+              Paste a join code above — or, in a team tournament, wait for your captain
+              to enter the team. You&rsquo;ll appear here automatically.
+            </div>
+          )}
           {tournaments.map((tr) => {
             const accent = STATUS_ACCENT[tr.status] ?? t.textDim;
             const featured = tr.status === 'running';
@@ -125,16 +131,29 @@ export default function TournamentsScreen() {
                   <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
                     <span style={{ color: t.gold, fontSize: 13, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }}>{'▸'}</span>
                     <div>
-                      <div style={{ fontFamily: t.display, fontSize: 22, color: t.goldBright }}>{tr.name}</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <span style={{ fontFamily: t.display, fontSize: 22, color: t.goldBright }}>{tr.name}</span>
+                        {/* Every tournament on this screen is one you are in — a
+                            teammate never redeemed a code and would otherwise have
+                            no idea why it is listed at all. */}
+                        <span style={{ fontSize: 10, letterSpacing: '.14em', textTransform: 'uppercase', color: t.teal, border: `1px solid ${t.teal}`, padding: '3px 8px', borderRadius: 2 }}>
+                          you&rsquo;re in
+                        </span>
+                      </div>
                       <div style={{ fontSize: 13, color: t.text, marginTop: 6 }}>{meta(tr)}</div>
                     </div>
                   </div>
                   <div style={{ textAlign: 'right' }}>
                     <div style={{ fontSize: 12, letterSpacing: '.14em', textTransform: 'uppercase', color: accent }}>{featured ? '◆ ' : ''}{tr.status.replace('_', '-')}</div>
                     {tr.startAt && <div style={{ fontSize: 13, color: t.textDim, marginTop: 6 }}>starts {new Date(tr.startAt).toLocaleString()}</div>}
+                    <div style={{ fontSize: 11, color: t.textDim, marginTop: 6 }}>{open ? 'hide bracket' : 'show bracket'}</div>
                   </div>
                 </div>
-                {open && <EntrantsPanel tournamentId={tr.id} solo={tr.gameMode === 'aram_1v1'} maxTeams={tr.maxTeams} />}
+                {/* Entrants + Lock in are always visible: they are what a player
+                    came here to do, and behind a collapsed row they read as missing.
+                    Only the bracket — which does not exist until an admin starts —
+                    stays behind the toggle. */}
+                <EntrantsPanel tournamentId={tr.id} solo={tr.gameMode === 'aram_1v1'} maxTeams={tr.maxTeams} />
                 {open && <BracketDetail tournamentId={tr.id} />}
               </div>
             );
@@ -172,6 +191,9 @@ function EntrantsPanel({ tournamentId, solo, maxTeams }: { tournamentId: string;
   const entrants = data ?? [];
   const me = entrants.find((e) => e.isYou);
   const noun = solo ? 'players' : 'teams';
+  // How many of MY teammates still have to press it. Your captain redeemed the code
+  // for all of you, so the thing you actually need to know is who is still missing.
+  const myPending = me ? me.players.filter((p) => !p.lockedIn).length : 0;
   const border = { borderTop: `1px solid ${t.lineSoft}`, padding: '20px 28px' } as const;
 
   if (loading && entrants.length === 0) {
@@ -185,16 +207,44 @@ function EntrantsPanel({ tournamentId, solo, maxTeams }: { tournamentId: string;
         <div style={{ fontSize: 11, letterSpacing: '.16em', textTransform: 'uppercase', color: t.gold }}>
           {entrants.length} / {maxTeams} {noun} · {entrants.filter((e) => e.lockedIn).length} locked in
         </div>
-        {me?.canLockIn && !me.lockedIn && (
+        {me?.canLockIn && (
           <PrimaryButton onClick={lockIn} disabled={busy} style={{ padding: '0 22px', fontSize: 12, height: 34 }}>
             {busy ? 'Locking in…' : 'Lock in'}
           </PrimaryButton>
         )}
-        {me?.lockedIn && <div style={{ fontSize: 13, color: t.teal }}>{me.isSolo ? 'You are locked in ✓' : 'Your team is locked in ✓'}</div>}
-        {me && !me.lockedIn && !me.canLockIn && (
-          <div style={{ fontSize: 13, color: t.textDim }}>Waiting for your captain to lock in</div>
+        {me && !me.canLockIn && (
+          <div style={{ fontSize: 13, color: me.lockedIn ? t.teal : t.gold }}>
+            {me.isSolo
+              ? 'You are locked in ✓'
+              : me.lockedIn
+                ? 'Your team is locked in ✓'
+                : `You are locked in ✓ · waiting on ${myPending} teammate${myPending === 1 ? '' : 's'}`}
+          </div>
         )}
       </div>
+
+      {/* Your own roster. A teammate never redeems the join code — the captain
+          entered them — so this is where they find out they are in, and that the
+          Lock in button above is theirs to press. */}
+      {me && !me.isSolo && me.players.length > 0 && (
+        <div style={{ border: `1px solid ${t.lineSoft}`, background: t.bg, padding: '12px 16px', marginBottom: 14 }}>
+          <div style={{ fontSize: 11, letterSpacing: '.16em', textTransform: 'uppercase', color: t.textDim, marginBottom: 10 }}>
+            Your team · {me.name}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {me.players.map((p) => (
+              <div key={p.userId} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+                <span style={{ color: p.isYou ? t.goldBright : t.text }}>
+                  {p.name}{p.isYou && <span style={{ color: t.textDim, fontSize: 12 }}> · you</span>}
+                </span>
+                <span style={{ color: p.lockedIn ? t.teal : t.textDim, fontSize: 12, letterSpacing: '.1em', textTransform: 'uppercase' }}>
+                  {p.lockedIn ? 'locked in' : 'not ready'}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {entrants.length === 0 && <div style={{ color: t.textDim, fontSize: 14 }}>Nobody has joined yet.</div>}
 
@@ -205,7 +255,11 @@ function EntrantsPanel({ tournamentId, solo, maxTeams }: { tournamentId: string;
               {e.name}{e.isYou && <span style={{ color: t.textDim, fontSize: 12 }}> · you</span>}
             </span>
             <span style={{ fontSize: 12, letterSpacing: '.1em', textTransform: 'uppercase', color: e.lockedIn ? t.teal : t.textDim }}>
-              {e.lockedIn ? 'locked in' : 'not ready'}
+              {e.lockedIn
+                ? 'locked in'
+                : e.isSolo || e.players.length === 0
+                  ? 'not ready'
+                  : `${e.players.filter((p) => p.lockedIn).length}/${e.players.length} locked in`}
             </span>
           </div>
         ))}

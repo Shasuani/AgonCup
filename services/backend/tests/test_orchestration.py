@@ -25,7 +25,7 @@ from lol_core import FailoverAction, LobbyEvent
 from lol_realtime import CreateLobbyCommand, PromoteHostCommand
 from lol_schemas.enums import LobbyPhase
 
-from app.models import ClientSession, Match, MatchLobby
+from app.models import ClientSession, Match, MatchLobby, RiotAccount, Team, TeamMember
 from app.orchestration import service
 from app.orchestration.service import (
     RecordingPublisher,
@@ -75,6 +75,11 @@ class FakeSession:
             Match: [],
             MatchLobby: [],
             ClientSession: [],
+            # Invite ordering joins the roster to its teams and the summonerId
+            # an LCU invite actually takes.
+            RiotAccount: [],
+            Team: [],
+            TeamMember: [],
         }
         self.guild_id = guild_id
 
@@ -139,7 +144,7 @@ def _model_of(entity: Any) -> type:
     if hasattr(entity, "entity"):
         return entity.entity
     name = getattr(entity, "name", None)
-    for model in (Match, MatchLobby, ClientSession):
+    for model in (Match, MatchLobby, ClientSession, RiotAccount, Team, TeamMember):
         if model.__tablename__ == name:
             return model
     return entity
@@ -179,7 +184,13 @@ def _col_name(col: Any) -> str:
 def _matches(row: Any, crit: dict[str, Any]) -> bool:
     for key, val in crit.items():
         actual = getattr(row, key, None)
-        if str(actual) != str(val):
+        # `col.in_([...])` binds a sequence rather than a scalar — the invite
+        # ordering resolves teams and summonerIds that way, and treating the
+        # list as a scalar silently matched nothing.
+        if isinstance(val, (list, tuple, set, frozenset)):
+            if str(actual) not in {str(v) for v in val}:
+                return False
+        elif str(actual) != str(val):
             return False
     return True
 
@@ -242,6 +253,11 @@ def _seeded_session(*, opt_ins: int, opt_outs: int = 0) -> tuple[FakeSession, uu
         session.store[ClientSession].append(
             _client_session(match_id, puuid, host_opt_in=i < opt_ins)
         )
+        # An LCU invite takes a numeric summonerId, so an unverified player is
+        # simply not invitable — every roster here is verified.
+        session.store[RiotAccount].append(
+            RiotAccount(user_id=uuid.uuid4(), puuid=puuid, summoner_id=f"sid-{i}")
+        )
     server_seed = derive_server_seed(match_id, server_secret=_SECRET)
     roster = roster_from_sessions(session.store[ClientSession])
     succession = list(seed_host_succession(roster, server_seed=server_seed))
@@ -296,7 +312,14 @@ async def test_initialize_lobby_designates_host_and_publishes_create_invite() ->
     create = pub.published[0].payload
     assert isinstance(create, CreateLobbyCommand)
     assert create.host_epoch == 0
-    assert set(create.spec.invitee_puuids) == set(succession)
+    # Everyone on the roster EXCEPT the host, who is already in the lobby they
+    # just created. This used to be an empty list: the spec carried no summoner
+    # ids at all, so the host created a lobby and invited nobody.
+    assert set(create.spec.invitee_puuids) == set(succession) - {result.host_puuid}
+    # An LCU invite is keyed on summonerId, so the spec must carry them too —
+    # a puuid-only payload is not something the client can act on.
+    assert create.spec.invitee_summoner_ids
+    assert len(create.spec.invitee_summoner_ids) == len(create.spec.invitee_puuids)
 
 
 def test_default_lobby_credentials_are_deterministic() -> None:
@@ -675,3 +698,67 @@ async def test_failover_in_game_is_hard_noop() -> None:
     )
     assert result.action == FailoverAction.NOOP_INGAME
     assert pub.published == []
+
+
+# ---------------------------------------------------------------------------
+# order_invitees (pure) — the order a custom lobby fills up in
+# ---------------------------------------------------------------------------
+def _candidate(
+    name: str, team: uuid.UUID | None, *, captain: bool = False
+) -> service.InviteCandidate:
+    return service.InviteCandidate(
+        puuid=name, user_id=uuid.uuid4(), team_id=team, is_captain=captain
+    )
+
+
+def test_invite_order_is_own_team_then_rival_captain_then_the_rest() -> None:
+    """Ten invites landing in roster order is how people end up in the wrong lobby.
+
+    The host's own side fills first, then the one person on the other team worth
+    talking to, then their roster.
+    """
+    ours, theirs = uuid.uuid4(), uuid.uuid4()
+    candidates = [
+        _candidate("rival-3", theirs),
+        _candidate("mate-1", ours),
+        _candidate("rival-captain", theirs, captain=True),
+        _candidate("host", ours, captain=True),
+        _candidate("mate-2", ours),
+        _candidate("rival-4", theirs),
+    ]
+
+    ordered = [c.puuid for c in service.order_invitees(candidates, host_puuid="host")]
+
+    assert ordered[0:2] == ["mate-1", "mate-2"], "own side first, in roster order"
+    assert ordered[2] == "rival-captain", "the opposing captain before their roster"
+    assert ordered[3:] == ["rival-3", "rival-4"]
+    assert "host" not in ordered, "you cannot invite yourself"
+
+
+def test_invite_order_keeps_players_whose_team_is_unknown() -> None:
+    """A missing roster row must not quietly cost somebody their game."""
+    ours = uuid.uuid4()
+    candidates = [
+        _candidate("stray", None),
+        _candidate("mate", ours),
+        _candidate("host", ours, captain=True),
+    ]
+
+    ordered = [c.puuid for c in service.order_invitees(candidates, host_puuid="host")]
+
+    assert ordered == ["mate", "stray"], "unknown side goes last, but still goes"
+
+
+def test_invite_order_survives_a_host_with_no_resolvable_team() -> None:
+    """Failover can hand the lobby to someone whose roster row is missing."""
+    a, b = uuid.uuid4(), uuid.uuid4()
+    candidates = [
+        _candidate("host", None),
+        _candidate("p-b", b, captain=True),
+        _candidate("p-a", a),
+    ]
+
+    ordered = [c.puuid for c in service.order_invitees(candidates, host_puuid="host")]
+
+    assert set(ordered) == {"p-a", "p-b"}, "everyone else is still invited"
+    assert ordered[0] == "p-b", "captains still lead their side"

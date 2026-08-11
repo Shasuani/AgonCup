@@ -131,7 +131,7 @@ def lobby_credentials(
         f"**{tournament_name}** — your client will create this lobby and invite "
         "everyone. If that does not happen, make a custom game with the name and "
         "password below and the others can join it directly.",
-        color=EmbedColor.INFO,
+        color=EmbedColor.DEFAULT,
         fields=fields,
     )
 

@@ -529,3 +529,86 @@ async def test_discord_admin_role_sync_runs_under_rls() -> None:
     finally:
         await owner_engine.dispose()
         await app_engine.dispose()
+
+
+async def test_hidden_tournaments_drop_out_of_my_list_per_user_under_rls() -> None:
+    """``hide_tournament`` + ``list_my_tournaments`` against the real policies.
+
+    The dismissal is a subquery (``Tournament.id.not_in(select(hides))``), which the
+    offline fake store cannot model — so the half of the feature that actually makes
+    the button do something is only provable here. Three things must hold:
+
+      1. hiding removes the tournament from **that** user's list;
+      2. it removes it from **nobody else's** — a dismissal is a view, not a delete,
+         and the tournament row itself survives untouched;
+      3. the ``tournament_hides`` row is guild-isolated like every other
+         guild-scoped table, so a tenant with no GUC set reads zero.
+    """
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.tournaments.service import hide_tournament, list_my_tournaments
+
+    owner_engine = create_async_engine(OWNER_URL)
+    app_engine = create_async_engine(APP_URL)
+    try:
+        async with owner_engine.begin() as owner:
+            g_a = await _seed_guild(owner, 960001)
+            # Only a terminal tournament may be hidden.
+            await owner.execute(
+                text("UPDATE tournaments SET status = 'completed' WHERE id = :t"),
+                {"t": g_a.tournament_id},
+            )
+            other_user_id = (
+                await owner.execute(
+                    text(
+                        "INSERT INTO users (discord_user_id, display_name) "
+                        "VALUES (:d, :n) RETURNING id"
+                    ),
+                    {"d": 960002, "n": "Fellow Entrant"},
+                )
+            ).scalar_one()
+            # Both users are solo participants in the same finished tournament.
+            for uid in (g_a.admin_user_id, other_user_id):
+                await owner.execute(
+                    text(
+                        "INSERT INTO tournament_participants (tournament_id, user_id, guild_id) "
+                        "VALUES (:t, :u, :g)"
+                    ),
+                    {"t": g_a.tournament_id, "u": uid, "g": g_a.guild_id},
+                )
+
+        session_factory = async_sessionmaker(app_engine, expire_on_commit=False)
+        async with session_factory() as session:
+            await _set_current_guild(await session.connection(), g_a.guild_id)
+
+            mine = await list_my_tournaments(session, user_id=g_a.admin_user_id)
+            assert [t.id for t in mine] == [g_a.tournament_id]
+
+            await hide_tournament(
+                session, tournament_id=g_a.tournament_id, user_id=g_a.admin_user_id
+            )
+
+            assert await list_my_tournaments(session, user_id=g_a.admin_user_id) == []
+            still_there = await list_my_tournaments(session, user_id=other_user_id)
+            assert [t.id for t in still_there] == [g_a.tournament_id], (
+                "one entrant clearing their own list must not erase anyone else's"
+            )
+            await session.commit()
+
+        # The tournament itself survived: a dismissal is never a delete.
+        async with owner_engine.begin() as owner:
+            assert (
+                await owner.execute(
+                    text("SELECT count(*) FROM tournaments WHERE id = :t"),
+                    {"t": g_a.tournament_id},
+                )
+            ).scalar_one() == 1
+
+        # Guild isolation: no acting guild set -> the hide row is invisible.
+        async with app_engine.connect() as conn, conn.begin():
+            assert (
+                await conn.execute(text("SELECT count(*) FROM tournament_hides"))
+            ).scalar_one() == 0
+    finally:
+        await owner_engine.dispose()
+        await app_engine.dispose()

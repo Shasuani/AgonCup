@@ -40,11 +40,19 @@ from app.models import (
     Team,
     TeamMember,
     Tournament,
+    TournamentHide,
     TournamentParticipant,
     User,
 )
 
 MAX_TEAMS_HARD_CAP = 16
+
+#: A tournament in one of these states will never be played again, so a player is
+#: allowed to clear it off their own "my tournaments" list (:func:`hide_tournament`).
+#: Everything else is still live — hiding it would remove their own way back to it.
+TERMINAL_STATUSES: frozenset[TournamentStatus] = frozenset(
+    {TournamentStatus.COMPLETED, TournamentStatus.CANCELLED}
+)
 
 #: Series lengths a tournament may pick: single game, best-of-3, best-of-5.
 ALLOWED_BEST_OF: frozenset[int] = frozenset({1, 3, 5})
@@ -96,6 +104,10 @@ class NotTeamCaptainError(TournamentError):
 
 class RegistrationNotOpenError(TournamentError):
     """Enrolment was attempted before the scheduled ``registration_opens_at``."""
+
+
+class TournamentNotFinishedError(TournamentError):
+    """A player tried to clear a tournament that is still live off their list."""
 
 
 def _utcnow() -> datetime:
@@ -578,6 +590,10 @@ async def list_my_tournaments(session: AsyncSession, *, user_id: uuid.UUID) -> l
 
     Solo enrolment lands a ``TournamentParticipant`` row; team enrolment registers
     the team (a ``Registration``) — so a member sees their team's tournaments too.
+
+    Tournaments the user has dismissed (:func:`hide_tournament`) are filtered out.
+    That is a per-user view, not a deletion: another entrant's list is untouched
+    and an admin still sees every tournament in the guild.
     """
     # tournament ids where the user's active team is registered
     via_team = (
@@ -592,14 +608,66 @@ async def list_my_tournaments(session: AsyncSession, *, user_id: uuid.UUID) -> l
     via_solo = select(TournamentParticipant.tournament_id).where(
         TournamentParticipant.user_id == user_id
     )
+    # tournament ids this user has cleared off their own list
+    hidden = select(TournamentHide.tournament_id).where(TournamentHide.user_id == user_id)
     rows = (
         await session.execute(
             select(Tournament)
-            .where(or_(Tournament.id.in_(via_team), Tournament.id.in_(via_solo)))
+            .where(
+                or_(Tournament.id.in_(via_team), Tournament.id.in_(via_solo)),
+                Tournament.id.not_in(hidden),
+            )
             .order_by(Tournament.created_at.desc())
         )
     ).scalars()
     return list(rows)
+
+
+async def hide_tournament(
+    session: AsyncSession, *, tournament_id: uuid.UUID, user_id: uuid.UUID
+) -> None:
+    """Clear a finished tournament off **this user's** ``/mine`` list (PLAN.md §3.1).
+
+    Not a deletion. The tournament, its bracket and its results stay exactly as
+    they are for every other entrant and for the admin — this only writes a
+    ``TournamentHide`` row that :func:`list_my_tournaments` filters on.
+
+    Only a terminal tournament (completed / cancelled) may be hidden: dismissing
+    one that is still open or running would take away the caller's own route back
+    to the lock-in button and the bracket. Idempotent — hiding twice is a no-op,
+    so a double-click cannot trip the unique constraint.
+
+    Raises :class:`TournamentNotFoundError` if the id is not in the acting guild
+    (RLS makes a foreign guild's tournament indistinguishable from a missing one)
+    and :class:`TournamentNotFinishedError` if it is still live.
+    """
+    tournament = (
+        await session.execute(select(Tournament).where(Tournament.id == tournament_id))
+    ).scalar_one_or_none()
+    if tournament is None:
+        raise TournamentNotFoundError(str(tournament_id))
+    if tournament.status not in TERMINAL_STATUSES:
+        raise TournamentNotFinishedError(str(tournament.status))
+
+    existing = (
+        await session.execute(
+            select(TournamentHide).where(
+                TournamentHide.tournament_id == tournament_id,
+                TournamentHide.user_id == user_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return
+
+    session.add(
+        TournamentHide(
+            guild_id=await _current_guild(session),
+            tournament_id=tournament_id,
+            user_id=user_id,
+        )
+    )
+    await session.flush()
 
 
 @dataclass(frozen=True)

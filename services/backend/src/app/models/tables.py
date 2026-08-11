@@ -443,6 +443,44 @@ class TournamentParticipant(GuildScoped, Base):
     created_at: Mapped[datetime] = created_at_col()
 
 
+class TournamentHide(GuildScoped, Base):
+    """One user's "stop showing me this tournament" (PLAN.md §3.1).
+
+    A player's ``/tournaments/mine`` list only ever grows: every tournament they
+    ever entered stays in it forever, and after a season of them the list is
+    unreadable. This row is the per-user dismissal — it hides the tournament from
+    *that* user's list and nobody else's. It is deliberately NOT a deletion: the
+    tournament, its bracket and its results are the guild's record, and an admin
+    still sees everything.
+
+    Only a **terminal** tournament (completed / cancelled) may be hidden — the
+    service enforces it. Hiding one you still have to play would silently remove
+    your own way back to it.
+
+    Guild-scoped (RLS) + a same-guild composite FK to the tournament, so the row
+    dies with the tournament and can never point at another guild's.
+    ``(tournament_id, user_id)`` is unique: hiding twice is idempotent.
+    """
+
+    __tablename__ = "tournament_hides"
+    __table_args__ = (
+        UniqueConstraint("tournament_id", "user_id", name="uq_tournament_hides_tournament_user"),
+        ForeignKeyConstraint(
+            ["tournament_id", "guild_id"],
+            ["tournaments.id", "tournaments.guild_id"],
+            name="fk_tournament_hides_tournament_guild",
+            ondelete="CASCADE",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    tournament_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = created_at_col()
+
+
 class Match(GuildScoped, Base):
     __tablename__ = "matches"
     __table_args__ = (
@@ -792,6 +830,7 @@ GUILD_ISOLATED_TABLES: tuple[str, ...] = (
     "team_members",
     "tournaments",
     "tournament_participants",
+    "tournament_hides",
     "registrations",
     "matches",
     "match_lobbies",

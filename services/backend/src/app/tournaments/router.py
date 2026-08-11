@@ -227,6 +227,41 @@ async def list_my_tournaments(
     return [_to_response(t) for t in rows]
 
 
+@router.delete(
+    "/{tournament_id}/mine",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Clear a finished tournament off the caller's own list",
+)
+async def hide_my_tournament(
+    tournament_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    session: Annotated[AsyncSession, Depends(get_tenant_session)],
+) -> None:
+    """Per-user dismissal — NOT a delete.
+
+    ``/mine`` only ever grows, so after a season the list a player actually cares
+    about is buried. This drops one tournament from *the caller's* view; every
+    other entrant's list and the guild's record are untouched, and no admin role
+    is needed (you are only editing your own screen).
+
+    Restricted to completed/cancelled tournaments: hiding a live one would remove
+    the caller's own way back to lock-in and the bracket.
+    """
+    try:
+        await service.hide_tournament(
+            session,
+            tournament_id=tournament_id,
+            user_id=uuid.UUID(principal.user_id),
+        )
+    except service.TournamentNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="tournament not found") from exc
+    except service.TournamentNotFinishedError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail="only a completed or cancelled tournament can be removed from your list",
+        ) from exc
+
+
 @router.get(
     "/by-code/{code}",
     response_model=TournamentResponse,

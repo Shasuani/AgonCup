@@ -34,6 +34,7 @@ export interface LolBridge {
   signOut(): Promise<{ ok: boolean }>;
   listMyTournaments(): Promise<Res<{ tournaments: Tournament[] }>>;
   joinTournament(code: string, teamId?: string): Promise<Res<{ tournament: Tournament }>>;
+  hideTournament(tournamentId: string): Promise<Res<Record<string, never>>>;
   tournamentBracket(tournamentId: string): Promise<Res<{ tournament: Tournament; matches: BracketMatch[] }>>;
   lookupTournament(code: string): Promise<Res<{ tournament: Tournament }>>;
   tournamentEntrants(tournamentId: string): Promise<Res<{ entrants: Entrant[] }>>;

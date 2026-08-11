@@ -48,6 +48,7 @@ import { listMyAccounts, type ListAccountsResult } from "./accounts/listAccounts
 import { unlinkAccount } from "./accounts/unlinkAccount.js";
 import {
   getBracket,
+  hideTournament,
   joinTournamentByCode,
   listEntrants,
   listMyTournaments,
@@ -809,6 +810,15 @@ async function bootstrap(): Promise<void> {
     withSession((t) =>
       joinTournamentByCode(
         { accessToken: t, code: args.code, ...(args.teamId ? { teamId: args.teamId } : {}) },
+        { backendUrl: backendBaseUrl() },
+      ),
+    ),
+  );
+  // Per-user dismissal — clears a finished tournament off THIS user's list only.
+  ipcMain.handle("lol:tournament-hide", (_event, args: { tournamentId: string }) =>
+    withSession((t) =>
+      hideTournament(
+        { accessToken: t, tournamentId: args.tournamentId },
         { backendUrl: backendBaseUrl() },
       ),
     ),

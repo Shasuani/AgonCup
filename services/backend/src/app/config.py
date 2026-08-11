@@ -71,6 +71,12 @@ class Settings(BaseSettings):
         description="Match-ready window (edge-cases §8.5): seconds a team has to ready "
         "up once both teams are present, before an unready side forfeits by walkover.",
     )
+    stale_tournament_hours: int = Field(
+        default=48,
+        description="Hours past its last scheduled moment (start_at / registration_opens_at, "
+        "else creation) after which a tournament that never reached a terminal state is "
+        "auto-cancelled, so abandoned ones stop cluttering every entrant's list.",
+    )
 
     # --- Auth: JWT ----------------------------------------------------------
     # NOTE: placeholder secret only. Provided via the secrets manager in real

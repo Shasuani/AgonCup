@@ -51,7 +51,7 @@ async def _scheduler_loop(interval_seconds: int) -> None:
     from app.notifications import RedisNotificationPublisher
     from app.realtime.redis_client import get_redis
     from app.tournaments.readiness import run_readiness_tick
-    from app.tournaments.scheduler import run_scheduler_tick
+    from app.tournaments.scheduler import run_expiry_tick, run_scheduler_tick
 
     settings = get_settings()
     log = get_logger("app.scheduler")
@@ -86,6 +86,22 @@ async def _scheduler_loop(interval_seconds: int) -> None:
                 raise
             except Exception:
                 log.exception("match_readiness_tick_failed")
+            # Abandoned tournaments: cancel the ones that were never finished, so
+            # they stop sitting in every entrant's list looking live (§3.2).
+            try:
+                async with maker() as session, session.begin():
+                    expired = await run_expiry_tick(
+                        session,
+                        publisher,
+                        now=now,
+                        after_hours=settings.stale_tournament_hours,
+                    )
+                if expired:
+                    log.info("tournament_expiry_tick", cancelled=expired)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("tournament_expiry_tick_failed")
     finally:
         await engine.dispose()
 

@@ -9,6 +9,10 @@ tournaments forward on wall-clock time:
 * **Starting** — a tournament whose ``start_at`` has passed gets a one-time
   "starting" announcement (guarded by ``start_announced_at``); the admin still
   starts the bracket manually (a real start needs checked-in teams).
+* **Expiry** (:func:`run_expiry_tick`) — a tournament that never reached a
+  terminal state and has nothing left on its calendar is auto-``CANCELLED`` after
+  ``stale_tournament_hours``, so abandoned ones stop sitting in every entrant's
+  list pretending to be live.
 
 This is a **cross-tenant** job, so it must run on a session that can see every
 guild's rows — i.e. the OWNER connection (RLS bypassed), NOT the request path's
@@ -20,7 +24,7 @@ tested with a fake session. Idempotent: the state transitions (DRAFT→OPEN,
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from lol_schemas.enums import TournamentStatus
 from sqlalchemy import select
@@ -28,6 +32,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Tournament
 from app.notifications import NotificationPublisher, publish_tournament_announced
+
+#: States a tournament can rot in. Everything else is terminal — already done with.
+_LIVE_STATUSES = (
+    TournamentStatus.DRAFT,
+    TournamentStatus.OPEN,
+    TournamentStatus.CHECK_IN,
+    TournamentStatus.RUNNING,
+)
 
 
 def _fmt(dt: datetime) -> str:
@@ -107,3 +119,79 @@ async def run_scheduler_tick(
 
     await session.flush()
     return opened, started
+
+
+def _stale_after(t: Tournament) -> datetime | None:
+    """The moment a tournament stops having any scheduled future and starts rotting.
+
+    The **latest** of everything that was ever meant to happen: creation, when
+    registration was due to open, and the scheduled kickoff. Taking the maximum is
+    what makes the sweep safe — a tournament created today for a kickoff next month
+    has a reference date next month, so it is untouchable until the expiry window
+    has run from the kickoff it was actually scheduled for. Only one with nothing
+    left on its calendar can go stale.
+
+    ``None`` when there is no date at all to measure from (an unflushed row whose
+    ``created_at`` server default has not landed yet) — the caller then leaves it
+    alone rather than guessing.
+    """
+    candidates = [d for d in (t.created_at, t.registration_opens_at, t.start_at) if d is not None]
+    return max(candidates) if candidates else None
+
+
+async def run_expiry_tick(
+    session: AsyncSession,
+    publisher: NotificationPublisher,
+    *,
+    now: datetime,
+    after_hours: int,
+) -> int:
+    """Auto-cancel tournaments that were never finished. Returns the count.
+
+    A tournament that is created and then abandoned — nobody joins, the admin
+    forgets, the bracket never starts — sits in every entrant's "my tournaments"
+    list forever, looking live. This is the sweep that closes them out: once
+    ``after_hours`` have passed since the last thing that was ever scheduled for it
+    (see :func:`_stale_after`), a non-terminal tournament flips to ``CANCELLED``
+    and the guild is told once.
+
+    Cancel, never delete: the row, its registrations and any results it did produce
+    stay for the admin's record. Players clear it off their own list with the
+    per-user hide (``DELETE /tournaments/{id}/mine``) — dead tournaments do not
+    vanish behind anyone's back.
+
+    Idempotent by construction: the status flip takes the row out of the query, so
+    a tournament is cancelled at most once no matter how often the loop ticks.
+    """
+    cutoff = timedelta(hours=after_hours)
+    candidates = (
+        (await session.execute(select(Tournament).where(Tournament.status.in_(_LIVE_STATUSES))))
+        .scalars()
+        .all()
+    )
+
+    cancelled = 0
+    for t in candidates:
+        # Re-checked in Python (not SQL): the reference date is a max() over three
+        # nullable columns, and the fake session the unit tests run on cannot model
+        # that as a predicate.
+        if t.status not in _LIVE_STATUSES:
+            continue
+        reference = _stale_after(t)
+        if reference is None or now - reference <= cutoff:
+            continue
+        t.status = TournamentStatus.CANCELLED
+        await publish_tournament_announced(
+            publisher,
+            origin_guild_id=str(t.guild_id),
+            tournament_name=t.name,
+            headline="Cancelled — abandoned",
+            detail=(
+                f"No result after {after_hours}h, so it was closed automatically. "
+                "Create a new tournament to run it again."
+            ),
+        )
+        cancelled += 1
+
+    await session.flush()
+    return cancelled

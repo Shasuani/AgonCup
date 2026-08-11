@@ -19,9 +19,14 @@ import uuid
 from typing import Any
 
 import pytest
-from lol_schemas.enums import MatchResultState, MatchStatus, ResultDecidedBy
+from lol_schemas.enums import (
+    MatchResultState,
+    MatchStatus,
+    ResultDecidedBy,
+    TournamentStatus,
+)
 
-from app.models import Match, MatchResult
+from app.models import Match, MatchResult, Tournament
 from app.results import service
 from app.results.service import (
     MatchNotFoundError,
@@ -44,6 +49,12 @@ class _Result:
     def scalar_one_or_none(self) -> Any:
         return self._rows[0] if self._rows else None
 
+    def scalars(self) -> _Result:
+        return self
+
+    def all(self) -> list[Any]:
+        return self._rows
+
 
 class FakeSession:
     """Dict-backed AsyncSession stand-in covering the results code paths.
@@ -53,7 +64,7 @@ class FakeSession:
     """
 
     def __init__(self) -> None:
-        self.store: dict[type, list[Any]] = {Match: [], MatchResult: []}
+        self.store: dict[type, list[Any]] = {Match: [], MatchResult: [], Tournament: []}
 
     def add(self, obj: Any) -> None:
         if getattr(obj, "id", None) is None:
@@ -113,6 +124,11 @@ def _seed_bracket(n: int) -> tuple[FakeSession, uuid.UUID, uuid.UUID, list[uuid.
     teams = [uuid.uuid4() for _ in range(n)]
     session = FakeSession()
     session.add_all(plan_bracket_matches(tournament_id=tid, guild_id=gid, seeded_team_ids=teams))
+    # A started bracket belongs to a RUNNING tournament — the state the last
+    # decided match is supposed to move off.
+    session.store[Tournament].append(
+        Tournament(id=tid, guild_id=gid, name="Cup", status=TournamentStatus.RUNNING)
+    )
     return session, tid, gid, teams
 
 
@@ -515,3 +531,48 @@ async def test_mark_disputed_creates_disputed_result_no_winner() -> None:
     # The match is NOT stamped completed — it waits for an admin override.
     assert match.status != MatchStatus.COMPLETED
     assert session.store[MatchResult][0].state == MatchResultState.DISPUTED
+
+
+async def test_the_final_closes_the_tournament() -> None:
+    """A crowned champion should not leave the tournament reading as live.
+
+    Advancement stops at the final by design (there is no successor slot), so
+    nothing used to move the tournament off RUNNING — the bracket was fully
+    decided and the status still said the event was in progress.
+    """
+    session, tid, _, _ = _seed_bracket(2)
+    final = _match_at(session, 1, 0)
+    tournament = session.store[Tournament][0]
+
+    await record_winner(session, match_id=final.id, winner_team_id=final.team_a)
+
+    assert tournament.status is TournamentStatus.COMPLETED
+
+
+async def test_a_tournament_with_matches_left_stays_running() -> None:
+    session, _, _, _ = _seed_bracket(4)
+    tournament = session.store[Tournament][0]
+    first = _match_at(session, 1, 0)
+
+    await record_winner(session, match_id=first.id, winner_team_id=first.team_a)
+
+    assert tournament.status is TournamentStatus.RUNNING, "the other half has not played"
+
+
+async def test_replaying_the_final_repairs_a_tournament_left_running() -> None:
+    """Re-recording the same winner is an admin's only no-op — make it heal.
+
+    A bracket decided by an earlier build sits at RUNNING forever with no
+    command to fix it: the winner cannot be changed, and there is nothing left
+    to play. Replaying the decided result closes it.
+    """
+    session, _, _, _ = _seed_bracket(2)
+    final = _match_at(session, 1, 0)
+    tournament = session.store[Tournament][0]
+
+    await record_winner(session, match_id=final.id, winner_team_id=final.team_a)
+    tournament.status = TournamentStatus.RUNNING  # as an older build left it
+
+    await record_winner(session, match_id=final.id, winner_team_id=final.team_a)
+
+    assert tournament.status is TournamentStatus.COMPLETED

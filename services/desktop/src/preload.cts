@@ -134,6 +134,10 @@ export type JoinTournamentBridgeResult =
   | { ok: true; tournament: TournamentBridge }
   | { ok: false; status: number; detail: string };
 
+export type HideTournamentBridgeResult =
+  | { ok: true }
+  | { ok: false; status: number; detail: string };
+
 /** One bracket match (team names resolved). */
 export interface BracketMatchBridge {
   id: string;
@@ -287,6 +291,8 @@ export interface LolBridge {
   listMyTournaments(): Promise<ListTournamentsBridgeResult>;
   /** Join a tournament by its code. `teamId` picks the captained team for 5v5. */
   joinTournament(code: string, teamId?: string): Promise<JoinTournamentBridgeResult>;
+  /** Clear a FINISHED tournament off this user's own list (per-user, not a delete). */
+  hideTournament(tournamentId: string): Promise<HideTournamentBridgeResult>;
   /** The tournament's bracket (matches with team names). */
   tournamentBracket(tournamentId: string): Promise<BracketBridgeResult>;
   /** Look up a join code without enrolling (to learn the game mode first). */
@@ -346,6 +352,8 @@ const bridge: LolBridge = {
     ipcRenderer.invoke("lol:tournaments-mine") as Promise<ListTournamentsBridgeResult>,
   joinTournament: (code, teamId) =>
     ipcRenderer.invoke("lol:tournament-join", { code, teamId }) as Promise<JoinTournamentBridgeResult>,
+  hideTournament: (tournamentId) =>
+    ipcRenderer.invoke("lol:tournament-hide", { tournamentId }) as Promise<HideTournamentBridgeResult>,
   tournamentBracket: (tournamentId) =>
     ipcRenderer.invoke("lol:tournament-bracket", { tournamentId }) as Promise<BracketBridgeResult>,
   lookupTournament: (code) =>

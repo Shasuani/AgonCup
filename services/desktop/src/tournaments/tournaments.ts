@@ -32,6 +32,10 @@ export type JoinTournamentResult =
   | { readonly ok: true; readonly tournament: Tournament }
   | { readonly ok: false; readonly status: number; readonly detail: string };
 
+export type HideTournamentResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly status: number; readonly detail: string };
+
 export interface AuthedArgs {
   /** Access JWT for the signed-in user (sent as `Authorization: Bearer …`). */
   readonly accessToken: string;
@@ -105,6 +109,49 @@ export async function listMyTournaments(
     ok: false,
     status: res.status,
     detail: detailOf(json, `Could not load your tournaments (HTTP ${res.status}).`),
+  };
+}
+
+/** Clear a finished tournament off the caller's own list (DELETE /{id}/mine).
+ *
+ * Per-user, and NOT a delete: the tournament, its bracket and its results stay
+ * exactly as they are for every other entrant and for the admin. The backend
+ * accepts it only for a completed/cancelled tournament — hiding a live one would
+ * take away the player's own route back to lock-in and the bracket — so a `409`
+ * here means "that one is still running", not a bug.
+ */
+export async function hideTournament(
+  args: AuthedArgs & { tournamentId: string },
+  deps: HttpDeps = {},
+): Promise<HideTournamentResult> {
+  const doFetch = deps.fetch ?? fetch;
+  const backendUrl = resolveBackendUrl(deps.backendUrl);
+
+  let res: Response;
+  try {
+    res = await doFetch(
+      `${backendUrl}/api/v1/tournaments/${encodeURIComponent(args.tournamentId)}/mine`,
+      { method: "DELETE", headers: { Authorization: `Bearer ${args.accessToken}` } },
+    );
+  } catch (err) {
+    return { ok: false, status: 0, detail: `Backend unreachable: ${String(err)}` };
+  }
+
+  // 204 No Content: there is no body to parse on success.
+  if (res.ok) {
+    return { ok: true };
+  }
+
+  let json: unknown;
+  try {
+    json = await res.json();
+  } catch {
+    json = undefined;
+  }
+  return {
+    ok: false,
+    status: res.status,
+    detail: detailOf(json, `Could not remove the tournament (HTTP ${res.status}).`),
   };
 }
 

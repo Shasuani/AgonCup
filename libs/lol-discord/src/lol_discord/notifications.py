@@ -105,6 +105,37 @@ def registration_verified(
     )
 
 
+def lobby_credentials(
+    *,
+    lobby_name: str,
+    lobby_password: str,
+    tournament_name: str,
+    opponent_name: str | None = None,
+) -> dict[str, Any]:
+    """The custom-lobby name + password for a match, DMed to the people who need it.
+
+    The client normally creates the lobby and invites everyone, but that is an
+    LCU write and writes fail: opted out, kill-switch, League not running, a
+    patch that moved the endpoint. When it does, whoever is waiting has nothing
+    to act on. These are the same backend-owned credentials the client would
+    have used, so a lobby made by hand is the *same* lobby.
+    """
+    fields: list[EmbedField] = [
+        _field("Lobby name", f"`{lobby_name}`", inline=True),
+        _field("Password", f"`{lobby_password}`", inline=True),
+    ]
+    if opponent_name:
+        fields.append(_field("Opponent", opponent_name))
+    return build_embed(
+        "Your match lobby",
+        f"**{tournament_name}** — your client will create this lobby and invite "
+        "everyone. If that does not happen, make a custom game with the name and "
+        "password below and the others can join it directly.",
+        color=EmbedColor.DEFAULT,
+        fields=fields,
+    )
+
+
 def registration_approved(*, tournament_name: str, team_name: str) -> dict[str, Any]:
     """A team's tournament registration was approved (§3.2).
 
@@ -336,6 +367,7 @@ def build_central_feed_item(
 
 
 __all__ = [
+    "lobby_credentials",
     "registration_code",
     "registration_verified",
     "team_created",

@@ -40,11 +40,19 @@ from app.models import (
     Team,
     TeamMember,
     Tournament,
+    TournamentHide,
     TournamentParticipant,
     User,
 )
 
 MAX_TEAMS_HARD_CAP = 16
+
+#: A tournament in one of these states will never be played again, so a player is
+#: allowed to clear it off their own "my tournaments" list (:func:`hide_tournament`).
+#: Everything else is still live — hiding it would remove their own way back to it.
+TERMINAL_STATUSES: frozenset[TournamentStatus] = frozenset(
+    {TournamentStatus.COMPLETED, TournamentStatus.CANCELLED}
+)
 
 #: Series lengths a tournament may pick: single game, best-of-3, best-of-5.
 ALLOWED_BEST_OF: frozenset[int] = frozenset({1, 3, 5})
@@ -96,6 +104,10 @@ class NotTeamCaptainError(TournamentError):
 
 class RegistrationNotOpenError(TournamentError):
     """Enrolment was attempted before the scheduled ``registration_opens_at``."""
+
+
+class TournamentNotFinishedError(TournamentError):
+    """A player tried to clear a tournament that is still live off their list."""
 
 
 def _utcnow() -> datetime:
@@ -578,6 +590,10 @@ async def list_my_tournaments(session: AsyncSession, *, user_id: uuid.UUID) -> l
 
     Solo enrolment lands a ``TournamentParticipant`` row; team enrolment registers
     the team (a ``Registration``) — so a member sees their team's tournaments too.
+
+    Tournaments the user has dismissed (:func:`hide_tournament`) are filtered out.
+    That is a per-user view, not a deletion: another entrant's list is untouched
+    and an admin still sees every tournament in the guild.
     """
     # tournament ids where the user's active team is registered
     via_team = (
@@ -592,14 +608,66 @@ async def list_my_tournaments(session: AsyncSession, *, user_id: uuid.UUID) -> l
     via_solo = select(TournamentParticipant.tournament_id).where(
         TournamentParticipant.user_id == user_id
     )
+    # tournament ids this user has cleared off their own list
+    hidden = select(TournamentHide.tournament_id).where(TournamentHide.user_id == user_id)
     rows = (
         await session.execute(
             select(Tournament)
-            .where(or_(Tournament.id.in_(via_team), Tournament.id.in_(via_solo)))
+            .where(
+                or_(Tournament.id.in_(via_team), Tournament.id.in_(via_solo)),
+                Tournament.id.not_in(hidden),
+            )
             .order_by(Tournament.created_at.desc())
         )
     ).scalars()
     return list(rows)
+
+
+async def hide_tournament(
+    session: AsyncSession, *, tournament_id: uuid.UUID, user_id: uuid.UUID
+) -> None:
+    """Clear a finished tournament off **this user's** ``/mine`` list (PLAN.md §3.1).
+
+    Not a deletion. The tournament, its bracket and its results stay exactly as
+    they are for every other entrant and for the admin — this only writes a
+    ``TournamentHide`` row that :func:`list_my_tournaments` filters on.
+
+    Only a terminal tournament (completed / cancelled) may be hidden: dismissing
+    one that is still open or running would take away the caller's own route back
+    to the lock-in button and the bracket. Idempotent — hiding twice is a no-op,
+    so a double-click cannot trip the unique constraint.
+
+    Raises :class:`TournamentNotFoundError` if the id is not in the acting guild
+    (RLS makes a foreign guild's tournament indistinguishable from a missing one)
+    and :class:`TournamentNotFinishedError` if it is still live.
+    """
+    tournament = (
+        await session.execute(select(Tournament).where(Tournament.id == tournament_id))
+    ).scalar_one_or_none()
+    if tournament is None:
+        raise TournamentNotFoundError(str(tournament_id))
+    if tournament.status not in TERMINAL_STATUSES:
+        raise TournamentNotFinishedError(str(tournament.status))
+
+    existing = (
+        await session.execute(
+            select(TournamentHide).where(
+                TournamentHide.tournament_id == tournament_id,
+                TournamentHide.user_id == user_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return
+
+    session.add(
+        TournamentHide(
+            guild_id=await _current_guild(session),
+            tournament_id=tournament_id,
+            user_id=user_id,
+        )
+    )
+    await session.flush()
 
 
 @dataclass(frozen=True)
@@ -815,6 +883,43 @@ async def _registration_for(
     return reg
 
 
+async def repair_missing_registration(
+    session: AsyncSession, *, tournament: Tournament, team_id: uuid.UUID
+) -> Registration:
+    """Ensure the entry a participant already holds has a registration behind it.
+
+    "You are in this tournament" and "who is entered" read from different tables:
+    the first from ``TournamentParticipant``, the second from ``Registration``.
+    Solo enrolments written before the solo-team path only ever created the
+    participant, so those rows say both — the client shows *you're in* next to
+    *nobody has joined*, and lock-in has nothing to attach to.
+
+    Rather than leave that data stranded (its owner cannot re-redeem a code for a
+    tournament they are already in), the missing half is written on demand. Not a
+    migration: the broken rows are only discoverable per (tournament, user), and
+    the entry itself was always legitimate.
+    """
+    existing = (
+        await session.execute(
+            select(Registration).where(
+                Registration.tournament_id == tournament.id,
+                Registration.team_id == team_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return existing
+    reg = Registration(
+        guild_id=await _current_guild(session),
+        tournament_id=tournament.id,
+        team_id=team_id,
+        status=RegistrationStatus.PENDING,
+    )
+    session.add(reg)
+    await session.flush()
+    return reg
+
+
 async def _participants_for_team(
     session: AsyncSession, *, tournament_id: uuid.UUID, team_id: uuid.UUID
 ) -> list[TournamentParticipant]:
@@ -850,7 +955,11 @@ async def check_in_self(
     other people are at their keyboards.
     """
     team_id = await resolve_check_in_team(session, tournament_id=tournament_id, user_id=user_id)
-    reg = await _registration_for(session, tournament_id=tournament_id, team_id=team_id)
+    # Repaired rather than required: an entry whose registration was never written
+    # (see `repair_missing_registration`) would otherwise show the player as in the
+    # tournament while refusing every lock-in they attempt.
+    tournament = await get_tournament(session, tournament_id=tournament_id)
+    reg = await repair_missing_registration(session, tournament=tournament, team_id=team_id)
 
     participant = (
         await session.execute(
@@ -930,6 +1039,12 @@ async def list_entrants(
 
     ``user_id`` marks the caller's own entry. Membership is the test, so it covers
     both shapes: their solo team in 1v1, the team they play for in 5v5.
+
+    A participant whose registration was never written still shows up here, as an
+    entry that has simply not locked in. Omitting them is what made this list say
+    "nobody has joined" to a player the tournament list had just told they were in
+    — and this is a GET, so it reports the entry rather than repairing it; the
+    write happens when they press Lock in (:func:`repair_missing_registration`).
     """
     regs = list(
         (
@@ -942,13 +1057,30 @@ async def list_entrants(
         .scalars()
         .all()
     )
+    participants = list(
+        (
+            await session.execute(
+                select(TournamentParticipant).where(
+                    TournamentParticipant.tournament_id == tournament_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    #: Entry team -> its registration, ``None`` for a participant whose
+    #: registration was never written. Registrations first so seed order (which is
+    #: registration order) is unchanged for every healthy tournament.
+    entries: dict[uuid.UUID, Registration | None] = {r.team_id: r for r in regs}
+    for participant in participants:
+        if participant.team_id is not None:
+            entries.setdefault(participant.team_id, None)
+
     # Names come from a second read rather than a JOIN: a tournament holds at most
     # MAX_TEAMS_HARD_CAP rows, so this is one extra small query, and it keeps the
     # function exercisable by the offline fake session (which models no joins).
     teams = {
-        t.id: t
-        for t in (await session.execute(select(Team))).scalars().all()
-        if any(t.id == r.team_id for r in regs)
+        t.id: t for t in (await session.execute(select(Team))).scalars().all() if t.id in entries
     }
 
     my_team_ids: set[uuid.UUID] = set()
@@ -972,7 +1104,7 @@ async def list_entrants(
     for team_id, member_id in (
         await session.execute(
             select(TeamMember.team_id, TeamMember.user_id).where(
-                TeamMember.team_id.in_([r.team_id for r in regs]),
+                TeamMember.team_id.in_(list(entries)),
                 TeamMember.status == TeamMemberStatus.ACTIVE,
             )
         )
@@ -1003,8 +1135,8 @@ async def list_entrants(
         member_names[uid] = display_name
 
     entrants: list[Entrant] = []
-    for reg in regs:
-        team = teams.get(reg.team_id)
+    for entry_team_id, reg in entries.items():
+        team = teams.get(entry_team_id)
         if team is None:  # RLS hid it (foreign guild) — not ours to show
             continue
         players = tuple(
@@ -1014,12 +1146,12 @@ async def list_entrants(
                 locked_in=uid in locked_user_ids,
                 is_you=uid == user_id,
             )
-            for uid in roster.get(reg.team_id, [])
+            for uid in roster.get(entry_team_id, [])
         )
-        mine = reg.team_id in my_team_ids
+        mine = entry_team_id in my_team_ids
         entrants.append(
             Entrant(
-                team_id=reg.team_id,
+                team_id=entry_team_id,
                 name=team.name,
                 # Derived from the roster, not read off the registration: a team
                 # that locked in and THEN gained a member is not ready any more,
@@ -1028,7 +1160,7 @@ async def list_entrants(
                 locked_in=(
                     all(p.locked_in for p in players)
                     if players
-                    else reg.status == RegistrationStatus.CHECKED_IN
+                    else reg is not None and reg.status == RegistrationStatus.CHECKED_IN
                 ),
                 is_solo=bool(team.is_solo),
                 is_you=mine,

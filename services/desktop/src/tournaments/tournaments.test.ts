@@ -9,6 +9,7 @@ import { test } from "node:test";
 
 import {
   getBracket,
+  hideTournament,
   joinTournamentByCode,
   listEntrants,
   listMyTournaments,
@@ -361,4 +362,82 @@ test("lookupTournamentByCode: 404 on an unknown code", async () => {
 
   assert.equal(result.ok, false);
   if (!result.ok) assert.equal(result.detail, "invalid join code");
+});
+
+// --- per-user dismissal ----------------------------------------------------- //
+
+test("hideTournament: DELETEs /{id}/mine with Bearer and accepts an empty 204", async () => {
+  let captured: { url: string; method: string | undefined; headers: Record<string, string> } | undefined;
+  const spyFetch: typeof fetch = (async (url: string, init?: RequestInit) => {
+    captured = {
+      url,
+      method: init?.method,
+      headers: (init?.headers ?? {}) as Record<string, string>,
+    };
+    // The route returns 204 No Content — there is no JSON body to parse, and
+    // treating that as a failure would make every successful removal look broken.
+    return new Response(null, { status: 204 });
+  }) as unknown as typeof fetch;
+
+  const result = await hideTournament(
+    { accessToken: "jwt", tournamentId: "t1" },
+    { fetch: spyFetch, backendUrl: "http://x" },
+  );
+
+  assert.equal(captured?.url, "http://x/api/v1/tournaments/t1/mine");
+  assert.equal(captured?.method, "DELETE");
+  assert.equal(captured?.headers["Authorization"], "Bearer jwt");
+  assert.equal(result.ok, true);
+});
+
+test("hideTournament: surfaces the backend's 409 for a tournament still running", async () => {
+  const spyFetch: typeof fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        detail: "only a completed or cancelled tournament can be removed from your list",
+      }),
+      { status: 409, headers: { "Content-Type": "application/json" } },
+    )) as unknown as typeof fetch;
+
+  const result = await hideTournament(
+    { accessToken: "jwt", tournamentId: "t1" },
+    { fetch: spyFetch, backendUrl: "http://x" },
+  );
+
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.equal(result.status, 409);
+    assert.match(result.detail, /completed or cancelled/);
+  }
+});
+
+test("hideTournament: maps an unreachable backend to status 0", async () => {
+  const spyFetch: typeof fetch = (async () => {
+    throw new Error("ECONNREFUSED");
+  }) as unknown as typeof fetch;
+
+  const result = await hideTournament(
+    { accessToken: "jwt", tournamentId: "t1" },
+    { fetch: spyFetch, backendUrl: "http://x" },
+  );
+
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.equal(result.status, 0);
+  }
+});
+
+test("hideTournament: url-encodes the tournament id", async () => {
+  let url = "";
+  const spyFetch: typeof fetch = (async (u: string) => {
+    url = u;
+    return new Response(null, { status: 204 });
+  }) as unknown as typeof fetch;
+
+  await hideTournament(
+    { accessToken: "jwt", tournamentId: "a b/c" },
+    { fetch: spyFetch, backendUrl: "http://x" },
+  );
+
+  assert.equal(url, "http://x/api/v1/tournaments/a%20b%2Fc/mine");
 });

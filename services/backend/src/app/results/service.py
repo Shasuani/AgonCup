@@ -44,6 +44,7 @@ from lol_schemas.enums import (
     MatchResultState,
     MatchStatus,
     ResultDecidedBy,
+    TournamentStatus,
 )
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -177,6 +178,34 @@ async def _advance_from(session: AsyncSession, match: Match) -> Match | None:
     return next_match if next_match.status == MatchStatus.PENDING else None
 
 
+async def _complete_if_finished(session: AsyncSession, *, tournament_id: uuid.UUID) -> bool:
+    """Flip a RUNNING tournament to COMPLETED once every match is decided.
+
+    "Decided" is the same set the bracket advances on — played, walkover, or
+    forfeit — so a bracket full of byes closes as readily as one played out.
+    Idempotent, and it never touches a tournament that is not RUNNING (a
+    cancelled one stays cancelled).
+    """
+    tournament = (
+        await session.execute(select(Tournament).where(Tournament.id == tournament_id))
+    ).scalar_one_or_none()
+    if tournament is None or tournament.status is not TournamentStatus.RUNNING:
+        return False
+
+    matches = list(
+        (await session.execute(select(Match).where(Match.tournament_id == tournament_id)))
+        .scalars()
+        .all()
+    )
+    if not matches or any(m.status not in _DECIDED_STATUSES for m in matches):
+        return False
+
+    tournament.status = TournamentStatus.COMPLETED
+    await session.flush()
+    logger.info("tournament.completed", tournament_id=str(tournament_id))
+    return True
+
+
 async def advance_bye_chain(session: AsyncSession, match: Match) -> None:
     """Walk a decided ``match`` forward, cascading through bye-vs-bye placeholders.
 
@@ -254,6 +283,11 @@ async def record_winner(
     if result is not None:
         if result.winner_team_id == winner_team_id:
             logger.info("result.replay_noop", match_id=str(match_id))
+            # Closing a finished bracket is a postcondition of this call, not a
+            # side effect of inserting a row: a tournament left RUNNING by an
+            # earlier build is repaired by re-recording the same winner, which
+            # is otherwise the only no-op an admin has.
+            await _complete_if_finished(session, tournament_id=match.tournament_id)
             return result
         if result.decided_by == ResultDecidedBy.ADMIN_OVERRIDE and not is_override:
             raise ResultAlreadyDecidedError(
@@ -287,6 +321,12 @@ async def record_winner(
     # (c) Advance the winner into the next round's placeholder (idempotent).
     await _advance_from(session, match)
     await session.flush()
+
+    # (d) Close the tournament once nothing is left to play. Advancing stops at
+    # the final by design (there is no successor slot), so without this a decided
+    # bracket sat at RUNNING forever — the champion was crowned and the
+    # tournament still looked live to everyone reading the status.
+    await _complete_if_finished(session, tournament_id=match.tournament_id)
 
     logger.info(
         "result.recorded",

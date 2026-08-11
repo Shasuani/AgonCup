@@ -16,19 +16,25 @@
 # replaces the installed app, so launching from Spotlight/Finder always runs the
 # latest build against the right backend.
 #
-# WHY --dir + asar:false + an AD-HOC SIGNATURE
-# --------------------------------------------
+# WHY --dir + asar:false + A STABLE LOCAL SIGNATURE
+# -------------------------------------------------
 # A .dmg is a distribution format; we only need the .app, and `--mac dir` skips
 # the disk-image step. asar is disabled so the url baking below can rewrite a
 # real file in the staged bundle (never the repo's dist/, which stays a clean dev
-# build). Rewriting files breaks any signature, so we sign LAST — ad-hoc
-# (`--sign -`), which is the minimum Apple Silicon requires to launch a local
-# build at all. Hardened runtime is off: it is a notarization requirement, and an
-# ad-hoc-signed hardened bundle is exactly the shape macOS is most suspicious of.
+# build). Rewriting files breaks any signature, so we sign LAST — with a
+# self-signed identity created on first run, NOT ad-hoc (see step 6: an ad-hoc
+# signature changes every build, which cost the user their Keychain session and
+# a re-pair every time). Hardened runtime is off: it is a notarization
+# requirement, and a locally-signed hardened bundle is the shape macOS is most
+# suspicious of.
 #
 # For anything SHIPPED, use the signed electron-builder pipeline instead
 # (.github/workflows/desktop-build.yml); this is a dev install, not a release.
 set -euo pipefail
+
+#: The stable local code-signing identity (see step 6 — it is what keeps the
+#: saved session readable across reinstalls).
+SIGN_IDENTITY="LeagueOfLeagues Dev"
 
 BACKEND_URL="${BACKEND_URL:-https://lol.gameras.gr}"
 # The client reads TWO urls (src/main.ts backendBaseUrl / the realtime socket).
@@ -152,13 +158,54 @@ mkdir -p "$(dirname "$APP_DEST")"
 ditto "$STAGED" "$APP_DEST"
 
 # --- 6. sign + de-quarantine -------------------------------------------------
-# Ad-hoc signature, applied after every mutation. On Apple Silicon an unsigned
-# bundle is killed at exec; the quarantine bit (inherited from the downloaded
-# Electron zip) would additionally route it through Gatekeeper.
-say "signing (ad-hoc) + clearing quarantine"
+# Signed with a STABLE local identity, not ad-hoc, and this is the whole point:
+# macOS binds a Keychain item to the signature of the app that created it, and an
+# ad-hoc signature is a hash of the bundle — so every reinstall was a different
+# app as far as the Keychain was concerned. It asked for the login password, then
+# refused the key that decrypts the stored session, so the client came up
+# unpaired and the pairing code had to be redeemed again. Every single build.
+#
+# A self-signed certificate keeps the designated requirement fixed across
+# rebuilds (identifier + leaf certificate), so the session survives. Created once
+# on first run; nothing about it is secret, and it is trusted only for this user.
+say "signing + clearing quarantine"
+if ! security find-identity -v -p codesigning | grep -q "$SIGN_IDENTITY"; then
+  say "creating the local signing identity (first run only)"
+  CERT_DIR="$HOME/.config/leagueofleagues"
+  mkdir -p "$CERT_DIR"
+  cat > "$CERT_DIR/codesign.cnf" <<'CNF'
+[req]
+distinguished_name = dn
+x509_extensions = v3
+prompt = no
+[dn]
+CN = LeagueOfLeagues Dev
+[v3]
+basicConstraints = critical,CA:false
+keyUsage = critical,digitalSignature
+extendedKeyUsage = critical,codeSigning
+CNF
+  openssl req -x509 -newkey rsa:2048 -days 3650 -nodes \
+    -keyout "$CERT_DIR/codesign.key" -out "$CERT_DIR/codesign.crt" \
+    -config "$CERT_DIR/codesign.cnf" >/dev/null 2>&1
+  # -legacy: Keychain cannot read a PKCS#12 sealed with OpenSSL 3's default MAC.
+  openssl pkcs12 -export -legacy -passout pass:lol \
+    -inkey "$CERT_DIR/codesign.key" -in "$CERT_DIR/codesign.crt" \
+    -out "$CERT_DIR/codesign.p12" >/dev/null 2>&1
+  # -A: let codesign use the key without a prompt on every build.
+  security import "$CERT_DIR/codesign.p12" -k "$HOME/Library/Keychains/login.keychain-db" \
+    -P lol -T /usr/bin/codesign -A >/dev/null
+  # Trusted for code signing only, in the USER's keychain — no admin rights, and
+  # it makes the certificate no more trusted than it needs to be.
+  security add-trusted-cert -r trustRoot -p codeSign \
+    -k "$HOME/Library/Keychains/login.keychain-db" "$CERT_DIR/codesign.crt" >/dev/null
+  security find-identity -v -p codesigning | grep -q "$SIGN_IDENTITY" \
+    || die "could not create the local signing identity"
+fi
+
 xattr -dr com.apple.quarantine "$APP_DEST" 2>/dev/null || true
-codesign --force --deep --sign - "$APP_DEST"
-codesign --verify --deep "$APP_DEST" || die "ad-hoc signature failed to verify"
+codesign --force --deep --sign "$SIGN_IDENTITY" "$APP_DEST"
+codesign --verify --deep "$APP_DEST" || die "signature failed to verify"
 
 say "done"
 cat <<EOF

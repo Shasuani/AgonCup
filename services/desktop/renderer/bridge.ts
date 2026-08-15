@@ -68,6 +68,10 @@ export interface LolBridge {
   leaveTeam(teamId: string): Promise<Res<Record<string, never>>>;
   deleteTeam(teamId: string): Promise<Res<Record<string, never>>>;
   presence(): Promise<Res<{ playersInGame: number; entries: PresenceEntry[] }>>;
+  /** Is this session allowed to drive the League client (lobby writes)? */
+  getAutomation(): Promise<{ ok: true; enabled: boolean }>;
+  /** Grant/revoke that permission for this session only (never persisted). */
+  setAutomation(enabled: boolean): Promise<{ ok: true; enabled: boolean }>;
   readSummoner(): Promise<ReadSummoner>;
   onLcuStatus(cb: (s: LcuStatus) => void): () => void;
   onAuthLost(cb: () => void): () => void;

@@ -52,6 +52,29 @@ const TERMINAL_PHASE: GameflowPhase = "EndOfGame";
 /** Live-Client Data (`:2999`) is only up while the game is actually running. */
 const IN_PROGRESS_PHASE: GameflowPhase = "InProgress";
 
+/**
+ * How long this client keeps watching for a lobby a PLAYER is making by hand
+ * before giving up on inviting the roster for them.
+ *
+ * Generous, because the clock starts when the bracket does and the human on the
+ * other end has to read a DM, alt-tab, and click through the custom-game screen.
+ * Bounded, because the alternative is a client that polls forever for a match
+ * everybody walked away from.
+ */
+const MANUAL_LOBBY_WAIT_MS = 15 * 60_000;
+
+/**
+ * Commands only the designated host acts on.
+ *
+ * `promote_host_command` is deliberately NOT here: its entire job is to make a
+ * client the host, so gating it on already being one would make failover
+ * unreachable. It carries its own target and is fenced by the epoch instead.
+ */
+const HOST_ONLY_COMMANDS: ReadonlySet<string> = new Set([
+  "create_lobby_command",
+  "invite_players_command",
+]);
+
 export class OrchestrationController {
   readonly #adapter: LcuAdapter;
   readonly #transport: BackendTransport;
@@ -62,6 +85,22 @@ export class OrchestrationController {
 
   #currentEpoch = -1;
   #isHost = false;
+  /**
+   * Whether the backend named THIS player as the match's host/opener.
+   *
+   * Commands are published to a per-match channel that every one of the ten
+   * clients is subscribed to, so "create this lobby" and "invite these people"
+   * arrive at all of them. Without this flag every client obeyed: ten custom
+   * games for one match, each with one player in it, and ten sets of invitations
+   * crossing in flight.
+   *
+   * It comes from the backend's own answer (`GET /orchestration/matches/mine`
+   * → `isHost`), which is the same row that decides who is DMed the credentials,
+   * so the client cannot disagree with it. Default false — a match with no lobby
+   * falls back to credentials the players already hold, which is recoverable;
+   * ten lobbies is not.
+   */
+  #assignedHost = false;
   #reported = false;
   /**
    * The last lobby spec the backend sent. A promotion carries no spec, so this is
@@ -74,6 +113,13 @@ export class OrchestrationController {
    * port dies on game exit, so we keep the freshest snapshot seen while in-game.
    */
   #liveClientEvents: LiveClientEventCapture | null = null;
+  /**
+   * An invite we were told to send before any lobby existed to send it into —
+   * the manual-fallback path, where a player creates the custom game by hand.
+   * Retried from the heartbeat tick until the lobby shows up or the wait expires.
+   */
+  #pendingInvite: { readonly command: InvitePlayersCommand; readonly deadlineMs: number } | null =
+    null;
   #unsubscribeCommands: (() => void) | null = null;
   #unsubscribeInvite: (() => void) | null = null;
   #cancelHeartbeat: (() => void) | null = null;
@@ -91,6 +137,15 @@ export class OrchestrationController {
     this.#clock = deps.clock;
     this.#matchId = deps.config.matchId;
     this.#heartbeatMs = deps.config.heartbeatMs;
+  }
+
+  /**
+   * Tell this controller whether the backend named its player as the host/opener
+   * of this match. Re-applied on every match poll, so a failover that moves the
+   * lease is picked up without rebuilding the controller.
+   */
+  setAssignedHost(isHost: boolean): void {
+    this.#assignedHost = isHost;
   }
 
   /** Begin consuming commands and emitting heartbeats. Idempotent. */
@@ -129,6 +184,14 @@ export class OrchestrationController {
     }
     this.#currentEpoch = command.hostEpoch;
 
+    // Host-only work, on a channel everybody hears (see `#assignedHost`). A
+    // client that was not named simply has nothing to do with these — no ack,
+    // for the same reason a command for another match gets none: it was never
+    // addressed to us.
+    if (!this.#assignedHost && HOST_ONLY_COMMANDS.has(command.type)) {
+      return;
+    }
+
     switch (command.type) {
       case "create_lobby_command":
         await this.#hostCreate(command, command.spec);
@@ -152,6 +215,7 @@ export class OrchestrationController {
       case "abort_command":
         this.#unsubscribeInvite?.();
         this.#unsubscribeInvite = null;
+        this.#pendingInvite = null;
         this.#isHost = false;
         await this.#ack(command, true);
         break;
@@ -186,20 +250,81 @@ export class OrchestrationController {
   }
 
   /**
-   * Re-invite the roster the backend named.
+   * Invite the roster the backend named — waiting for a lobby if there is none yet.
    *
-   * The host already invites everyone as part of creating the lobby, so this is
-   * the retry/repair lane — it exists because the backend has always published an
-   * `invite_players_command` alongside the create, and a command nobody handles is
-   * a command that silently does nothing.
+   * Two callers, one behaviour. After our own create, the lobby is already there
+   * and this is the retry/repair lane. But when NOBODY's client is allowed to
+   * host, the backend names one player and DMs them the name and password — and
+   * if that named player is us, the lobby does not exist yet and will not until
+   * that human clicks *Create custom game*.
+   *
+   * Inviting immediately in that case fails against an empty client, and failing
+   * is the end of it — which left the manual path as nine people hunting for a
+   * custom game by name. So an invite with no lobby is not an error, it is a
+   * wait: parked and retried from the heartbeat tick (§3.6.1 manual fallback).
+   *
+   * The ack is deferred until the invites actually go out, because that is the
+   * moment the statement "the roster was invited" becomes true.
    */
   async #hostInvite(command: InvitePlayersCommand): Promise<void> {
+    let lobby: unknown = null;
+    try {
+      lobby = await this.#adapter.getCurrentLobby();
+    } catch {
+      // An unreadable client is not a "no": fall through and let the send decide.
+      lobby = null;
+    }
+    if (lobby === null) {
+      this.#pendingInvite = {
+        command,
+        deadlineMs: this.#clock.nowMs() + MANUAL_LOBBY_WAIT_MS,
+      };
+      return;
+    }
+    await this.#sendInvites(command);
+  }
+
+  /** Send one invite batch and ack its outcome. */
+  async #sendInvites(command: InvitePlayersCommand): Promise<void> {
     try {
       await this.#adapter.invite(command.toSummonerIds.map((id) => fromWire<SummonerId>(id)));
       await this.#ack(command, true);
     } catch (err) {
       await this.#ack(command, false, errorMessage(err));
     }
+  }
+
+  /**
+   * Poll for the hand-made lobby and invite the roster the moment it appears.
+   *
+   * Runs on the heartbeat rather than a timer of its own: the tick is already the
+   * loop that asks the local client what it is doing, and a second timer would be
+   * a second thing to cancel on every teardown path.
+   */
+  async #resumePendingInvite(): Promise<void> {
+    const pending = this.#pendingInvite;
+    if (pending === null) {
+      return;
+    }
+    if (this.#clock.nowMs() >= pending.deadlineMs) {
+      this.#pendingInvite = null;
+      await this.#ack(pending.command, false, "no lobby was created to invite into");
+      return;
+    }
+    let lobby: unknown;
+    try {
+      lobby = await this.#adapter.getCurrentLobby();
+    } catch {
+      return; // transient LCU read failure — try again next tick.
+    }
+    if (lobby === null) {
+      return;
+    }
+    // Claim it before sending: a slow invite must not be started twice by the
+    // next tick, which would double every invitation in the lobby.
+    this.#pendingInvite = null;
+    this.#isHost = true;
+    await this.#sendInvites(pending.command);
   }
 
   async #guestAutoAccept(command: AutoAcceptCommand): Promise<void> {
@@ -232,6 +357,7 @@ export class OrchestrationController {
         sentAtMs: this.#clock.nowMs(),
       }),
     );
+    await this.#resumePendingInvite();
     if (phase === IN_PROGRESS_PHASE) {
       await this.#captureLiveEvents();
     }

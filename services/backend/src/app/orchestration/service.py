@@ -226,6 +226,8 @@ def build_auto_accept_command(
     match_id: uuid.UUID,
     host_epoch: int,
     expected_inviter_puuid: str,
+    expected_inviter_lcu_puuid: str | None = None,
+    expected_inviter_summoner_id: str | None = None,
     command_id: str | None = None,
 ) -> AutoAcceptCommand:
     """Mint a fenced ``AutoAcceptCommand`` for the guests (PLAN.md §3.6.3).
@@ -235,12 +237,18 @@ def build_auto_accept_command(
     manual work the autonomous path is supposed to remove. ``expected_inviter_puuid``
     keeps the arming narrow: a guest accepts an invite from **this match's
     designated host** and nobody else.
+
+    The LCU-side identifiers are what the guest's client can actually see on a
+    received invitation (it never carries the canonical PUUID) — resolve them via
+    :func:`_inviter_identity_for` wherever this command is minted.
     """
     return AutoAcceptCommand(
         command_id=command_id or _command_id(),
         match_id=str(match_id),
         host_epoch=host_epoch,
         expected_inviter_puuid=expected_inviter_puuid,
+        expected_inviter_lcu_puuid=expected_inviter_lcu_puuid,
+        expected_inviter_summoner_id=expected_inviter_summoner_id,
     )
 
 
@@ -446,6 +454,26 @@ async def _summoner_ids_for(session: AsyncSession, *, puuids: Sequence[str]) -> 
         await session.execute(select(RiotAccount).where(RiotAccount.puuid.in_(list(puuids))))
     ).scalars()
     return {r.puuid: r.summoner_id for r in rows if r.summoner_id}
+
+
+async def _inviter_identity_for(
+    session: AsyncSession, *, puuid: str
+) -> tuple[str | None, str | None]:
+    """Host's ``(lcu_puuid, summoner_id)`` — the identifiers a guest can match.
+
+    A received-invitation record on the guest's LCU identifies the inviter by the
+    LCU-local 36-char ``fromPuuid`` and numeric ``fromSummonerId``, never by the
+    canonical PUUID — so an auto-accept fenced only on the canonical PUUID matches
+    nothing. Both are advisory captures from desktop verification and may be NULL
+    for a host verified before they were recorded; the command carries them as
+    optional and the client falls back accordingly.
+    """
+    row = (
+        await session.execute(select(RiotAccount).where(RiotAccount.puuid == puuid))
+    ).scalar_one_or_none()
+    if row is None:
+        return None, None
+    return row.lcu_puuid, row.summoner_id
 
 
 async def _game_mode_for_match_id(session: AsyncSession, match_id: uuid.UUID) -> GameMode:
@@ -754,10 +782,15 @@ async def _issue_lobby_commands(
             )
         )
         published += 1
+    host_lcu_puuid, host_summoner_id = await _inviter_identity_for(session, puuid=host)
     await publisher.publish(
         wrap_envelope(
             build_auto_accept_command(
-                match_id=match_id, host_epoch=lobby.host_epoch, expected_inviter_puuid=host
+                match_id=match_id,
+                host_epoch=lobby.host_epoch,
+                expected_inviter_puuid=host,
+                expected_inviter_lcu_puuid=host_lcu_puuid,
+                expected_inviter_summoner_id=host_summoner_id,
             ),
             guild_id=guild_id,
             match_id=match_id,
@@ -1764,12 +1797,17 @@ async def _apply_recreate(
     # Re-arm the guests for the NEW host. Auto-accept is fenced to a specific
     # inviter PUUID, so guests still armed for the deposed host would refuse the
     # successor's invite — the automation would look alive and accept nothing.
+    successor_lcu_puuid, successor_summoner_id = await _inviter_identity_for(
+        session, puuid=successor
+    )
     await publisher.publish(
         wrap_envelope(
             build_auto_accept_command(
                 match_id=lobby.match_id,
                 host_epoch=lobby.host_epoch,
                 expected_inviter_puuid=successor,
+                expected_inviter_lcu_puuid=successor_lcu_puuid,
+                expected_inviter_summoner_id=successor_summoner_id,
             ),
             guild_id=guild_id,
             match_id=lobby.match_id,

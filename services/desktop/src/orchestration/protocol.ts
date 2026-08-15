@@ -98,8 +98,17 @@ export interface InvitePlayersCommand extends BaseCommand {
 /** Guest: arm auto-accept for invites from the designated host. */
 export interface AutoAcceptCommand extends BaseCommand {
   readonly type: "auto_accept_command";
-  /** PUUID of the designated host — the only inviter we auto-accept. */
+  /** Canonical PUUID of the designated host — the only inviter we auto-accept. */
   readonly expectedInviterPuuid: string;
+  /**
+   * The host as the guest's LCU can actually see them: the LCU-local 36-char
+   * PUUID and per-region numeric summonerId (advisory captures from desktop
+   * verification). A received invitation never carries the canonical PUUID, so
+   * without at least one of these the fence matches nothing. Nullable on the
+   * wire for hosts verified before they were recorded.
+   */
+  readonly expectedInviterLcuPuuid?: string | null;
+  readonly expectedInviterSummonerId?: string | null;
 }
 
 /** Tear down all lobby automation (manual fallback / match cancelled). */

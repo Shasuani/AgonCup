@@ -263,6 +263,16 @@ class AutoAcceptCommand(_Wire):
     the **designated host for this match** and nothing else, so arming it can never
     be turned into "accept whatever anyone sends you". Paired with ``host_epoch``,
     an invite from a deposed host is refused too.
+
+    The canonical 78-char PUUID alone cannot close the fence on the client: the
+    LCU's ``received-invitations`` record identifies the inviter by the LCU-local
+    36-char ``fromPuuid`` and the per-region numeric ``fromSummonerId`` — it never
+    carries the canonical PUUID, so comparing against it matches nothing and every
+    invite sat un-accepted. ``expected_inviter_lcu_puuid`` /
+    ``expected_inviter_summoner_id`` are the host's advisory identifiers captured
+    at desktop verification, i.e. the identifiers the guest's client can actually
+    observe; matching ANY of the three accepts. Optional because verification may
+    predate their capture — the canonical fence still travels for that case.
     """
 
     type: Literal["auto_accept_command"] = "auto_accept_command"
@@ -271,6 +281,14 @@ class AutoAcceptCommand(_Wire):
     host_epoch: int = Field(ge=0, description="Monotonic host lease fence.")
     expected_inviter_puuid: str = Field(
         description="Only auto-accept invites from this designated-host PUUID."
+    )
+    expected_inviter_lcu_puuid: str | None = Field(
+        default=None,
+        description="Host's advisory LCU-local 36-char PUUID (matches fromPuuid).",
+    )
+    expected_inviter_summoner_id: str | None = Field(
+        default=None,
+        description="Host's per-region numeric summonerId (matches fromSummonerId).",
     )
 
 

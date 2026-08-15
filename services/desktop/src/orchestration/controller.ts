@@ -330,8 +330,17 @@ export class OrchestrationController {
   async #guestAutoAccept(command: AutoAcceptCommand): Promise<void> {
     try {
       this.#unsubscribeInvite?.();
+      // The LCU-side identifiers are nullable on the wire (hosts verified before
+      // they were captured); pass only what is actually known so an absent field
+      // can never satisfy the adapter's inviter fence.
+      const lcuPuuid = command.expectedInviterLcuPuuid;
+      const summonerId = command.expectedInviterSummonerId;
       this.#unsubscribeInvite = await this.#adapter.autoAcceptInvite({
         expectedInviterPuuid: fromWire<Puuid>(command.expectedInviterPuuid),
+        ...(lcuPuuid ? { expectedInviterLcuPuuid: fromWire<Puuid>(lcuPuuid) } : {}),
+        ...(summonerId
+          ? { expectedInviterSummonerId: fromWire<SummonerId>(summonerId) }
+          : {}),
         hostEpoch: fromWire<HostEpoch>(command.hostEpoch),
       });
       await this.#ack(command, true);

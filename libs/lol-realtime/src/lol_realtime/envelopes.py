@@ -23,6 +23,7 @@ backend -> client (command lane, §3.6.1 write allow-list):
 * :class:`CreateLobbyCommand` — re-creatable immutable lobby spec (§3.6.2).
 * :class:`InvitePlayersCommand` — batched invite list (§3.6.3).
 * :class:`PromoteHostCommand` — lossless host promotion (§3.6.1).
+* :class:`AutoAcceptCommand` — guest arms auto-accept of the host's invite (§3.6.3).
 * :class:`AbortCommand` — tear-down / champ-select abort (§3.6.1).
 
 client -> server (ack / liveness / result lane):
@@ -43,6 +44,7 @@ from enum import StrEnum
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+from pydantic.alias_generators import to_camel
 
 SCHEMA_VERSION = "0"
 
@@ -51,6 +53,37 @@ class _Strict(BaseModel):
     """Base config: forbid unknown fields so wire drift is caught early."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class _Wire(_Strict):
+    """Base for the models that actually cross the socket to the desktop client.
+
+    **The WS plane speaks camelCase.** It always did in the client->server
+    direction — the hub reads ``matchId`` off the subscribe frame and ``hostEpoch``
+    / ``lcuLobbyId`` off acks and heartbeats — but the server->client direction
+    serialized these models by Python field name and so shipped snake_case. The
+    desktop reads ``command.matchId``, got ``undefined``, and dropped **every**
+    command on its first line without an ack or a log. Aliasing here is what makes
+    both directions the same contract.
+
+    ``populate_by_name`` keeps Python-side construction (``CreateLobbyCommand(
+    match_id=...)``) working, so this is a wire-format change only — no caller
+    moves to camelCase keyword arguments. ``serialize_by_alias`` makes a plain
+    ``model_dump_json()`` emit the aliases, including when the model is nested
+    inside an :class:`Envelope` (which deliberately stays snake_case: it never
+    reaches the client, and the hub unwraps it by ``origin_guild_id``/``payload``).
+
+    ``type`` is untouched by the generator (one word), so the discriminated union
+    keeps working exactly as before.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        alias_generator=to_camel,
+        populate_by_name=True,
+        serialize_by_alias=True,
+    )
 
 
 class AudienceKind(StrEnum):
@@ -143,7 +176,7 @@ class ResultSource(StrEnum):
     LIVE_CLIENT_DATA = "live_client_data"
 
 
-class LobbySpec(_Strict):
+class LobbySpec(_Wire):
     """The immutable, re-creatable lobby spec (PLAN.md §3.6.2).
 
     Backend-owned so any successor host re-creates the lobby **verbatim**.
@@ -167,7 +200,7 @@ class LobbySpec(_Strict):
     )
 
 
-class CreateLobbyCommand(_Strict):
+class CreateLobbyCommand(_Wire):
     """Backend -> host: create (or re-create) the custom lobby (PLAN.md §3.6.2).
 
     Fenced by ``(match_id, host_epoch)`` so a stale-epoch successor is rejected;
@@ -182,7 +215,7 @@ class CreateLobbyCommand(_Strict):
     spec: LobbySpec = Field(description="Immutable, verbatim-re-creatable lobby spec.")
 
 
-class InvitePlayersCommand(_Strict):
+class InvitePlayersCommand(_Wire):
     """Backend -> host: batched invite of the full roster (PLAN.md §3.6.3).
 
     Invites are keyed by ``(match_id, toSummonerId, host_epoch)`` on the host.
@@ -202,7 +235,7 @@ class InvitePlayersCommand(_Strict):
     )
 
 
-class PromoteHostCommand(_Strict):
+class PromoteHostCommand(_Wire):
     """Backend -> client: promote a designated successor to host (PLAN.md §3.6.1).
 
     The lossless failover path: ``new_host_epoch`` is the freshly-leased epoch;
@@ -217,7 +250,31 @@ class PromoteHostCommand(_Strict):
     new_host_puuid: str = Field(description="Designated successor host PUUID.")
 
 
-class AbortCommand(_Strict):
+class AutoAcceptCommand(_Wire):
+    """Backend -> guest: arm auto-accept for the host's invite (PLAN.md §3.6.3).
+
+    The other half of the invite: the host's client sends nine invites, and
+    without this nine people still have to click Accept by hand — which is most of
+    the manual work the autonomous path exists to remove. The kind was declared in
+    :class:`LobbyCommandKind` from the start but no command model ever carried it,
+    so it could not be sent at all.
+
+    ``expected_inviter_puuid`` is the fence: a client auto-accepts an invite from
+    the **designated host for this match** and nothing else, so arming it can never
+    be turned into "accept whatever anyone sends you". Paired with ``host_epoch``,
+    an invite from a deposed host is refused too.
+    """
+
+    type: Literal["auto_accept_command"] = "auto_accept_command"
+    command_id: str = Field(description="At-most-once idempotency key.")
+    match_id: str
+    host_epoch: int = Field(ge=0, description="Monotonic host lease fence.")
+    expected_inviter_puuid: str = Field(
+        description="Only auto-accept invites from this designated-host PUUID."
+    )
+
+
+class AbortCommand(_Wire):
     """Backend -> client: abort champ-select / tear down the lobby (PLAN.md §3.6.1)."""
 
     type: Literal["abort_command"] = "abort_command"
@@ -227,7 +284,7 @@ class AbortCommand(_Strict):
     reason: str | None = Field(default=None, description="Audited abort reason.")
 
 
-class LobbyAck(_Strict):
+class LobbyAck(_Wire):
     """Client -> backend: ack of a lobby command (PLAN.md §3.6.1/§3.6.2).
 
     ``ok`` is false when the client refused (e.g. stale epoch); the host reports
@@ -246,7 +303,7 @@ class LobbyAck(_Strict):
     detail: str | None = None
 
 
-class HostHeartbeat(_Strict):
+class HostHeartbeat(_Wire):
     """Client -> backend: pre-game host liveness (PLAN.md §3.6.1 watchdog input).
 
     Posted every ~2-3s while pre-game. The per-match arq watchdog triggers
@@ -263,7 +320,7 @@ class HostHeartbeat(_Strict):
     lcu_lobby_id: str | None = Field(default=None, description="Live LCU lobby handle, if open.")
 
 
-class ResultReportEnvelope(_Strict):
+class ResultReportEnvelope(_Wire):
     """Client -> backend: end-of-game result report carrier (PLAN.md §3.6.5).
 
     Keyed by ``(lcu_game_id, reporter_puuid, source)``; carries the server-issued
@@ -295,6 +352,7 @@ EnvelopePayload = Annotated[
     | CreateLobbyCommand
     | InvitePlayersCommand
     | PromoteHostCommand
+    | AutoAcceptCommand
     | AbortCommand
     | LobbyAck
     | HostHeartbeat
@@ -334,6 +392,7 @@ def _cli() -> None:
 __all__ = [
     "SCHEMA_VERSION",
     "AbortCommand",
+    "AutoAcceptCommand",
     "AudienceDescriptor",
     "AudienceKind",
     "CreateLobbyCommand",

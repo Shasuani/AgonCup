@@ -1,0 +1,59 @@
+{
+  "abort_command": {
+    "commandId": "cmd-abort",
+    "hostEpoch": 0,
+    "matchId": "11111111-2222-3333-4444-555555555555",
+    "reason": "cancelled",
+    "type": "abort_command"
+  },
+  "auto_accept_command": {
+    "commandId": "cmd-accept",
+    "expectedInviterPuuid": "puuid-host",
+    "hostEpoch": 0,
+    "matchId": "11111111-2222-3333-4444-555555555555",
+    "type": "auto_accept_command"
+  },
+  "create_lobby_command": {
+    "commandId": "cmd-create",
+    "hostEpoch": 0,
+    "matchId": "11111111-2222-3333-4444-555555555555",
+    "spec": {
+      "gameMode": "CLASSIC",
+      "inviteePuuids": [
+        "puuid-1",
+        "puuid-2"
+      ],
+      "inviteeSummonerIds": [
+        "sid-1",
+        "sid-2"
+      ],
+      "lobbyName": "LoL-11111111",
+      "lobbyPassword": "111111",
+      "mapId": 11,
+      "teamSize": 5
+    },
+    "type": "create_lobby_command"
+  },
+  "invite_players_command": {
+    "commandId": "cmd-invite",
+    "hostEpoch": 0,
+    "matchId": "11111111-2222-3333-4444-555555555555",
+    "toPuuids": [
+      "puuid-1",
+      "puuid-2"
+    ],
+    "toSummonerIds": [
+      "sid-1",
+      "sid-2"
+    ],
+    "type": "invite_players_command"
+  },
+  "promote_host_command": {
+    "commandId": "cmd-promote",
+    "hostEpoch": 0,
+    "matchId": "11111111-2222-3333-4444-555555555555",
+    "newHostEpoch": 1,
+    "newHostPuuid": "puuid-2",
+    "type": "promote_host_command"
+  }
+}

@@ -496,11 +496,16 @@ async def test_published_command_is_relayed_to_subscribed_client() -> None:
     assert len(command_frames) == 1
     relayed = command_frames[0]["command"]
     assert relayed["type"] == "create_lobby_command"
-    assert relayed["match_id"] == str(match_id)
+    # camelCase, because that is what the desktop reads. It used to relay
+    # ``match_id``/``host_epoch``, so the client's very first check
+    # (``command.matchId !== this.#matchId``) compared undefined and dropped every
+    # command without an ack or a log. These keys ARE the contract.
+    assert relayed["matchId"] == str(match_id)
+    assert relayed["hostEpoch"] == 0
+    assert "match_id" not in relayed
     # The relayed frame surfaces the match's guildId (from the envelope) so the
     # desktop can thread it back into its subscribe frame (the WS guild-scope fix).
     assert command_frames[0]["guildId"] == str(_GUILD)
-    assert relayed["host_epoch"] == 0
 
 
 # ===========================================================================

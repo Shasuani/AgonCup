@@ -621,18 +621,11 @@ async def start_tournament(
     # Drawing the bracket is only half of starting: the round-one matches have to
     # be handed to the players. Without this the tournament went RUNNING and every
     # entrant sat there, because opening a lobby was reachable only through a
-    # per-match ready-up no client exposes. Best-effort — a notification or
-    # realtime hiccup must not undo a bracket that was generated successfully.
+    # per-match ready-up no client exposes. Shared with the bot's /tournament-start
+    # so the two entry points cannot drift again.
     from app.orchestration import service as orchestration_service
 
-    try:
-        await orchestration_service.open_playable_matches(
-            session,
-            tournament_id=tournament_id,
-            publisher=orchestration_service.make_command_publisher(),
-        )
-    except Exception:  # noqa: BLE001 — best-effort side effect, never fails the start.
-        logger.exception("start_tournament.open_matches_failed", tournament_id=str(tournament_id))
+    await orchestration_service.open_started_tournament(session, tournament_id=tournament_id)
 
     return StartResponse(
         tournament_id=result.tournament_id,

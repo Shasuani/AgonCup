@@ -402,11 +402,14 @@ async def test_auto_initialize_lobby_spins_up_when_host_present() -> None:
 
 @pytest.mark.asyncio
 async def test_auto_initialize_lobby_falls_back_to_manual_without_host() -> None:
-    """Nobody opted in to host → the players are handed the lobby, not left waiting.
+    """Nobody opted in to host → one player opens it, the rest are still automatic.
 
     This used to be a silent no-op, which made "no eligible host" look exactly like
     "nobody started the match": no lobby, no message, ten people staring at a
-    client. PLAN.md §3.6.1 falls back to the manual name+password instead.
+    client. PLAN.md §3.6.1 falls back to the manual name+password instead — and
+    "manual" is one step, the create. Nobody's client is commanded to make a lobby
+    (that is how you get two), but the named creator is told who to invite and
+    everybody is armed to accept from them.
     """
     session, match_id, _ = _seeded_session(opt_ins=0, opt_outs=2)
     pub = RecordingPublisher()
@@ -415,17 +418,23 @@ async def test_auto_initialize_lobby_falls_back_to_manual_without_host() -> None
         session, match_id=match_id, publisher=pub, server_secret=_SECRET
     )
 
-    # No host was leased, so no LCU command is issued to anyone.
+    # No host was leased, so nobody is told to create a lobby.
     assert result is None
-    assert pub.published == []
+    assert [e.payload.type for e in pub.published] == [
+        "invite_players_command",
+        "auto_accept_command",
+    ]
 
-    # ...but the match is recorded as manual-fallback, carrying the same
-    # deterministic credentials the automation would have used.
+    # The match is recorded as manual-fallback, carrying the same deterministic
+    # credentials the automation would have used, and naming who opens it.
     name, password = default_lobby_credentials(match_id)
     lobby = session.store[MatchLobby][0]
     assert lobby.state is LobbyPhase.HOST_LOST
-    assert lobby.host_puuid is None
+    assert lobby.host_puuid is not None
     assert (lobby.lobby_name, lobby.lobby_password) == (name, password)
+    # The guests accept invites from that player and nobody else.
+    accept = next(e for e in pub.published if e.payload.type == "auto_accept_command")
+    assert accept.payload.expected_inviter_puuid == lobby.host_puuid
 
 
 @pytest.mark.asyncio
@@ -837,8 +846,10 @@ async def test_initialize_lobby_tells_the_humans_the_lobby_exists(monkeypatch) -
 
     Every step of the automation is an LCU write, and writes get refused (opted
     out, kill-switch, League not running) or break on a patch. When that happens
-    the players need the lobby name and password in hand — publicly for everyone,
-    and by DM for the host and captains, who are the ones expected to act.
+    somebody has to make the lobby by hand, so the credentials are DMed — to the
+    ONE player expected to act, not to every captain. Two people acting on the
+    same instruction make two lobbies, and the public embed goes to a whole
+    Discord server, so it announces the match without the password.
     """
     session, match_id, succession = _seeded_session(opt_ins=3)
     match = session.store[Match][0]
@@ -886,16 +897,22 @@ async def test_initialize_lobby_tells_the_humans_the_lobby_exists(monkeypatch) -
     )
 
     kinds = [e.kind.value for e in sent]
-    assert "match_ready" in kinds, "the guild channel gets the name + password"
-    assert "lobby_credentials" in kinds, "the host/captains get a DM"
+    assert "match_ready" in kinds, "the guild channel is told the match is up"
+    assert kinds.count("lobby_credentials") == 1, "exactly one person is asked to act"
 
     public = next(e for e in sent if e.kind.value == "match_ready")
-    assert public.payload.lobby_name == "LoL-abc123"
-    assert public.payload.lobby_password == "ABC123"
+    assert public.payload.lobby_password is None, "a server-wide embed is not the place"
 
     dm = next(e for e in sent if e.kind.value == "lobby_credentials")
     assert dm.payload.discord_user_id, "a DM needs a snowflake to address"
     assert dm.payload.tournament_name == "Summer Cup"
+    assert dm.payload.lobby_password == "ABC123"
+    # It is the designated host who is DMed — the same player everyone else's
+    # client is told to wait for.
+    host_user = next(cs.user_id for cs in session.store[ClientSession] if cs.puuid == succession[0])
+    assert dm.payload.discord_user_id == str(
+        next(u.discord_user_id for u in session.store[User] if u.id == host_user)
+    )
 
 
 @pytest.mark.asyncio

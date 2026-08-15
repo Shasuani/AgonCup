@@ -19,7 +19,9 @@ See PLAN.md §3.6.1 / §3.3.
 
 from __future__ import annotations
 
+import json
 import uuid
+from typing import Any, cast
 
 import pytest
 from lol_schemas.enums import (
@@ -58,6 +60,25 @@ class _NullPublisher:
 
     async def publish(self, envelope: object) -> None:  # noqa: D102 - test double
         return None
+
+
+class _RecordingPublisher:
+    """Keeps every published envelope, so a test can read what the clients were told."""
+
+    def __init__(self) -> None:
+        self.sent: list[Any] = []
+
+    async def publish(self, envelope: Any) -> None:  # noqa: D102 - test double
+        self.sent.append(envelope)
+
+
+def _command_body(envelope: Any) -> dict[str, Any]:
+    """The command as the desktop receives it (aliased/camelCase wire form)."""
+    return cast(dict[str, Any], json.loads(envelope.payload.model_dump_json()))
+
+
+def _command_type(envelope: Any) -> str:
+    return str(_command_body(envelope)["type"])
 
 
 def _tournament(*, guild_id: uuid.UUID, game_mode: GameMode) -> Tournament:
@@ -244,13 +265,14 @@ async def test_a_started_1v1_hands_the_players_a_lobby() -> None:
 
 
 @pytest.mark.asyncio
-async def test_both_1v1_players_are_actually_dmed_the_credentials(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    """Asserts the recipients, not just that a lobby row appeared.
+async def test_exactly_one_player_is_dmed_the_credentials(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Asserts the recipient, not just that a lobby row appeared.
 
-    The DM goes to the match's *captains*, and in 1v1 each entrant is the captain
-    of their own solo team — so both players must be reached. Getting this wrong
-    would leave a lobby recorded and still nobody told, which is the exact failure
-    this whole path exists to prevent.
+    ONE person is told to make the lobby. The credentials used to go to every
+    captain — in 1v1 that is both players — which reads like an instruction to
+    each of them, and two people who both follow it produce two custom games with
+    one player each. The one told is the designated creator, and it is the same
+    player the other client is told to wait for.
     """
     import app.notifications as notifications
 
@@ -279,7 +301,144 @@ async def test_both_1v1_players_are_actually_dmed_the_credentials(monkeypatch) -
         session, tournament_id=tournament.id, publisher=_NullPublisher()
     )
 
-    assert sorted(sent) == ["111", "222"]
+    lobby = session.store[MatchLobby][0]
+    creator = next(
+        u for u in session.store[User] if u.id == _user_for_puuid(session, lobby.host_puuid)
+    )
+    assert sent == [str(creator.discord_user_id)]
+
+
+def _user_for_puuid(session: FakeSession, puuid: str | None) -> uuid.UUID:
+    return next(a.user_id for a in session.store[RiotAccount] if a.puuid == puuid)
+
+
+@pytest.mark.asyncio
+async def test_the_named_creator_is_told_to_open_it_and_the_others_to_wait() -> None:
+    """The two halves of naming a creator, seen from each client.
+
+    A match nobody's client will host still has a designated opener, and both
+    screens are driven off the same ``host_puuid``: theirs says "this one is
+    yours", everybody else's names them so nine people are not each waiting to be
+    the one who acts.
+    """
+    guild_id = uuid.uuid4()
+    alice, bob = uuid.uuid4(), uuid.uuid4()
+    session = FakeSession()
+    session.current_guild = str(guild_id)
+    tournament = _tournament(guild_id=guild_id, game_mode=GameMode.ARAM_1V1)
+    session.store[Tournament].append(tournament)
+    for user_id, tag in ((alice, "alice"), (bob, "bob")):
+        session.store[User].append(User(id=user_id, display_name=tag))
+        _verified(session, user_id, tag)
+
+    for player in (alice, bob):
+        await _lock_in(session, tournament, player)
+    await service.start_tournament(session, tournament_id=tournament.id)
+    await orchestration.open_playable_matches(
+        session, tournament_id=tournament.id, publisher=_NullPublisher()
+    )
+
+    lobby = session.store[MatchLobby][0]
+    assert lobby.state is LobbyPhase.HOST_LOST  # still nobody's client hosting...
+    assert lobby.host_puuid is not None  # ...but somebody is named to open it.
+
+    creator_id = _user_for_puuid(session, lobby.host_puuid)
+    other_id = bob if creator_id == alice else alice
+    creator_view = (await orchestration.list_my_matches(session, user_id=creator_id))[0]
+    other_view = (await orchestration.list_my_matches(session, user_id=other_id))[0]
+
+    assert creator_view.is_host is True
+    assert other_view.is_host is False
+    assert other_view.host_name == next(
+        u.display_name for u in session.store[User] if u.id == creator_id
+    )
+    # Both still see the credentials — the DM is a nudge, not the only copy.
+    assert creator_view.lobby_password == other_view.lobby_password
+    assert creator_view.lobby_password
+
+
+@pytest.mark.asyncio
+async def test_a_hand_made_lobby_still_invites_and_auto_accepts() -> None:
+    """The manual path is manual for ONE step: the create.
+
+    It used to be manual for all of them — credentials in a DM and nine people
+    expected to find a custom game by name. The two commands that close that gap
+    are the invite (to the creator, who is the only one who can send it) and the
+    auto-accept fenced to the creator's PUUID (to everyone, so nobody has to click).
+    """
+    guild_id = uuid.uuid4()
+    alice, bob = uuid.uuid4(), uuid.uuid4()
+    session = FakeSession()
+    session.current_guild = str(guild_id)
+    tournament = _tournament(guild_id=guild_id, game_mode=GameMode.ARAM_1V1)
+    session.store[Tournament].append(tournament)
+    for user_id, tag in ((alice, "alice"), (bob, "bob")):
+        session.store[User].append(User(id=user_id, display_name=tag))
+        _verified(session, user_id, tag)
+
+    for player in (alice, bob):
+        await _lock_in(session, tournament, player)
+    await service.start_tournament(session, tournament_id=tournament.id)
+
+    publisher = _RecordingPublisher()
+    await orchestration.open_playable_matches(
+        session, tournament_id=tournament.id, publisher=publisher
+    )
+
+    lobby = session.store[MatchLobby][0]
+    kinds = [_command_type(e) for e in publisher.sent]
+    # No create: the human makes the lobby, so commanding a client to make one too
+    # is how you end up with two.
+    assert "create_lobby_command" not in kinds
+    assert kinds.count("invite_players_command") == 1
+    assert kinds.count("auto_accept_command") == 1
+
+    invite = next(e for e in publisher.sent if _command_type(e) == "invite_players_command")
+    accept = next(e for e in publisher.sent if _command_type(e) == "auto_accept_command")
+    # The creator invites everyone but themselves...
+    assert _command_body(invite)["toPuuids"] == [
+        p for p in ("puuid-alice", "puuid-bob") if p != lobby.host_puuid
+    ]
+    # ...and the guests only accept from the creator, never "anyone in the lobby".
+    assert _command_body(accept)["expectedInviterPuuid"] == lobby.host_puuid
+
+
+def test_the_creator_is_a_captain_of_the_home_side_and_the_same_one_every_time() -> None:
+    """Whoever is named must still be named after a restart.
+
+    The choice is re-derived, never stored anywhere but the lobby row, so an
+    unstable rule would hand a re-scan to a different player and put a second
+    custom game on the board. Captain first (a team already looks to them), team A
+    before team B, PUUID last — all three arbitrary, all three *stable*.
+    """
+    match = Match(
+        id=uuid.uuid4(),
+        guild_id=uuid.uuid4(),
+        tournament_id=uuid.uuid4(),
+        round=1,
+        bracket_slot=0,
+        team_a=uuid.uuid4(),
+        team_b=uuid.uuid4(),
+        status=MatchStatus.PENDING,
+    )
+    roster = [
+        orchestration.InviteCandidate(
+            puuid="p-a-grunt", user_id=uuid.uuid4(), team_id=match.team_a, is_captain=False
+        ),
+        orchestration.InviteCandidate(
+            puuid="p-b-captain", user_id=uuid.uuid4(), team_id=match.team_b, is_captain=True
+        ),
+        orchestration.InviteCandidate(
+            puuid="p-a-captain", user_id=uuid.uuid4(), team_id=match.team_a, is_captain=True
+        ),
+    ]
+
+    picked = orchestration.pick_lobby_creator(roster, match=match)
+    assert picked is not None and picked.puuid == "p-a-captain"
+    # Order of the roster query must not change who is named.
+    assert orchestration.pick_lobby_creator(list(reversed(roster)), match=match) == picked
+    # A match with no clients attached names nobody rather than guessing.
+    assert orchestration.pick_lobby_creator([], match=match) is None
 
 
 @pytest.mark.asyncio
@@ -416,3 +575,138 @@ def test_the_first_round_is_called_round_one() -> None:
         status=MatchStatus.PENDING,
     )
     assert match_label(second) == "Round 2 · Match 4"
+
+
+@pytest.mark.asyncio
+async def test_a_client_that_subscribes_late_is_told_again_what_to_do() -> None:
+    """Commands are published once, to whoever happens to be listening.
+
+    Redis pub/sub keeps no history, and the gap is structural: the commands go out
+    when the bracket starts, while a client only learns the match exists on its
+    next poll — later still for somebody who opens the app after the round began.
+    Every one of them subscribed to a channel whose instructions had already been
+    spoken. Subscribing therefore replays them.
+    """
+    guild_id = uuid.uuid4()
+    alice, bob = uuid.uuid4(), uuid.uuid4()
+    session = FakeSession()
+    session.current_guild = str(guild_id)
+    tournament = _tournament(guild_id=guild_id, game_mode=GameMode.ARAM_1V1)
+    session.store[Tournament].append(tournament)
+    for user_id, tag in ((alice, "alice"), (bob, "bob")):
+        session.store[User].append(User(id=user_id, display_name=tag))
+        _verified(session, user_id, tag)
+        await _lock_in(session, tournament, user_id)
+    await service.start_tournament(session, tournament_id=tournament.id)
+    await orchestration.open_playable_matches(
+        session, tournament_id=tournament.id, publisher=_NullPublisher()
+    )
+    match = session.store[Match][0]
+
+    publisher = _RecordingPublisher()
+    replayed = await orchestration.republish_lobby_commands(
+        session, match_id=match.id, publisher=publisher
+    )
+
+    kinds = [_command_type(e) for e in publisher.sent]
+    assert replayed == len(publisher.sent) == 2
+    # Still no create: the lobby is the human's to make, and a replayed create is
+    # how a match that already has one ends up with two.
+    assert sorted(kinds) == ["auto_accept_command", "invite_players_command"]
+
+
+@pytest.mark.asyncio
+async def test_the_replay_stops_once_the_match_is_over() -> None:
+    """Nothing to drive — replaying would ask a client to re-open a finished match."""
+    guild_id, alice = uuid.uuid4(), uuid.uuid4()
+    session = FakeSession()
+    session.current_guild = str(guild_id)
+    tournament = _tournament(guild_id=guild_id, game_mode=GameMode.ARAM_1V1)
+    session.store[Tournament].append(tournament)
+    _verified(session, alice, "alice")
+    await service.record_client_presence(session, user_id=alice)
+
+    match = Match(
+        id=uuid.uuid4(),
+        guild_id=guild_id,
+        tournament_id=tournament.id,
+        round=1,
+        bracket_slot=0,
+        status=MatchStatus.COMPLETED,
+    )
+    session.store[Match].append(match)
+    session.store[MatchLobby].append(
+        MatchLobby(
+            id=uuid.uuid4(),
+            guild_id=guild_id,
+            match_id=match.id,
+            host_puuid="puuid-alice",
+            host_succession=[],
+            host_epoch=0,
+            lobby_name="LoL-x",
+            lobby_password="X",
+            state=LobbyPhase.HOST_LOST,
+        )
+    )
+
+    publisher = _RecordingPublisher()
+    assert (
+        await orchestration.republish_lobby_commands(
+            session, match_id=match.id, publisher=publisher
+        )
+        == 0
+    )
+    assert publisher.sent == []
+
+
+@pytest.mark.asyncio
+async def test_the_replay_does_not_interrupt_a_lobby_that_is_already_playing() -> None:
+    """A reconnect mid-game must not be answered with "make the lobby".
+
+    The replay exists for clients that missed the start; past the point where the
+    custom game is formed there is nothing to catch up on, and a create issued
+    into champion select is an interruption rather than a repair.
+    """
+    guild_id, alice = uuid.uuid4(), uuid.uuid4()
+    session = FakeSession()
+    session.current_guild = str(guild_id)
+    tournament = _tournament(guild_id=guild_id, game_mode=GameMode.ARAM_1V1)
+    session.store[Tournament].append(tournament)
+    _verified(session, alice, "alice")
+    await service.record_client_presence(session, user_id=alice)
+
+    match = Match(
+        id=uuid.uuid4(),
+        guild_id=guild_id,
+        tournament_id=tournament.id,
+        round=1,
+        bracket_slot=0,
+        status=MatchStatus.PENDING,
+    )
+    session.store[Match].append(match)
+    lobby = MatchLobby(
+        id=uuid.uuid4(),
+        guild_id=guild_id,
+        match_id=match.id,
+        host_puuid="puuid-alice",
+        host_succession=["puuid-alice"],
+        host_epoch=0,
+        lobby_name="LoL-x",
+        lobby_password="X",
+        state=LobbyPhase.AWAITING_CREATE,
+    )
+    session.store[MatchLobby].append(lobby)
+
+    # Still forming: the client is told to create it.
+    first = _RecordingPublisher()
+    await orchestration.republish_lobby_commands(session, match_id=match.id, publisher=first)
+    assert "create_lobby_command" in [_command_type(e) for e in first.sent]
+
+    # In champion select: nothing to replay at all.
+    lobby.state = LobbyPhase.STARTING
+    later = _RecordingPublisher()
+    assert (
+        await orchestration.republish_lobby_commands(session, match_id=match.id, publisher=later)
+        == 0
+    )
+    assert later.sent == []

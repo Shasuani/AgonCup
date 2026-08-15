@@ -590,6 +590,33 @@ async def serve(
         json.dumps({"type": "subscribed", "matchId": str(subscription.match_id)})
     )
 
+    # Replay the match's standing commands now that somebody is listening.
+    # Pub/sub keeps no history, and the commands are issued when the bracket
+    # starts — a client that connects a minute later (or an hour, having opened
+    # the app late) joined a channel whose instructions had already been spoken
+    # and then waited forever. Best-effort and idempotent; a failure here must
+    # never cost the client its subscription.
+    try:
+        async with session_factory() as session, session.begin():
+            await _set_tenant(session, subscription.guild_id)
+            replayed = await service.republish_lobby_commands(
+                session,
+                match_id=subscription.match_id,
+                publisher=service.make_command_publisher(),
+            )
+        if replayed:
+            logger.info(
+                "realtime.subscribe.commands_replayed",
+                match_id=str(subscription.match_id),
+                commands=replayed,
+            )
+    except Exception as exc:  # noqa: BLE001 - advisory: never fail a subscription.
+        logger.warning(
+            "realtime.subscribe.replay_failed",
+            match_id=str(subscription.match_id),
+            error=str(exc),
+        )
+
     try:
         await _pump(websocket, pubsub, subscription=subscription, session_factory=session_factory)
     finally:

@@ -216,6 +216,7 @@ async def publish_lobby_credentials(
     lobby_password: str,
     tournament_name: str,
     opponent_name: str | None = None,
+    automated: bool = True,
 ) -> NotificationEnvelope:
     """Emit ``lobby_credentials`` (PLAN.md §3.3 manual fallback).
 
@@ -231,6 +232,7 @@ async def publish_lobby_credentials(
             lobby_password=lobby_password,
             tournament_name=tournament_name,
             opponent_name=opponent_name,
+            automated=automated,
         ),
     )
     await publisher.publish(envelope)

@@ -121,6 +121,13 @@ class LobbyCredentialsPayload(_Strict):
     opponent_name: str | None = Field(
         default=None, description="Resolved display name of the opposing team, if known."
     )
+    automated: bool = Field(
+        default=True,
+        description=(
+            "False when no client opted in to hosting, so the lobby will NOT be "
+            "created automatically and the recipient has to make it themselves."
+        ),
+    )
 
 
 class CheckInReminderPayload(_Strict):

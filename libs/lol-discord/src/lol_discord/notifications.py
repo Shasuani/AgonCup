@@ -111,6 +111,7 @@ def lobby_credentials(
     lobby_password: str,
     tournament_name: str,
     opponent_name: str | None = None,
+    automated: bool = True,
 ) -> dict[str, Any]:
     """The custom-lobby name + password for a match, DMed to the people who need it.
 
@@ -119,6 +120,10 @@ def lobby_credentials(
     patch that moved the endpoint. When it does, whoever is waiting has nothing
     to act on. These are the same backend-owned credentials the client would
     have used, so a lobby made by hand is the *same* lobby.
+
+    ``automated=False`` means no client opted in to hosting this match, so nothing
+    is coming — telling that reader to wait for their client would be a promise
+    the backend knows it cannot keep.
     """
     fields: list[EmbedField] = [
         _field("Lobby name", f"`{lobby_name}`", inline=True),
@@ -126,11 +131,21 @@ def lobby_credentials(
     ]
     if opponent_name:
         fields.append(_field("Opponent", opponent_name))
+    if automated:
+        description = (
+            f"**{tournament_name}** — your client will create this lobby and invite "
+            "everyone. If that does not happen, make a custom game with the name and "
+            "password below and the others can join it directly."
+        )
+    else:
+        description = (
+            f"**{tournament_name}** — nobody's client is set up to host this match, so "
+            "please create it yourself: a **custom game** with the name and password "
+            "below. Everyone else has the same details and can join it directly."
+        )
     return build_embed(
         "Your match lobby",
-        f"**{tournament_name}** — your client will create this lobby and invite "
-        "everyone. If that does not happen, make a custom game with the name and "
-        "password below and the others can join it directly.",
+        description,
         color=EmbedColor.DEFAULT,
         fields=fields,
     )

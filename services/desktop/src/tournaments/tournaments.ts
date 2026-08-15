@@ -509,3 +509,87 @@ export async function getBracket(
     detail: detailOf(json, `Could not load the bracket (HTTP ${res.status}).`),
   };
 }
+
+// ---------------------------------------------------------------------------
+// Live matches (orchestration)
+// ---------------------------------------------------------------------------
+/** One live match of the caller's, with whatever is known about its lobby. */
+export interface MyMatch {
+  readonly matchId: string;
+  /** The match's guild — threaded into the WS subscribe frame for tenant scoping. */
+  readonly guildId: string;
+  readonly tournamentName: string;
+  readonly roundLabel: string;
+  /** Null until a lobby is initialized (drawn, but not opened yet). */
+  readonly lobbyState: string | null;
+  readonly lobbyName: string | null;
+  readonly lobbyPassword: string | null;
+  /** Null on the manual-fallback path — nobody's client is hosting. */
+  readonly hostName: string | null;
+  readonly isHost: boolean;
+}
+
+export type ListMyMatchesResult =
+  | { readonly ok: true; readonly matches: MyMatch[] }
+  | { readonly ok: false; readonly status: number; readonly detail: string };
+
+function asMyMatch(raw: unknown): MyMatch {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const str = (k: string): string => (typeof r[k] === "string" ? (r[k] as string) : "");
+  const nullable = (k: string): string | null =>
+    typeof r[k] === "string" && r[k] !== "" ? (r[k] as string) : null;
+  return {
+    matchId: str("match_id"),
+    guildId: str("guild_id"),
+    tournamentName: str("tournament_name"),
+    roundLabel: str("round_label"),
+    lobbyState: nullable("lobby_state"),
+    lobbyName: nullable("lobby_name"),
+    lobbyPassword: nullable("lobby_password"),
+    hostName: nullable("host_name"),
+    isHost: r["is_host"] === true,
+  };
+}
+
+/**
+ * The caller's live matches (GET /orchestration/matches/mine).
+ *
+ * This is how the client learns a match exists at all. Until it did, the only way
+ * to join a match's realtime channel was the `DESKTOP_MATCH_ID` environment
+ * variable, so in a real tournament nobody subscribed and every orchestration
+ * command the backend published was delivered to an empty channel.
+ */
+export async function listMyMatches(
+  args: AuthedArgs,
+  deps: HttpDeps = {},
+): Promise<ListMyMatchesResult> {
+  const doFetch = deps.fetch ?? fetch;
+  const backendUrl = resolveBackendUrl(deps.backendUrl);
+
+  let res: Response;
+  try {
+    res = await doFetch(`${backendUrl}/api/v1/orchestration/matches/mine`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${args.accessToken}` },
+    });
+  } catch (err) {
+    return { ok: false, status: 0, detail: `Backend unreachable: ${String(err)}` };
+  }
+
+  let json: unknown;
+  try {
+    json = await res.json();
+  } catch {
+    json = undefined;
+  }
+
+  if (res.ok) {
+    const list = Array.isArray(json) ? json : [];
+    return { ok: true, matches: list.map(asMyMatch) };
+  }
+  return {
+    ok: false,
+    status: res.status,
+    detail: detailOf(json, `Could not load your live matches (HTTP ${res.status}).`),
+  };
+}

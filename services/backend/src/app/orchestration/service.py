@@ -67,6 +67,7 @@ from lol_realtime import (
     AbortCommand,
     AudienceDescriptor,
     AudienceKind,
+    AutoAcceptCommand,
     CreateLobbyCommand,
     Envelope,
     EnvelopePayload,
@@ -74,7 +75,7 @@ from lol_realtime import (
     LobbySpec,
     PromoteHostCommand,
 )
-from lol_schemas.enums import GameMode, LobbyPhase
+from lol_schemas.enums import GameMode, LobbyPhase, MatchStatus, TeamMemberStatus
 from sqlalchemy import CursorResult, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
@@ -141,6 +142,13 @@ def derive_server_seed(match_id: uuid.UUID, *, server_secret: str) -> str:
     with HMAC-SHA256 so neither alone is sufficient and the result is unsteerable.
     """
     return hmac.new(server_secret.encode(), str(match_id).encode(), sha256).hexdigest()
+
+
+def _match_label(match: Match) -> str:
+    """The bracket label every player-facing surface shows (see readiness)."""
+    from app.tournaments.readiness import match_label  # noqa: PLC0415 - avoids a cycle
+
+    return match_label(match)
 
 
 def roster_from_sessions(sessions: Sequence[ClientSession]) -> list[RosterMember]:
@@ -210,6 +218,29 @@ def build_invite_command(
         host_epoch=host_epoch,
         to_summoner_ids=list(to_summoner_ids),
         to_puuids=list(to_puuids),
+    )
+
+
+def build_auto_accept_command(
+    *,
+    match_id: uuid.UUID,
+    host_epoch: int,
+    expected_inviter_puuid: str,
+    command_id: str | None = None,
+) -> AutoAcceptCommand:
+    """Mint a fenced ``AutoAcceptCommand`` for the guests (PLAN.md §3.6.3).
+
+    The invite's other half. The host's client sends nine invites, but until this
+    is issued nine people still have to click Accept themselves — most of the
+    manual work the autonomous path is supposed to remove. ``expected_inviter_puuid``
+    keeps the arming narrow: a guest accepts an invite from **this match's
+    designated host** and nobody else.
+    """
+    return AutoAcceptCommand(
+        command_id=command_id or _command_id(),
+        match_id=str(match_id),
+        host_epoch=host_epoch,
+        expected_inviter_puuid=expected_inviter_puuid,
     )
 
 
@@ -443,6 +474,93 @@ async def _get_lobby(session: AsyncSession, match_id: uuid.UUID) -> MatchLobby:
     return lobby
 
 
+async def bind_match_roster(session: AsyncSession, *, match: Match) -> int:
+    """Bind both teams' players to this match with a per-match ``ClientSession``.
+
+    This is the join that was missing between "the bracket exists" and "the lobby
+    can be built". :func:`initialize_lobby` reads its roster exclusively from
+    ``ClientSession`` rows carrying this ``match_id``; nothing else ever set one,
+    so every match reached lobby creation with an empty roster and died on
+    :class:`NoEligibleHostError` — silently, because auto-init swallows it.
+
+    Each bound row is a **copy of the player's standing row** (the ``match_id IS
+    NULL`` record written at lock-in by ``record_client_presence``): same PUUID,
+    same host consent. Copying rather than moving is what lets one player be bound
+    to matches in two tournaments at once without either match stealing the other's
+    roster row.
+
+    A player with no standing row is skipped, not invented: it means they never
+    locked in from a client, or have no Riot account to invite. Idempotent — a
+    second call adds nobody, so re-running a bracket start is safe.
+
+    Returns the number of rows actually created.
+    """
+    team_ids = [t for t in (match.team_a, match.team_b) if t is not None]
+    if not team_ids:
+        return 0
+
+    member_ids = [
+        uid
+        for (uid,) in (
+            await session.execute(
+                select(TeamMember.user_id).where(
+                    TeamMember.team_id.in_(team_ids),
+                    TeamMember.status == TeamMemberStatus.ACTIVE,
+                )
+            )
+        ).all()
+    ]
+    if not member_ids:
+        return 0
+
+    guild_id = await _current_guild(session)
+    standing = {
+        s.user_id: s
+        for s in (
+            await session.execute(
+                select(ClientSession).where(
+                    ClientSession.user_id.in_(member_ids),
+                    ClientSession.match_id.is_(None),
+                )
+            )
+        ).scalars()
+    }
+    already = {
+        s.user_id
+        for s in (
+            await session.execute(select(ClientSession).where(ClientSession.match_id == match.id))
+        ).scalars()
+    }
+
+    bound = 0
+    for user_id in member_ids:
+        if user_id in already:
+            continue
+        source = standing.get(user_id)
+        if source is None:
+            continue
+        session.add(
+            ClientSession(
+                guild_id=guild_id,
+                user_id=user_id,
+                puuid=source.puuid,
+                match_id=match.id,
+                host_opt_in=source.host_opt_in,
+                consent_version=source.consent_version,
+                consent_at=source.consent_at,
+            )
+        )
+        bound += 1
+    await session.flush()
+    logger.info(
+        "orchestration.bind_match_roster",
+        match_id=str(match.id),
+        bound=bound,
+        roster=len(member_ids),
+    )
+    return bound
+
+
 async def _checked_in_sessions(session: AsyncSession, match_id: uuid.UUID) -> list[ClientSession]:
     """Checked-in roster for a match: client sessions bound to the match (RLS-scoped)."""
     rows = (
@@ -566,11 +684,24 @@ async def initialize_lobby(
     )
     await publisher.publish(wrap_envelope(create_cmd, guild_id=guild_id, match_id=match_id))
     await publisher.publish(wrap_envelope(invite_cmd, guild_id=guild_id, match_id=match_id))
+    # Arm the guests to accept the invite the host is about to send. Issued on the
+    # same match channel — every client filters by match id already — and fenced to
+    # the designated host's PUUID so it can never become "accept anything".
+    await publisher.publish(
+        wrap_envelope(
+            build_auto_accept_command(
+                match_id=match_id, host_epoch=lobby.host_epoch, expected_inviter_puuid=host
+            ),
+            guild_id=guild_id,
+            match_id=match_id,
+        )
+    )
 
     await _announce_lobby(
         session,
         match=match,
-        lobby=lobby,
+        lobby_name=lobby.lobby_name,
+        lobby_password=lobby.lobby_password,
         host_puuid=host,
         guild_id=guild_id,
         candidates=candidates,
@@ -590,8 +721,9 @@ async def _announce_lobby(
     session: AsyncSession,
     *,
     match: Match,
-    lobby: MatchLobby,
-    host_puuid: str,
+    lobby_name: str | None,
+    lobby_password: str | None,
+    host_puuid: str | None,
     guild_id: uuid.UUID,
     candidates: Sequence[InviteCandidate],
 ) -> None:
@@ -607,6 +739,10 @@ async def _announce_lobby(
     channel so everyone sees the same name/password, and a DM to the host and
     both captains, who are the ones expected to act. Best-effort throughout — a
     notification failure must never fail a lobby that was created successfully.
+
+    ``host_puuid`` is ``None`` on the **manual-fallback** path: nobody opted their
+    client in to hosting, so there is no automation to wait for and the message has
+    to say so rather than promise an invite that will never arrive.
     """
     from app.notifications import (
         RedisNotificationPublisher,
@@ -615,22 +751,22 @@ async def _announce_lobby(
     )
     from app.realtime.redis_client import get_redis
 
-    if not lobby.lobby_name or not lobby.lobby_password:
+    if not lobby_name or not lobby_password:
         return
 
     try:
         names = await _display_names(session, user_ids=[c.user_id for c in candidates])
-        host = next((c for c in candidates if c.puuid == host_puuid), None)
+        host = next((c for c in candidates if c.puuid == host_puuid), None) if host_puuid else None
         tournament_name = await _tournament_name_for_match(session, match=match)
         notifier = RedisNotificationPublisher(get_redis())
 
         await publish_match_ready(
             notifier,
             origin_guild_id=str(guild_id),
-            match_label=f"Round {match.round + 1} · Match {match.bracket_slot + 1}",
-            host_name=names.get(host.user_id, "the host") if host else "the host",
-            lobby_name=lobby.lobby_name,
-            lobby_password=lobby.lobby_password,
+            match_label=_match_label(match),
+            host_name=names.get(host.user_id, "the host") if host else "nobody yet",
+            lobby_name=lobby_name,
+            lobby_password=lobby_password,
         )
 
         # The host must be able to create the lobby by hand; the captains are who
@@ -645,14 +781,75 @@ async def _announce_lobby(
                 notifier,
                 origin_guild_id=str(guild_id),
                 discord_user_id=discord_user_id,
-                lobby_name=lobby.lobby_name,
-                lobby_password=lobby.lobby_password,
+                lobby_name=lobby_name,
+                lobby_password=lobby_password,
                 tournament_name=tournament_name,
                 opponent_name=None,
+                automated=host is not None,
             )
-            logger.info("orchestration.lobby_credentials_sent", user_id=str(user_id))
+            logger.info(
+                "orchestration.lobby_credentials_sent",
+                user_id=str(user_id),
+                automated=host is not None,
+            )
     except Exception:  # noqa: BLE001 — advisory: never fail a created lobby.
         logger.exception("orchestration.announce_lobby_failed", match_id=str(match.id))
+
+
+async def announce_manual_lobby(
+    session: AsyncSession, *, match_id: uuid.UUID, lobby_name: str, lobby_password: str
+) -> None:
+    """Hand the match to the players when no client can host it.
+
+    The autonomous path needs somebody who opted their client in to hosting. When
+    nobody has, :func:`initialize_lobby` raises and the match used to end there —
+    no lobby row, no notification, ten people waiting on a message that was never
+    going to come. PLAN.md §3.6.1 is explicit that this case falls back to "the
+    manual lobby name + password UI", so it is announced instead of dropped.
+
+    Records a ``MatchLobby`` in the terminal ``HOST_LOST`` phase — the state this
+    codebase already uses for "bounded epochs exhausted, manual fallback surfaced"
+    (see the worker's ``ABORT_TO_MANUAL``). That row is what makes announcing
+    **idempotent**: a caller that re-scans playable matches finds a lobby and stops,
+    so nobody is DMed the same credentials twice. It is inert by construction — the
+    watchdog's failover UPDATE excludes ``host_lost`` — and per PLAN.md §3.6.1 a
+    match that fell back to manual stays manual.
+    """
+    try:
+        guild_id = await _current_guild(session)
+        match = await _get_match(session, match_id)
+        existing = (
+            await session.execute(select(MatchLobby).where(MatchLobby.match_id == match_id))
+        ).scalar_one_or_none()
+        if existing is not None:
+            return
+        session.add(
+            MatchLobby(
+                guild_id=guild_id,
+                match_id=match_id,
+                host_puuid=None,
+                host_succession=[],
+                host_epoch=0,
+                lobby_name=lobby_name,
+                lobby_password=lobby_password,
+                state=LobbyPhase.HOST_LOST,
+            )
+        )
+        await session.flush()
+
+        sessions = await _checked_in_sessions(session, match_id)
+        candidates = await _invite_candidates(session, match=match, sessions=sessions)
+        await _announce_lobby(
+            session,
+            match=match,
+            lobby_name=lobby_name,
+            lobby_password=lobby_password,
+            host_puuid=None,
+            guild_id=guild_id,
+            candidates=candidates,
+        )
+    except Exception:  # noqa: BLE001 — advisory: a missing DM must not fail a match.
+        logger.exception("orchestration.announce_manual_lobby_failed", match_id=str(match_id))
 
 
 async def _display_names(
@@ -735,8 +932,10 @@ async def auto_initialize_lobby(
 
     Generates the backend-owned lobby credentials and delegates to
     :func:`initialize_lobby`. Returns ``None`` (never raises) when nobody on the
-    checked-in roster opted in to host — the ready still stands and an admin can
-    initialize the lobby manually. Idempotent via ``initialize_lobby``.
+    checked-in roster opted in to host — but the players are handed the lobby by
+    hand via :func:`announce_manual_lobby` rather than left waiting. Returning
+    ``None`` in silence is what made "nobody opted in to host" indistinguishable
+    from "nobody started the match". Idempotent via ``initialize_lobby``.
     """
     name, password = default_lobby_credentials(match_id)
     try:
@@ -750,7 +949,190 @@ async def auto_initialize_lobby(
         )
     except NoEligibleHostError:
         logger.info("orchestration.auto_init.no_eligible_host", match_id=str(match_id))
+        await announce_manual_lobby(
+            session, match_id=match_id, lobby_name=name, lobby_password=password
+        )
         return None
+
+
+async def open_playable_matches(
+    session: AsyncSession,
+    *,
+    tournament_id: uuid.UUID,
+    publisher: CommandPublisher | None = None,
+) -> int:
+    """Bind rosters and open a lobby for every match of ``tournament_id`` that can
+    now be played.
+
+    The step between "the bracket exists" and "ten people know where to go", and
+    the reason locking in used to lead nowhere: a bracket was drawn and then
+    *nothing* happened, because opening a lobby was reachable only through a
+    per-match ready-up that no client surfaces.
+
+    ``PENDING`` is the whole selection rule — the bracket engine gives a match that
+    status exactly when both sides are known — so this is equally correct called
+    after the bracket is drawn and after a result fills the next round's slot.
+
+    Safe to call repeatedly: :func:`bind_match_roster` adds nobody twice and both
+    lobby paths no-op once a ``MatchLobby`` exists. Best-effort per match — one
+    match that cannot be opened must not hold up the rest of the round.
+
+    Returns the number of matches that reached a lobby (automated or manual).
+    """
+    matches = list(
+        (
+            await session.execute(
+                select(Match).where(
+                    Match.tournament_id == tournament_id,
+                    Match.status == MatchStatus.PENDING,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    opened = 0
+    for match in matches:
+        try:
+            await bind_match_roster(session, match=match)
+            await auto_initialize_lobby(session, match_id=match.id, publisher=publisher)
+            opened += 1
+        except Exception:  # noqa: BLE001 — one bad match must not stall the round.
+            logger.exception("orchestration.open_playable_match_failed", match_id=str(match.id))
+    logger.info(
+        "orchestration.open_playable_matches",
+        tournament_id=str(tournament_id),
+        pending=len(matches),
+        opened=opened,
+    )
+    return opened
+
+
+@dataclass(frozen=True)
+class MyMatch:
+    """One live match the caller is rostered in, as their client needs it.
+
+    Answers two questions a desktop client had no way to ask: *which match should
+    I open a realtime channel for*, and *what is happening in it*. Without the
+    first, the client only ever subscribed to a match id pasted into an env var,
+    so the backend's commands were published to a channel with nobody on it.
+    """
+
+    match_id: str
+    guild_id: str
+    tournament_name: str
+    round_label: str
+    #: None until a lobby is initialized (the match is drawn but not yet opened).
+    lobby_state: str | None
+    lobby_name: str | None
+    lobby_password: str | None
+    #: Display name of the designated host; None on the manual-fallback path,
+    #: which is exactly when the client must tell the player to create it.
+    host_name: str | None
+    #: True when THIS caller's client is the designated host.
+    is_host: bool
+
+
+async def list_my_matches(session: AsyncSession, *, user_id: uuid.UUID) -> list[MyMatch]:
+    """The caller's live matches, with whatever is known about each lobby.
+
+    Sourced from the caller's match-bound :class:`ClientSession` rows — the same
+    rows :func:`initialize_lobby` builds the lobby from — so a client is told about
+    exactly the matches the backend would address commands to, and never about one
+    it could not participate in. RLS scopes it to the acting guild.
+
+    Completed matches are excluded: a client has nothing left to do for them, and
+    subscribing would keep a channel open for a match that will never speak again.
+    """
+    rows = list(
+        (
+            await session.execute(
+                select(ClientSession).where(
+                    ClientSession.user_id == user_id,
+                    ClientSession.match_id.is_not(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not rows:
+        return []
+
+    match_ids = [r.match_id for r in rows if r.match_id is not None]
+    matches = {
+        m.id: m
+        for m in (await session.execute(select(Match).where(Match.id.in_(match_ids))))
+        .scalars()
+        .all()
+        if m.status is not MatchStatus.COMPLETED
+    }
+    if not matches:
+        return []
+
+    lobbies = {
+        lobby.match_id: lobby
+        for lobby in (
+            await session.execute(select(MatchLobby).where(MatchLobby.match_id.in_(match_ids)))
+        )
+        .scalars()
+        .all()
+    }
+
+    out: list[MyMatch] = []
+    for row in rows:
+        match = matches.get(row.match_id) if row.match_id is not None else None
+        if match is None:
+            continue
+        lobby = lobbies.get(match.id)
+        host_name = None
+        if lobby is not None and lobby.host_puuid:
+            host_name = await _name_for_puuid(session, puuid=lobby.host_puuid)
+        out.append(
+            MyMatch(
+                match_id=str(match.id),
+                guild_id=str(match.guild_id),
+                tournament_name=await _tournament_name_for_match(session, match=match),
+                round_label=_match_label(match),
+                lobby_state=lobby.state.value if lobby is not None else None,
+                lobby_name=lobby.lobby_name if lobby is not None else None,
+                lobby_password=lobby.lobby_password if lobby is not None else None,
+                host_name=host_name,
+                is_host=lobby is not None and lobby.host_puuid == row.puuid,
+            )
+        )
+    return out
+
+
+async def _name_for_puuid(session: AsyncSession, *, puuid: str) -> str | None:
+    """Resolve a PUUID to a display name (never expose the PUUID to a client UI)."""
+    user_id = (
+        await session.execute(select(RiotAccount.user_id).where(RiotAccount.puuid == puuid))
+    ).scalar_one_or_none()
+    if user_id is None:
+        return None
+    return (
+        await session.execute(select(User.display_name).where(User.id == user_id))
+    ).scalar_one_or_none()
+
+
+async def open_matches_after(
+    session: AsyncSession, *, match_id: uuid.UUID, publisher: CommandPublisher | None = None
+) -> int:
+    """Open whatever became playable once ``match_id`` was decided.
+
+    A recorded result fills the winner into the next round's empty slot, and the
+    moment both of that match's slots are filled it flips to ``PENDING`` — playable,
+    and needing exactly the same roster binding and lobby as a first-round match
+    did. Resolving the tournament from the match keeps the results router from
+    having to know the bracket layout.
+    """
+    tournament_id = (
+        await session.execute(select(Match.tournament_id).where(Match.id == match_id))
+    ).scalar_one_or_none()
+    if tournament_id is None:
+        return 0
+    return await open_playable_matches(session, tournament_id=tournament_id, publisher=publisher)
 
 
 # ---------------------------------------------------------------------------
@@ -925,7 +1307,7 @@ async def _announce_phase(session: AsyncSession, *, match_id: uuid.UUID, state: 
             await session.execute(select(Tournament).where(Tournament.id == match.tournament_id))
         ).scalar_one_or_none()
         headline, detail = milestone
-        label = f"Round {match.round + 1} · Match {match.bracket_slot + 1}"
+        label = _match_label(match)
         await publish_tournament_announced(
             RedisNotificationPublisher(get_redis()),
             origin_guild_id=str(match.guild_id),
@@ -1092,12 +1474,18 @@ async def _apply_recreate(
     await session.refresh(lobby)
     game_mode = await _game_mode_for_match_id(session, lobby.match_id)
     sessions = await _checked_in_sessions(session, lobby.match_id)
+    # Resolve summonerIds here exactly as the initial create does. Passing an empty
+    # list re-created the lobby and then invited NOBODY — the same failure
+    # `initialize_lobby` was already fixed for, left behind on the failover path,
+    # where it is worse: the players have already lost one lobby.
+    summoner_ids = await _summoner_ids_for(session, puuids=[s.puuid for s in sessions])
+    invitee_puuids = [s.puuid for s in sessions if s.puuid in summoner_ids]
     spec = build_lobby_spec(
         match_id=lobby.match_id,
         lobby_name=lobby.lobby_name or "",
         lobby_password=lobby.lobby_password or "",
-        invitee_summoner_ids=[],
-        invitee_puuids=[s.puuid for s in sessions],
+        invitee_summoner_ids=[summoner_ids[p] for p in invitee_puuids],
+        invitee_puuids=invitee_puuids,
         game_mode=game_mode,
     )
     create_cmd = build_create_lobby_command(
@@ -1111,6 +1499,20 @@ async def _apply_recreate(
     )
     await publisher.publish(wrap_envelope(create_cmd, guild_id=guild_id, match_id=lobby.match_id))
     await publisher.publish(wrap_envelope(invite_cmd, guild_id=guild_id, match_id=lobby.match_id))
+    # Re-arm the guests for the NEW host. Auto-accept is fenced to a specific
+    # inviter PUUID, so guests still armed for the deposed host would refuse the
+    # successor's invite — the automation would look alive and accept nothing.
+    await publisher.publish(
+        wrap_envelope(
+            build_auto_accept_command(
+                match_id=lobby.match_id,
+                host_epoch=lobby.host_epoch,
+                expected_inviter_puuid=successor,
+            ),
+            guild_id=guild_id,
+            match_id=lobby.match_id,
+        )
+    )
 
 
 async def _apply_abort(

@@ -20,16 +20,26 @@
  * unit-testable with a fake adapter under `node --test`.
  */
 
-import type { GameflowPhase, LcuAdapter, LiveClientEventCapture } from "@lol/lcu";
+import type {
+  GameflowPhase,
+  HostEpoch,
+  LcuAdapter,
+  LiveClientEventCapture,
+  Puuid,
+  SummonerId,
+} from "@lol/lcu";
 import type {
   AutoAcceptCommand,
   BackendTransport,
   Clock,
   CreateLobbyCommand,
+  InvitePlayersCommand,
   LobbyCommand,
   PromoteHostCommand,
   Scheduler,
+  WireLobbySpec,
 } from "./protocol.js";
+import { fromWire, toCustomLobbySpec } from "./protocol.js";
 
 export interface ControllerConfig {
   /** The match this controller services; commands for other matches are ignored. */
@@ -53,6 +63,11 @@ export class OrchestrationController {
   #currentEpoch = -1;
   #isHost = false;
   #reported = false;
+  /**
+   * The last lobby spec the backend sent. A promotion carries no spec, so this is
+   * what "re-create verbatim" (PLAN.md §3.6.2) re-creates from.
+   */
+  #lastSpec: WireLobbySpec | null = null;
   /**
    * Latest best-effort Live-Client (`:2999`) kill-stream capture, refreshed on
    * each `InProgress` tick and bundled into the single eog report (§3.6.4). The
@@ -114,15 +129,27 @@ export class OrchestrationController {
     }
     this.#currentEpoch = command.hostEpoch;
 
-    switch (command.kind) {
-      case "create_lobby":
-      case "promote_host":
-        await this.#hostCreate(command);
+    switch (command.type) {
+      case "create_lobby_command":
+        await this.#hostCreate(command, command.spec);
         break;
-      case "auto_accept":
+      case "promote_host_command":
+        // Re-create VERBATIM (PLAN.md §3.6.2) from the spec this client already
+        // holds. Without one there is nothing faithful to re-create, so refuse and
+        // let the backend surface the manual lobby instead of guessing a roster.
+        if (this.#lastSpec === null) {
+          await this.#ack(command, false, "no lobby spec to re-create from");
+          break;
+        }
+        await this.#hostCreate(command, this.#lastSpec);
+        break;
+      case "invite_players_command":
+        await this.#hostInvite(command);
+        break;
+      case "auto_accept_command":
         await this.#guestAutoAccept(command);
         break;
-      case "abort":
+      case "abort_command":
         this.#unsubscribeInvite?.();
         this.#unsubscribeInvite = null;
         this.#isHost = false;
@@ -131,10 +158,18 @@ export class OrchestrationController {
     }
   }
 
-  async #hostCreate(command: CreateLobbyCommand | PromoteHostCommand): Promise<void> {
+  async #hostCreate(
+    command: CreateLobbyCommand | PromoteHostCommand,
+    wire: WireLobbySpec,
+  ): Promise<void> {
     try {
-      const handle = await this.#adapter.createCustomLobby(command.spec);
-      await this.#adapter.invite(command.spec.invitees);
+      const spec = toCustomLobbySpec(wire, {
+        matchId: command.matchId,
+        hostEpoch: command.hostEpoch,
+      });
+      const handle = await this.#adapter.createCustomLobby(spec);
+      await this.#adapter.invite(spec.invitees);
+      this.#lastSpec = wire;
       this.#isHost = true;
       await this.#transport.sendAck({
         commandId: command.commandId,
@@ -150,10 +185,30 @@ export class OrchestrationController {
     }
   }
 
+  /**
+   * Re-invite the roster the backend named.
+   *
+   * The host already invites everyone as part of creating the lobby, so this is
+   * the retry/repair lane — it exists because the backend has always published an
+   * `invite_players_command` alongside the create, and a command nobody handles is
+   * a command that silently does nothing.
+   */
+  async #hostInvite(command: InvitePlayersCommand): Promise<void> {
+    try {
+      await this.#adapter.invite(command.toSummonerIds.map((id) => fromWire<SummonerId>(id)));
+      await this.#ack(command, true);
+    } catch (err) {
+      await this.#ack(command, false, errorMessage(err));
+    }
+  }
+
   async #guestAutoAccept(command: AutoAcceptCommand): Promise<void> {
     try {
       this.#unsubscribeInvite?.();
-      this.#unsubscribeInvite = await this.#adapter.autoAcceptInvite(command.filter);
+      this.#unsubscribeInvite = await this.#adapter.autoAcceptInvite({
+        expectedInviterPuuid: fromWire<Puuid>(command.expectedInviterPuuid),
+        hostEpoch: fromWire<HostEpoch>(command.hostEpoch),
+      });
       await this.#ack(command, true);
     } catch (err) {
       await this.#ack(command, false, errorMessage(err));

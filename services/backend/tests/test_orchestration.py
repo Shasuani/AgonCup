@@ -22,7 +22,7 @@ from typing import Any
 
 import pytest
 from lol_core import FailoverAction, LobbyEvent
-from lol_realtime import CreateLobbyCommand, PromoteHostCommand
+from lol_realtime import AutoAcceptCommand, CreateLobbyCommand, PromoteHostCommand
 from lol_schemas.enums import LobbyPhase
 
 from app.models import (
@@ -326,9 +326,20 @@ async def test_initialize_lobby_designates_host_and_publishes_create_invite() ->
     assert result.succession == tuple(succession)
     assert result.state == LobbyPhase.AWAITING_CREATE
 
-    # CreateLobby + Invite envelopes were published, both fenced at epoch 0.
+    # CreateLobby + Invite + AutoAccept envelopes, all fenced at epoch 0. The
+    # auto-accept is what saves the other nine from clicking Accept by hand — an
+    # invite nobody accepts automatically is only half the automation.
     payload_types = [e.payload.type for e in pub.published]
-    assert payload_types == ["create_lobby_command", "invite_players_command"]
+    assert payload_types == [
+        "create_lobby_command",
+        "invite_players_command",
+        "auto_accept_command",
+    ]
+    arm = pub.published[2].payload
+    assert isinstance(arm, AutoAcceptCommand)
+    # Fenced to THIS match's designated host — never "accept anything".
+    assert arm.expected_inviter_puuid == succession[0]
+    assert arm.host_epoch == 0
     create = pub.published[0].payload
     assert isinstance(create, CreateLobbyCommand)
     assert create.host_epoch == 0
@@ -385,12 +396,18 @@ async def test_auto_initialize_lobby_spins_up_when_host_present() -> None:
     assert [e.payload.type for e in pub.published] == [
         "create_lobby_command",
         "invite_players_command",
+        "auto_accept_command",
     ]
 
 
 @pytest.mark.asyncio
-async def test_auto_initialize_lobby_returns_none_without_host() -> None:
-    # Nobody opted in to host → best-effort no-op (ready still stands, no raise).
+async def test_auto_initialize_lobby_falls_back_to_manual_without_host() -> None:
+    """Nobody opted in to host → the players are handed the lobby, not left waiting.
+
+    This used to be a silent no-op, which made "no eligible host" look exactly like
+    "nobody started the match": no lobby, no message, ten people staring at a
+    client. PLAN.md §3.6.1 falls back to the manual name+password instead.
+    """
     session, match_id, _ = _seeded_session(opt_ins=0, opt_outs=2)
     pub = RecordingPublisher()
 
@@ -398,9 +415,35 @@ async def test_auto_initialize_lobby_returns_none_without_host() -> None:
         session, match_id=match_id, publisher=pub, server_secret=_SECRET
     )
 
+    # No host was leased, so no LCU command is issued to anyone.
     assert result is None
     assert pub.published == []
-    assert session.store[MatchLobby] == []
+
+    # ...but the match is recorded as manual-fallback, carrying the same
+    # deterministic credentials the automation would have used.
+    name, password = default_lobby_credentials(match_id)
+    lobby = session.store[MatchLobby][0]
+    assert lobby.state is LobbyPhase.HOST_LOST
+    assert lobby.host_puuid is None
+    assert (lobby.lobby_name, lobby.lobby_password) == (name, password)
+
+
+@pytest.mark.asyncio
+async def test_manual_fallback_announces_once_however_often_it_is_retried() -> None:
+    """The fallback DM must not repeat every time the round is re-scanned.
+
+    ``open_playable_matches`` runs on every bracket start and every recorded
+    result, so an announce with no memory would DM the same credentials again on
+    each pass. The ``MatchLobby`` row written by the fallback is that memory.
+    """
+    session, match_id, _ = _seeded_session(opt_ins=0, opt_outs=2)
+
+    for _ in range(3):
+        await auto_initialize_lobby(
+            session, match_id=match_id, publisher=RecordingPublisher(), server_secret=_SECRET
+        )
+
+    assert len(session.store[MatchLobby]) == 1
 
 
 @pytest.mark.asyncio
@@ -639,7 +682,11 @@ async def test_failover_recreates_when_host_gone() -> None:
     assert lobby.host_epoch == 1
     assert lobby.state == LobbyPhase.AWAITING_CREATE
     types = [e.payload.type for e in pub.published]
-    assert types == ["create_lobby_command", "invite_players_command"]
+    assert types == [
+        "create_lobby_command",
+        "invite_players_command",
+        "auto_accept_command",
+    ]
     assert pub.published[0].payload.host_epoch == 1
 
 

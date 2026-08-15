@@ -79,9 +79,24 @@ def _side_of(match: Match, team_id: uuid.UUID) -> str:
     raise TeamNotInMatchError(f"{team_id} is not in match {match.id}")
 
 
-def _match_label(match: Match) -> str:
-    """Human bracket label, e.g. ``Round 2 · Match 3`` (1-indexed slot)."""
-    return f"Round {match.round + 1} · Match {match.bracket_slot + 1}"
+def match_label(match: Match) -> str:
+    """Human bracket label, e.g. ``Round 2 · Match 3``.
+
+    ``round`` is already **1-based** — ``lol_core.bracket`` documents "round 1 =
+    first round played" — so it is printed as-is. Adding one, as every label site
+    used to, announced the opening round of every tournament as "Round 2", in the
+    Discord embed players actually read. ``bracket_slot`` IS 0-based, so it does
+    take the +1.
+
+    Shared rather than repeated: the same string is built for the ready-up flow,
+    the match-ready embed, the lobby DM and the client's match list, and four
+    copies is how they disagreed in the first place.
+    """
+    return f"Round {match.round} · Match {match.bracket_slot + 1}"
+
+
+#: Backwards-compatible alias for the module-private name this used to have.
+_match_label = match_label
 
 
 async def resolve_ready_team(

@@ -104,6 +104,9 @@ def _build_embed(kind: str, payload: dict[str, Any]) -> dict[str, Any] | None:
             lobby_password=payload.get("lobby_password", "?"),
             tournament_name=payload.get("tournament_name", "your tournament"),
             opponent_name=payload.get("opponent_name"),
+            # Absent on envelopes published before the flag existed; those all
+            # came from the automated path, so True is the correct old meaning.
+            automated=payload.get("automated", True) is not False,
         )
     if kind == "check_in_reminder":
         return tournament_check_in(name=payload["tournament_name"], deadline=payload["deadline"])

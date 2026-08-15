@@ -22,9 +22,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit import service as audit_service
 from app.auth.deps import Principal, get_current_principal, require_tenant_role
+from app.logging import get_logger
 from app.models import MatchResult
 from app.results import service
 
+logger = get_logger(__name__)
 router = APIRouter(prefix="/results", tags=["results"])
 
 # Recording a decided result (admin override / adjudicated outcome) is a
@@ -137,6 +139,21 @@ async def record_match_winner(
         guild_id=result.guild_id,
         detail=body.reason,
     )
+
+    # The winner has just been advanced; whichever match that filled is now
+    # playable and needs its own roster + lobby, exactly as round one did.
+    # Best-effort: a round that cannot be opened must not undo a recorded result.
+    from app.orchestration import service as orchestration_service
+
+    try:
+        await orchestration_service.open_matches_after(
+            session,
+            match_id=match_id,
+            publisher=orchestration_service.make_command_publisher(),
+        )
+    except Exception:  # noqa: BLE001 — best-effort side effect, never fails the record.
+        logger.exception("record_match_winner.open_next_failed", match_id=str(match_id))
+
     return _to_response(result)
 
 

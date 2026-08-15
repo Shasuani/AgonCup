@@ -23,7 +23,7 @@ from lol_schemas.enums import LobbyPhase, UserGuildRoleName
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.deps import get_tenant_session, require_tenant_role
+from app.auth.deps import Principal, get_current_principal, get_tenant_session, require_tenant_role
 from app.orchestration import service
 
 
@@ -52,6 +52,58 @@ _ADMIN = require_tenant_role(UserGuildRoleName.GUILD_ADMIN)
 async def ping() -> dict[str, str]:
     """Placeholder endpoint proving the router is mounted."""
     return {"module": "orchestration", "status": "ok"}
+
+
+class MyMatchResponse(BaseModel):
+    """One live match the caller is rostered in (see :class:`service.MyMatch`)."""
+
+    match_id: str
+    guild_id: str
+    tournament_name: str
+    round_label: str
+    lobby_state: str | None = None
+    lobby_name: str | None = None
+    lobby_password: str | None = None
+    host_name: str | None = None
+    is_host: bool = False
+
+
+@router.get(
+    "/matches/mine",
+    response_model=list[MyMatchResponse],
+    summary="List the caller's live matches and their lobby state",
+)
+async def list_my_matches(
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    session: Annotated[AsyncSession, Depends(get_tenant_session)],
+) -> list[MyMatchResponse]:
+    """What a desktop client needs to join its own matches.
+
+    The missing half of the realtime plane. The backend published every
+    orchestration command onto a per-match channel, but a client only ever
+    subscribed to a match id supplied through the ``DESKTOP_MATCH_ID`` environment
+    variable — dev wiring, never replaced — so in a real tournament nobody was
+    listening and the commands went nowhere.
+
+    Also carries the lobby's live state, name and password, which is what lets the
+    client *show* the player whether the custom game exists yet and, when nobody
+    could host it, exactly what to create by hand.
+    """
+    rows = await service.list_my_matches(session, user_id=uuid.UUID(principal.user_id))
+    return [
+        MyMatchResponse(
+            match_id=m.match_id,
+            guild_id=m.guild_id,
+            tournament_name=m.tournament_name,
+            round_label=m.round_label,
+            lobby_state=m.lobby_state,
+            lobby_name=m.lobby_name,
+            lobby_password=m.lobby_password,
+            host_name=m.host_name,
+            is_host=m.is_host,
+        )
+        for m in rows
+    ]
 
 
 # ---------------------------------------------------------------------------

@@ -7,6 +7,7 @@ import pytest
 from lol_discord import (
     EmbedColor,
     build_central_feed_item,
+    lobby_credentials,
     match_ready,
     match_result,
     registration_code,
@@ -229,3 +230,34 @@ def test_central_feed_carries_no_identifiers_in_clean_projection() -> None:
     blob = _field_values(embed).lower()
     for forbidden in ("puuid", "discord", "summoner"):
         assert forbidden not in blob
+
+
+def test_lobby_credentials_promises_an_invite_only_when_a_client_will_host() -> None:
+    """The manual fallback must not tell the reader to wait for their client.
+
+    ``automated=False`` is sent exactly when nobody opted in to hosting, so the
+    automated wording would be a promise the backend already knows it cannot keep
+    — the reader would sit waiting for a lobby nothing is going to create.
+    """
+    automated = _field_values(
+        lobby_credentials(
+            lobby_name="LoL-abc12345",
+            lobby_password="ABC123",
+            tournament_name="Summer Cup",
+        )
+    )
+    assert "your client will create this lobby" in automated
+
+    manual = _field_values(
+        lobby_credentials(
+            lobby_name="LoL-abc12345",
+            lobby_password="ABC123",
+            tournament_name="Summer Cup",
+            automated=False,
+        )
+    )
+    assert "create it yourself" in manual
+    assert "your client will create this lobby" not in manual
+    # Either way the credentials themselves are what the reader acts on.
+    for blob in (automated, manual):
+        assert "LoL-abc12345" in blob and "ABC123" in blob

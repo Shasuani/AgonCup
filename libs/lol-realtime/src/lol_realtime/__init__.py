@@ -10,6 +10,7 @@ from lol_realtime.envelopes import (
     AbortCommand,
     AudienceDescriptor,
     AudienceKind,
+    AutoAcceptCommand,
     CreateLobbyCommand,
     Envelope,
     EnvelopePayload,
@@ -29,6 +30,7 @@ from lol_realtime.envelopes import (
 
 __all__ = [
     "AbortCommand",
+    "AutoAcceptCommand",
     "AudienceDescriptor",
     "AudienceKind",
     "CreateLobbyCommand",

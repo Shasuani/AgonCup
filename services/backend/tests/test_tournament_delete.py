@@ -1,12 +1,14 @@
-"""Discarding a draft tournament (PLAN.md §3.1).
+"""Deleting a tournament outright (PLAN.md §3.1).
 
-Nothing in the API could remove a tournament. The only DELETE is the per-user
+Nothing in the API could remove a tournament. The only DELETE was the per-user
 ``/mine`` dismissal, which is a view filter and refuses anything not already
-finished — so a tournament created by mistake, or to try something out, stayed on
+finished — so a tournament created by mistake, or one long dead, stayed on
 every admin's list permanently.
 
-The whole safety of the new route is the DRAFT restriction, so that is what these
-tests pin: a draft goes, and everything past it is refused rather than erased.
+The route started DRAFT-only; it now deletes in any state (the guild's admins
+own the history that cascades with it), so what these tests pin is that every
+status goes, the row is returned for the audit entry, and an unknown id is a
+clean not-found.
 """
 
 from __future__ import annotations
@@ -33,11 +35,13 @@ def _tournament(*, guild_id: uuid.UUID, status: TournamentStatus) -> Tournament:
     )
 
 
-async def test_a_draft_can_be_thrown_away() -> None:
+@pytest.mark.parametrize("status", list(TournamentStatus))
+async def test_any_status_can_be_deleted(status: TournamentStatus) -> None:
+    """DRAFT through CANCELLED — the admin decides, the row goes."""
     guild_id = uuid.uuid4()
     session = FakeSession()
     session.current_guild = str(guild_id)
-    tournament = _tournament(guild_id=guild_id, status=TournamentStatus.DRAFT)
+    tournament = _tournament(guild_id=guild_id, status=status)
     session.store[Tournament].append(tournament)
 
     deleted = await service.delete_tournament(session, tournament_id=tournament.id)
@@ -46,35 +50,6 @@ async def test_a_draft_can_be_thrown_away() -> None:
     # id on its own is unreadable once the row no longer exists.
     assert deleted.name == "Scratch Cup"
     assert session.store[Tournament] == []
-
-
-@pytest.mark.parametrize(
-    "status",
-    [
-        TournamentStatus.OPEN,
-        TournamentStatus.CHECK_IN,
-        TournamentStatus.RUNNING,
-        TournamentStatus.COMPLETED,
-        TournamentStatus.CANCELLED,
-    ],
-)
-async def test_anything_past_draft_is_refused(status: TournamentStatus) -> None:
-    """Past DRAFT a tournament holds other people's entries and results.
-
-    Deleting cascades to registrations, participants and the bracket, so allowing
-    it here would erase somebody else's history on an admin's misclick. A live one
-    that should stop gets cancelled, which keeps the record.
-    """
-    guild_id = uuid.uuid4()
-    session = FakeSession()
-    session.current_guild = str(guild_id)
-    tournament = _tournament(guild_id=guild_id, status=status)
-    session.store[Tournament].append(tournament)
-
-    with pytest.raises(service.InvalidStateError):
-        await service.delete_tournament(session, tournament_id=tournament.id)
-
-    assert session.store[Tournament] == [tournament]
 
 
 async def test_an_unknown_tournament_is_not_found() -> None:

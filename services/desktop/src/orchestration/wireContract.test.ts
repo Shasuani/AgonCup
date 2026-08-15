@@ -44,7 +44,7 @@ function harness() {
   const acks: LobbyAck[] = [];
   const calls: string[] = [];
   const invited: string[] = [];
-  let armedInviter: string | null = null;
+  let armedFilter: Record<string, unknown> | null = null;
   let handler: ((c: LobbyCommand) => void) | null = null;
 
   const transport: BackendTransport = {
@@ -76,9 +76,9 @@ function harness() {
       calls.push("invite");
       invited.push(...(ids as string[]));
     },
-    async autoAcceptInvite(filter: { expectedInviterPuuid: string }) {
+    async autoAcceptInvite(filter: Record<string, unknown>) {
       calls.push("autoAcceptInvite");
-      armedInviter = filter.expectedInviterPuuid;
+      armedFilter = filter;
       return () => {};
     },
     async getGameflowPhase() {
@@ -105,7 +105,7 @@ function harness() {
     calls,
     invited,
     spec: () => capturedSpec,
-    armedInviter: () => armedInviter,
+    armedFilter: () => armedFilter,
   };
 }
 
@@ -152,7 +152,11 @@ test("the backend's auto_accept bytes arm the guest against THAT host", async ()
 
   assert.deepEqual(h.calls, ["autoAcceptInvite"]);
   // Fenced to the designated host: arming must never mean "accept anything".
-  assert.equal(h.armedInviter(), "puuid-host");
+  // The LCU-side identifiers must arrive too — the guest's client identifies the
+  // inviter by LCU-local puuid / summonerId, never by the canonical PUUID.
+  assert.equal(h.armedFilter()?.["expectedInviterPuuid"], "puuid-host");
+  assert.equal(h.armedFilter()?.["expectedInviterLcuPuuid"], "lcu-uuid-host");
+  assert.equal(h.armedFilter()?.["expectedInviterSummonerId"], "sid-host");
   assert.equal(h.acks[0]?.ok, true);
 });
 

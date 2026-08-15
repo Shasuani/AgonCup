@@ -8,7 +8,9 @@
   },
   "auto_accept_command": {
     "commandId": "cmd-accept",
+    "expectedInviterLcuPuuid": "lcu-uuid-host",
     "expectedInviterPuuid": "puuid-host",
+    "expectedInviterSummonerId": "sid-host",
     "hostEpoch": 0,
     "matchId": "11111111-2222-3333-4444-555555555555",
     "type": "auto_accept_command"

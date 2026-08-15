@@ -64,6 +64,8 @@ def _commands() -> dict[str, object]:
             match_id=match_id,
             host_epoch=0,
             expected_inviter_puuid="puuid-host",
+            expected_inviter_lcu_puuid="lcu-uuid-host",
+            expected_inviter_summoner_id="sid-host",
             command_id="cmd-accept",
         ),
         "promote_host_command": PromoteHostCommand(

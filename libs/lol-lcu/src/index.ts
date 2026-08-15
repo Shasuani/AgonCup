@@ -269,13 +269,24 @@ export interface CurrentLobby {
 // ---------------------------------------------------------------------------
 
 /**
- * Filter for guest-side auto-accept. Accept ONLY when the inviter PUUID equals
- * the designated host for the current epoch; party/queue invites are hard-
- * excluded. Gated additionally on per-session opt-in + presence at call time.
+ * Filter for guest-side auto-accept. Accept ONLY when the inviter matches the
+ * designated host for the current epoch; party/queue invites are hard-excluded.
+ * Gated additionally on per-session opt-in + presence at call time.
+ *
+ * The inviter is matched on ANY of the identity fields below. The LCU's
+ * received-invitation record identifies the inviter by the LCU-local 36-char
+ * `fromPuuid` and the per-region numeric `fromSummonerId` — it never carries the
+ * canonical 78-char PUUID, so a fence made only of {@link expectedInviterPuuid}
+ * matches nothing and every invite sits un-accepted. The backend therefore also
+ * sends the host's advisory LCU identifiers (captured at desktop verification).
  */
 export interface AutoAcceptInviteFilter {
-  /** Only auto-accept invites from this designated-host PUUID. */
+  /** Canonical designated-host PUUID (kept as a fence input; see above). */
   readonly expectedInviterPuuid: Puuid;
+  /** Host's LCU-local 36-char PUUID — what `fromPuuid` actually carries. */
+  readonly expectedInviterLcuPuuid?: Puuid;
+  /** Host's per-region numeric summonerId — matches `fromSummonerId`. */
+  readonly expectedInviterSummonerId?: SummonerId;
   /** Current host epoch; reject invites bound to a stale epoch. */
   readonly hostEpoch: HostEpoch;
   /**
@@ -919,8 +930,9 @@ export class LcuAdapterImpl implements LcuAdapter {
    * a lobby invite, costs one loopback GET, and reuses the audited request path.
    *
    * Acceptance still passes the whole filter: `invitationType === 'lobby'`, the
-   * inviter PUUID equal to `filter.expectedInviterPuuid` for the current epoch,
-   * and the write-gate (opt-in + kill-switch + presence + pacing). The loop stops
+   * inviter matching the designated host for the current epoch (see
+   * {@link inviterMatchesFilter} for the identifier spaces involved), and the
+   * write-gate (opt-in + kill-switch + presence + pacing). The loop stops
    * on the first acceptance — there is nothing left to wait for — or when the
    * returned unsubscribe is called.
    */
@@ -959,9 +971,9 @@ export class LcuAdapterImpl implements LcuAdapter {
    * reports invites the player can already see in their own client.
    *
    * Records missing the fields the filter is made of are dropped rather than
-   * guessed at — an invitation with no readable inviter can never satisfy
-   * "accept only from the designated host", so passing it on could only ever
-   * loosen the fence.
+   * guessed at — an invitation with no readable inviter identity (neither
+   * `fromPuuid` nor `fromSummonerId`) can never satisfy "accept only from the
+   * designated host", so passing it on could only ever loosen the fence.
    */
   async getReceivedInvitations(): Promise<readonly ReceivedInvitation[]> {
     const res = await this.#lcuRequest('GET', LCU_PATHS.receivedInvitations);
@@ -973,14 +985,22 @@ export class LcuAdapterImpl implements LcuAdapter {
       const rec = asRecord(raw);
       const invitationId = asOptString(rec['invitationId']);
       const fromPuuid = asOptString<Puuid>(rec['fromPuuid']);
+      // `fromSummonerId` arrives as a JSON number; normalize to the string brand.
+      const rawSummonerId = rec['fromSummonerId'];
+      const fromSummonerId =
+        typeof rawSummonerId === 'number' || typeof rawSummonerId === 'string'
+          ? (String(rawSummonerId) as SummonerId)
+          : undefined;
       const invitationType = asOptString(rec['invitationType']);
-      if (invitationId === undefined || fromPuuid === undefined || invitationType === undefined) {
+      const hasInviterIdentity = fromPuuid !== undefined || fromSummonerId !== undefined;
+      if (invitationId === undefined || invitationType === undefined || !hasInviterIdentity) {
         continue;
       }
       const inviteType = asOptString(rec['gameConfigInviteType']);
       out.push({
         invitationId,
-        fromPuuid,
+        ...(fromPuuid === undefined ? {} : { fromPuuid }),
+        ...(fromSummonerId === undefined ? {} : { fromSummonerId }),
         invitationType,
         ...(inviteType === undefined ? {} : { gameConfigInviteType: inviteType }),
       });
@@ -1014,7 +1034,7 @@ export class LcuAdapterImpl implements LcuAdapter {
         if (invitation.invitationType !== 'lobby') {
           return { accepted: false, reason: 'not-a-lobby-invite' };
         }
-        if (invitation.fromPuuid !== filter.expectedInviterPuuid) {
+        if (!inviterMatchesFilter(invitation, filter)) {
           return { accepted: false, reason: 'inviter-mismatch' };
         }
         if (
@@ -1232,8 +1252,14 @@ export class LcuAdapterImpl implements LcuAdapter {
  */
 export interface ReceivedInvitation {
   readonly invitationId: string;
-  /** Inviter PUUID — the load-bearing auto-accept filter key (§3.6.3). */
-  readonly fromPuuid: Puuid;
+  /**
+   * Inviter PUUID as the LCU reports it — the LCU-local 36-char UUID, NOT the
+   * canonical 78-char PUUID. Optional: older schemas expose only
+   * `fromSummonerId`; at least one of the two identity fields is present.
+   */
+  readonly fromPuuid?: Puuid;
+  /** Inviter's per-region numeric summonerId (long-standing LCU field). */
+  readonly fromSummonerId?: SummonerId;
   /** `'lobby'` for custom-lobby invites; party/queue types are excluded. */
   readonly invitationType: string;
   /** Optional custom-lobby invite-type discriminator (additional guard only). */
@@ -1261,4 +1287,35 @@ export interface InviteDecision {
 export interface InviteAcceptController {
   handle(invitation: ReceivedInvitation): Promise<InviteDecision>;
   unsubscribe(): void;
+}
+
+/**
+ * Does this invitation come from the designated host? A match on ANY of the
+ * filter's identity fields accepts, because the record and the backend describe
+ * the same player in different identifier spaces: `fromPuuid` is the LCU-local
+ * 36-char UUID (compared against both the canonical fence for forward-compat and
+ * the advisory `expectedInviterLcuPuuid` that actually lives in that space), and
+ * `fromSummonerId` is the per-region numeric id. An absent field never matches —
+ * the fence can only be satisfied, never defaulted through.
+ */
+export function inviterMatchesFilter(
+  invitation: ReceivedInvitation,
+  filter: AutoAcceptInviteFilter,
+): boolean {
+  if (invitation.fromPuuid !== undefined) {
+    if (invitation.fromPuuid === filter.expectedInviterPuuid) {
+      return true;
+    }
+    if (
+      filter.expectedInviterLcuPuuid !== undefined &&
+      invitation.fromPuuid === filter.expectedInviterLcuPuuid
+    ) {
+      return true;
+    }
+  }
+  return (
+    invitation.fromSummonerId !== undefined &&
+    filter.expectedInviterSummonerId !== undefined &&
+    invitation.fromSummonerId === filter.expectedInviterSummonerId
+  );
 }

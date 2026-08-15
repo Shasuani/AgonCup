@@ -129,11 +129,16 @@ function TournamentsBody(): JSX.Element {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
-  // Confirmed before it happens: the row and its (empty) bracket go for good, and
-  // the name is the only thing that makes a draft recognisable in a list.
+  // Confirmed before it happens: the row and everything under it go for good.
+  // Past draft that includes other people's registrations, bracket and results,
+  // so the warning says so instead of pretending it's a tidy-up.
   const handleDelete = useCallback(
     async (t: TournamentResponse) => {
-      if (!window.confirm(`Delete the draft "${t.name}"? This cannot be undone.`)) return;
+      const message =
+        t.status === "draft"
+          ? `Delete the draft "${t.name}"? This cannot be undone.`
+          : `Delete "${t.name}"? Its registrations, bracket and results are erased for everyone. This cannot be undone.`;
+      if (!window.confirm(message)) return;
       setDeletingId(t.id);
       setDeleteError(null);
       try {
@@ -182,24 +187,20 @@ function TournamentsBody(): JSX.Element {
     {
       id: "actions",
       header: "",
-      // Draft only, deliberately. Past draft a tournament holds other people's
-      // entries and results, and the backend refuses to delete it — offering a
-      // button that always 409s would be worse than offering none.
-      cell: (t) =>
-        t.status === "draft" ? (
-          <RoleGate anyOf={ADMIN_ROLES}>
-            <Button
-              variant="secondary"
-              data-delete-tournament
-              disabled={deletingId === t.id}
-              onClick={() => {
-                void handleDelete(t);
-              }}
-            >
-              {deletingId === t.id ? "Deleting…" : "Delete"}
-            </Button>
-          </RoleGate>
-        ) : null,
+      cell: (t) => (
+        <RoleGate anyOf={ADMIN_ROLES}>
+          <Button
+            variant="secondary"
+            data-delete-tournament
+            disabled={deletingId === t.id}
+            onClick={() => {
+              void handleDelete(t);
+            }}
+          >
+            {deletingId === t.id ? "Deleting…" : "Delete"}
+          </Button>
+        </RoleGate>
+      ),
     },
   ];
 

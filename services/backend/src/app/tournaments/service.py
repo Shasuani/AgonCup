@@ -35,8 +35,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.joincodes import generate_join_code, normalize_join_code
 from app.models import (
+    ClientSession,
     Match,
     Registration,
+    RiotAccount,
     Team,
     TeamMember,
     Tournament,
@@ -862,9 +864,81 @@ async def check_in(
     ):
         if participant.locked_in_at is None:
             participant.locked_in_at = now
+        await record_client_presence(session, user_id=participant.user_id)
     reg.status = RegistrationStatus.CHECKED_IN
     await session.flush()
     return reg
+
+
+async def record_client_presence(
+    session: AsyncSession, *, user_id: uuid.UUID, host_opt_in: bool | None = None
+) -> ClientSession | None:
+    """Write the player's standing :class:`ClientSession` at lock-in (PLAN.md §3.6.1).
+
+    Lock-in is the moment the orchestrator first learns a player exists *as a
+    client*: which PUUID to invite, and whether they consented to host. Nothing
+    else in the system writes this table, and :func:`initialize_lobby` builds its
+    entire roster from it — so without this row the autonomous path is dead on
+    arrival: no host candidates, no lobby, and (because the credentials DM is sent
+    from inside lobby creation) no message to anyone, however many people locked in.
+
+    The row written here is the **standing** one — ``match_id IS NULL``, a
+    preference record rather than a match binding. ``bind_match_roster`` copies it
+    onto a per-match row when the bracket is drawn, which is what keeps a player
+    entered in two tournaments at once from having one row fought over by two
+    matches.
+
+    ``host_opt_in`` is left untouched when ``None`` (the caller has no new answer),
+    so a player's standing consent survives every later lock-in. It defaults to
+    **False** on a fresh row: hosting drives LCU *writes*, which PLAN.md §3.6.1
+    gates behind an explicit opt-in — a player is skipped, never commandeered.
+
+    Returns ``None`` for a player with no Riot account: an invite is addressed by
+    PUUID, so there is nothing to write and nothing the lobby could do with them.
+    Lock-in itself still succeeds — they are simply a manual-join player.
+    """
+    account = (
+        (
+            await session.execute(
+                select(RiotAccount)
+                .where(RiotAccount.user_id == user_id)
+                .order_by(RiotAccount.verified.desc(), RiotAccount.id)
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if account is None:
+        return None
+
+    row = (
+        (
+            await session.execute(
+                select(ClientSession).where(
+                    ClientSession.user_id == user_id,
+                    ClientSession.match_id.is_(None),
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if row is None:
+        row = ClientSession(
+            guild_id=await _current_guild(session),
+            user_id=user_id,
+            puuid=account.puuid,
+            host_opt_in=bool(host_opt_in),
+        )
+        session.add(row)
+    else:
+        # The PUUID is refreshed rather than assumed: a re-verified account can
+        # move to a different canonical PUUID, and a stale one invites nobody.
+        row.puuid = account.puuid
+    if host_opt_in is not None:
+        row.host_opt_in = host_opt_in
+    await session.flush()
+    return row
 
 
 async def _registration_for(
@@ -938,7 +1012,11 @@ async def _participants_for_team(
 
 
 async def check_in_self(
-    session: AsyncSession, *, tournament_id: uuid.UUID, user_id: uuid.UUID
+    session: AsyncSession,
+    *,
+    tournament_id: uuid.UUID,
+    user_id: uuid.UUID,
+    host_opt_in: bool | None = None,
 ) -> Registration:
     """Lock the **caller themselves** in — the button every entrant presses.
 
@@ -953,6 +1031,9 @@ async def check_in_self(
     locked in; until then it stays PENDING and the team cannot be seeded. That is the
     whole reason lock-in moved off the captain: their word is not evidence that four
     other people are at their keyboards.
+
+    ``host_opt_in`` carries the player's answer to "may your client run the lobby?"
+    when the caller has one; ``None`` leaves any standing answer alone.
     """
     team_id = await resolve_check_in_team(session, tournament_id=tournament_id, user_id=user_id)
     # Repaired rather than required: an entry whose registration was never written
@@ -980,6 +1061,10 @@ async def check_in_self(
     if participant.locked_in_at is None:
         participant.locked_in_at = _utcnow()
     participant.team_id = team_id
+    # Lock-in is the only moment a player tells us their client is here, so it is
+    # where the orchestrator's roster record is written (see
+    # :func:`record_client_presence`).
+    await record_client_presence(session, user_id=user_id, host_opt_in=host_opt_in)
     await session.flush()
 
     locked = {

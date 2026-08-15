@@ -15,8 +15,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.models import (
+    ClientSession,
     Guild,
     Match,
+    MatchLobby,
     MatchResult,
     Registration,
     RiotAccount,
@@ -45,6 +47,8 @@ _MODELS: tuple[type, ...] = (
     VerificationAttempt,
     Match,
     MatchResult,
+    ClientSession,
+    MatchLobby,
 )
 
 
@@ -85,6 +89,12 @@ class _Scalars:
 
     def all(self) -> list[Any]:
         return self.rows
+
+    def first(self) -> Any:
+        """Real ``ScalarResult.first()`` — the head row, or None. Used where a
+        query may legitimately match several rows (e.g. a user with more than one
+        Riot account) and the caller wants whichever the ORDER BY put first."""
+        return self.rows[0] if self.rows else None
 
     def __iter__(self) -> Any:
         # Real SQLAlchemy ScalarResult is iterable (e.g. ``list(...scalars())``).
@@ -264,8 +274,13 @@ def _equality_filters(statement: Any) -> dict[str, Any]:
             # filter a boolean column (``Team.is_solo.is_(False)``) and means plain
             # equality. Without this it would silently drop out of the criteria and
             # the fake would answer as if the filter were not there — a filter that
-            # tests can never catch being wrong. Restricted to boolean literals so
-            # ``.is_(None)`` keeps its current "not modelled" behaviour.
+            # tests can never catch being wrong.
+            #
+            # ``col.is_(None)`` is modelled for the same reason: the orchestrator
+            # tells a player's STANDING client session from a match-bound one by
+            # ``match_id IS NULL`` alone, so dropping that filter would make the
+            # fake hand back bound rows to a query that asked for unbound ones —
+            # silently answering the opposite question.
             op = getattr(bool_expr, "operator", None)
             left = getattr(bool_expr, "left", None)
             right = getattr(bool_expr, "right", None)
@@ -280,6 +295,9 @@ def _equality_filters(statement: Any) -> dict[str, Any]:
                 continue
             if op is operator.ne:
                 crit[left.key] = _Ne(_literal(right))
+                continue
+            if _is_operator(op) and _is_null_literal(right):
+                crit[left.key] = _IsNull()
                 continue
             # Only ``==`` clauses otherwise constrain the fake store; inequalities
             # (e.g. ``start_at <= now``) can't be modelled here and are left to the
@@ -306,6 +324,20 @@ class _Ne:
     """Marker for a ``!=`` criterion (see :func:`_matches`)."""
 
     value: Any
+
+
+@dataclass(frozen=True)
+class _IsNull:
+    """Marker for an ``IS NULL`` criterion (see :func:`_matches`)."""
+
+
+def _is_null_literal(operand: Any) -> bool:
+    """True when ``col.is_(...)``'s operand is SQL NULL.
+
+    SQLAlchemy renders it as the ``Null`` singleton, not as a bound ``None``, so
+    an ``is None`` check on the operand would never fire.
+    """
+    return type(operand).__name__ == "Null" or _literal(operand) is None
 
 
 def _op_name(op: Any) -> str:
@@ -364,6 +396,10 @@ def _matches(row: Any, crit: dict[str, Any]) -> bool:
             continue
         if isinstance(val, _Ne):
             if str(actual) == str(getattr(val.value, "value", val.value)):
+                return False
+            continue
+        if isinstance(val, _IsNull):
+            if actual is not None:
                 return False
             continue
         val = getattr(val, "value", val)

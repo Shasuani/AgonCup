@@ -92,6 +92,12 @@ class CheckInRequest(BaseModel):
     to name, and a captain of exactly one team does not need to repeat it."""
 
     team_id: uuid.UUID | None = None
+    #: "May your client create and run the lobby for your matches?" Hosting is the
+    #: one path that issues LCU *writes*, so PLAN.md §3.6.1 requires an explicit
+    #: opt-in — omitting it leaves any standing answer alone and never opts anyone
+    #: in by default. Matches where nobody opted in fall back to the manual
+    #: name+password DM rather than going quiet.
+    host_opt_in: bool | None = None
 
 
 class EntrantPlayerResponse(BaseModel):
@@ -487,7 +493,10 @@ async def check_in(
     try:
         if team_id is None:
             reg = await service.check_in_self(
-                session, tournament_id=tournament_id, user_id=uuid.UUID(principal.user_id)
+                session,
+                tournament_id=tournament_id,
+                user_id=uuid.UUID(principal.user_id),
+                host_opt_in=body.host_opt_in if body is not None else None,
             )
         else:
             if UserGuildRoleName.GUILD_ADMIN not in principal.roles:
@@ -564,6 +573,23 @@ async def start_tournament(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="tournament not found") from exc
     except (service.NotEnoughTeamsError, service.InvalidStateError) as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    # Drawing the bracket is only half of starting: the round-one matches have to
+    # be handed to the players. Without this the tournament went RUNNING and every
+    # entrant sat there, because opening a lobby was reachable only through a
+    # per-match ready-up no client exposes. Best-effort — a notification or
+    # realtime hiccup must not undo a bracket that was generated successfully.
+    from app.orchestration import service as orchestration_service
+
+    try:
+        await orchestration_service.open_playable_matches(
+            session,
+            tournament_id=tournament_id,
+            publisher=orchestration_service.make_command_publisher(),
+        )
+    except Exception:  # noqa: BLE001 — best-effort side effect, never fails the start.
+        logger.exception("start_tournament.open_matches_failed", tournament_id=str(tournament_id))
+
     return StartResponse(
         tournament_id=result.tournament_id,
         matches_created=result.matches_created,

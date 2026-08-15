@@ -18,6 +18,7 @@ from lol_schemas.enums import GameMode, TournamentFormat, UserGuildRoleName
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit import service as audit_service
 from app.auth.deps import (
     Principal,
     get_current_principal,
@@ -556,6 +557,49 @@ async def list_entrants(
         )
         for e in entrants
     ]
+
+
+@router.delete(
+    "/{tournament_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Discard a draft tournament (guild_admin)",
+)
+async def delete_tournament(
+    tournament_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    session: Annotated[AsyncSession, Depends(_ADMIN)],
+) -> None:
+    """Throw away a tournament that was never opened.
+
+    Distinct from ``DELETE /{id}/mine``, which only hides a finished tournament
+    from the caller's own list. This removes the row — and its registrations,
+    participants and (empty) bracket cascade with it.
+
+    ``409`` for anything past DRAFT: once a tournament opens it holds other
+    people's entries and results, which an admin should be cancelling, not
+    erasing. Audited, because it is the one destructive tournament action.
+    """
+    try:
+        deleted = await service.delete_tournament(session, tournament_id=tournament_id)
+    except service.TournamentNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="tournament not found") from exc
+    except service.InvalidStateError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    try:
+        admin_id = uuid.UUID(principal.user_id) if principal.user_id else None
+    except (ValueError, TypeError):
+        admin_id = None
+    await audit_service.record_audit(
+        session,
+        action="tournament.deleted",
+        entity_type="tournament",
+        entity_id=tournament_id,
+        actor_id=admin_id,
+        actor_kind=audit_service.ACTOR_GUILD,
+        guild_id=deleted.guild_id,
+        detail=deleted.name,
+    )
 
 
 @router.post(

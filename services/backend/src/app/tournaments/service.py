@@ -1277,6 +1277,34 @@ async def _seeded_team_ids(session: AsyncSession, tournament_id: uuid.UUID) -> l
     return [r[0] for r in rows]
 
 
+async def delete_tournament(session: AsyncSession, *, tournament_id: uuid.UUID) -> Tournament:
+    """Discard a **draft** tournament outright (PLAN.md §3.1).
+
+    Filling in a form wrong, or setting one up to try something, used to leave a
+    tournament nobody could get rid of: the only DELETE in the API is the per-user
+    ``/mine`` dismissal, which is a view filter and refuses anything that is not
+    already finished. So a mistake stayed on every admin's list forever.
+
+    **DRAFT only**, and that restriction is the safety property. Registration is
+    open in DRAFT, so this can take entrants' registrations and participant rows
+    with it (they cascade) — which is the intent for a draft being thrown away,
+    but would be somebody else's history for a tournament that ever opened, ran,
+    or completed. Those cannot be deleted at all; a live one that should stop is
+    cancelled, which preserves the record.
+
+    Returns the deleted row so the caller can audit what went (the id alone is
+    useless in a log once the row is gone).
+    """
+    tournament = await get_tournament(session, tournament_id=tournament_id)
+    if tournament.status is not TournamentStatus.DRAFT:
+        raise InvalidStateError(
+            f"only a draft tournament can be deleted (this one is {tournament.status.value})"
+        )
+    await session.delete(tournament)
+    await session.flush()
+    return tournament
+
+
 async def start_tournament(session: AsyncSession, *, tournament_id: uuid.UUID) -> StartResult:
     """Generate the bracket from checked-in teams and move to RUNNING.
 

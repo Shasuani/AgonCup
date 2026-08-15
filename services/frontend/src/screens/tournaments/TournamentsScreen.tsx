@@ -126,6 +126,29 @@ function TournamentsBody(): JSX.Element {
     reload();
   }, [reload]);
 
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  // Confirmed before it happens: the row and its (empty) bracket go for good, and
+  // the name is the only thing that makes a draft recognisable in a list.
+  const handleDelete = useCallback(
+    async (t: TournamentResponse) => {
+      if (!window.confirm(`Delete the draft "${t.name}"? This cannot be undone.`)) return;
+      setDeletingId(t.id);
+      setDeleteError(null);
+      try {
+        await api.tournaments.remove(t.id);
+        if (selectedId === t.id) setSelectedId(null);
+        reload();
+      } catch (err) {
+        setDeleteError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setDeletingId(null);
+      }
+    },
+    [api, reload, selectedId],
+  );
+
   const columns: ReadonlyArray<Column<TournamentResponse>> = [
     {
       id: "name",
@@ -156,6 +179,28 @@ function TournamentsBody(): JSX.Element {
       cell: (t) => entrantsText(t.max_teams, t.game_mode),
     },
     { id: "schedule", header: "Schedule", cell: scheduleCell },
+    {
+      id: "actions",
+      header: "",
+      // Draft only, deliberately. Past draft a tournament holds other people's
+      // entries and results, and the backend refuses to delete it — offering a
+      // button that always 409s would be worse than offering none.
+      cell: (t) =>
+        t.status === "draft" ? (
+          <RoleGate anyOf={ADMIN_ROLES}>
+            <Button
+              variant="secondary"
+              data-delete-tournament
+              disabled={deletingId === t.id}
+              onClick={() => {
+                void handleDelete(t);
+              }}
+            >
+              {deletingId === t.id ? "Deleting…" : "Delete"}
+            </Button>
+          </RoleGate>
+        ) : null,
+    },
   ];
 
   const rows = data ?? [];
@@ -194,6 +239,7 @@ function TournamentsBody(): JSX.Element {
       ) : null}
 
       {error ? <ErrorBanner error={error} onRetry={reload} /> : null}
+      {deleteError ? <ErrorBanner error={deleteError} /> : null}
 
       <DataTable<TournamentResponse>
         caption="Tournaments"

@@ -58,6 +58,7 @@ function mockClient(overrides: Partial<ApiClient["tournaments"]> = {}): {
     register: vi.fn(),
     checkIn: vi.fn(),
     start: vi.fn(),
+    remove: vi.fn(async () => undefined),
     ...overrides,
   } as unknown as ApiClient["tournaments"];
 
@@ -200,5 +201,81 @@ describe("Create form gating", () => {
     // Neither the toggle that reveals the form nor the form's submit exists.
     expect(screen.queryByRole("button", { name: "New tournament" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Create tournament" })).not.toBeInTheDocument();
+  });
+});
+
+
+describe("TournamentsScreen delete", () => {
+  /** A draft alongside the live ones — only the draft may be deleted. */
+  const WITH_DRAFT: TournamentResponse[] = [
+    ...TOURNAMENTS,
+    {
+      id: "tour-draft",
+      name: "Scratch Cup",
+      status: "draft",
+      format: "single_elimination",
+      game_mode: "aram_1v1",
+      best_of: 1,
+      max_teams: 8,
+      is_shared_to_central: false,
+      registration_opens_at: null,
+      start_at: null,
+    },
+  ];
+
+  it("offers Delete on a draft and on nothing else", async () => {
+    // A tournament past draft holds other people's entries and the backend
+    // refuses to delete it, so a button there would only ever 409.
+    const { client } = mockClient({ list: vi.fn(async () => WITH_DRAFT) });
+    renderScreen(client);
+
+    await screen.findByText("Scratch Cup");
+    await waitFor(() => {
+      expect(document.querySelectorAll("[data-delete-tournament]")).toHaveLength(1);
+    });
+  });
+
+  it("confirms first, then deletes and reloads", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const { client, tournaments } = mockClient({ list: vi.fn(async () => WITH_DRAFT) });
+    renderScreen(client);
+
+    await screen.findByText("Scratch Cup");
+    await userEvent.click(document.querySelector("[data-delete-tournament]") as HTMLElement);
+
+    await waitFor(() => expect(tournaments.remove).toHaveBeenCalledWith("tour-draft"));
+    expect(confirm).toHaveBeenCalled();
+    // Reloaded, so the row does not linger after the row is gone server-side.
+    await waitFor(() => expect(tournaments.list).toHaveBeenCalledTimes(2));
+    confirm.mockRestore();
+  });
+
+  it("deletes nothing when the confirm is dismissed", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const { client, tournaments } = mockClient({ list: vi.fn(async () => WITH_DRAFT) });
+    renderScreen(client);
+
+    await screen.findByText("Scratch Cup");
+    await userEvent.click(document.querySelector("[data-delete-tournament]") as HTMLElement);
+
+    expect(tournaments.remove).not.toHaveBeenCalled();
+    confirm.mockRestore();
+  });
+
+  it("surfaces a refusal instead of silently doing nothing", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const { client } = mockClient({
+      list: vi.fn(async () => WITH_DRAFT),
+      remove: vi.fn(async () => {
+        throw new Error("only a draft tournament can be deleted");
+      }),
+    });
+    renderScreen(client);
+
+    await screen.findByText("Scratch Cup");
+    await userEvent.click(document.querySelector("[data-delete-tournament]") as HTMLElement);
+
+    expect(await screen.findByText(/only a draft tournament can be deleted/)).toBeTruthy();
+    confirm.mockRestore();
   });
 });

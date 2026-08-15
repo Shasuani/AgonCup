@@ -68,6 +68,7 @@ function makeScheduler() {
 function makeAdapter(over: Partial<Record<string, unknown>> = {}) {
   const calls: string[] = [];
   const invited: string[] = [];
+  let lobbyReads = 0;
   const adapter = {
     async readLockfileAuth() {
       return {} as never;
@@ -76,6 +77,19 @@ function makeAdapter(over: Partial<Record<string, unknown>> = {}) {
       calls.push("createCustomLobby");
       if (over.createThrows) throw new Error("LCU writes refused: kill-switch engaged");
       return { lobbyId: "lobby-xyz", lobbyName: `lol-${spec.matchId}`, hostEpoch: 1 } as never;
+    },
+    // Whether a lobby exists yet is what tells an invite from a WAIT: `noLobby`
+    // is the manual path, where the human has not made the custom game yet.
+    // `lobbyAppearsAfter` counts reads before it shows up, so a test can watch
+    // the client notice it.
+    async getCurrentLobby() {
+      calls.push("getCurrentLobby");
+      if (typeof over.lobbyAppearsAfter === "number") {
+        if (lobbyReads++ < over.lobbyAppearsAfter) return null;
+        return { lobbyId: "lobby-made-by-hand", isCustom: true } as never;
+      }
+      if (over.noLobby) return null;
+      return { lobbyId: "lobby-xyz", isCustom: true } as never;
     },
     async invite(ids: readonly unknown[]) {
       calls.push(`invite:${ids.length}`);
@@ -115,14 +129,27 @@ function makeAdapter(over: Partial<Record<string, unknown>> = {}) {
   return { adapter: adapter as never, calls, invited };
 }
 
-function makeController(t: ReturnType<typeof makeTransport>, a: ReturnType<typeof makeAdapter>, s: ReturnType<typeof makeScheduler>, heartbeatMs = 2000) {
-  return new OrchestrationController({
+function makeController(
+  t: ReturnType<typeof makeTransport>,
+  a: ReturnType<typeof makeAdapter>,
+  s: ReturnType<typeof makeScheduler>,
+  heartbeatMs = 2000,
+  // Movable so a test can walk past the manual-lobby wait's deadline.
+  clock: { nowMs: () => number } = { nowMs: () => 1000 },
+) {
+  const controller = new OrchestrationController({
     adapter: a.adapter,
     transport: t.transport,
     scheduler: s.scheduler,
-    clock: { nowMs: () => 1000 },
+    clock,
     config: { matchId: MATCH, heartbeatMs },
   });
+  // Host commands go to every client on the match channel and only the named
+  // one acts (see `setAssignedHost`). Nearly every test below is about what THAT
+  // client does, so it is the default here; the client that was NOT named has a
+  // test of its own.
+  controller.setAssignedHost(true);
+  return controller;
 }
 
 /**
@@ -290,4 +317,154 @@ test("host create: an empty invitee list is a lobby nobody can join", async () =
 
   assert.deepEqual(a.calls, ["createCustomLobby", "invite:0"]);
   assert.deepEqual(a.invited, [], "nobody invited — what the bug looked like");
+});
+
+// --- the manual path: a human makes the lobby, the client fills it ---------- //
+
+function inviteCmd(ids: readonly string[] = ["s1", "s2"]): LobbyCommand {
+  return {
+    type: "invite_players_command",
+    commandId: "c-invite",
+    matchId: MATCH,
+    hostEpoch: 0,
+    toSummonerIds: ids,
+    toPuuids: ids.map((i) => `puuid-${i}`),
+  } as unknown as LobbyCommand;
+}
+
+test("invite with no lobby yet: waits for the player to make one, then invites", async () => {
+  // The manual fallback in full. Nobody's client took the host lease, so the
+  // backend named one player, DMed them the name and password, and sent their
+  // client this invite for a lobby that does not exist yet. Firing it straight
+  // away fails against an empty client, and that failure used to be the end of
+  // the story — which left nine people hunting for a custom game by name.
+  const t = makeTransport();
+  const a = makeAdapter({ lobbyAppearsAfter: 2 });
+  const s = makeScheduler();
+  makeController(t, a, s).start();
+
+  t.emit(inviteCmd());
+  await tickMicrotasks();
+  assert.deepEqual(a.invited, [], "nothing to invite into yet");
+  assert.equal(t.acks.length, 0, "not acked: the roster has not been invited");
+
+  await runTickAsync(s); // heartbeat 1 — still no lobby
+  assert.deepEqual(a.invited, []);
+
+  await runTickAsync(s); // heartbeat 2 — the player just created it
+  assert.deepEqual(a.invited, ["s1", "s2"], "the roster is invited the moment it exists");
+  assert.equal(t.acks.length, 1);
+  assert.equal(t.acks[0]?.ok, true);
+});
+
+test("the wait for a hand-made lobby does not invite twice", async () => {
+  // The tick is a loop: without claiming the pending invite before sending it,
+  // every subsequent tick sends the same invitations again and each player is
+  // spammed once per heartbeat.
+  const t = makeTransport();
+  const a = makeAdapter();
+  const s = makeScheduler();
+  makeController(t, a, s).start();
+
+  t.emit(inviteCmd());
+  await tickMicrotasks();
+  await runTickAsync(s);
+  await runTickAsync(s);
+  await runTickAsync(s);
+
+  assert.equal(a.calls.filter((c) => c.startsWith("invite")).length, 1);
+});
+
+test("the wait is bounded: a lobby nobody ever makes is reported, not polled forever", async () => {
+  const t = makeTransport();
+  const a = makeAdapter({ noLobby: true });
+  const s = makeScheduler();
+  let now = 1000;
+  makeController(t, a, s, 2000, { nowMs: () => now }).start();
+
+  t.emit(inviteCmd());
+  await tickMicrotasks();
+  await runTickAsync(s);
+  assert.equal(t.acks.length, 0, "still within the wait");
+
+  now += 16 * 60_000; // past the 15-minute deadline
+  await runTickAsync(s);
+  assert.equal(t.acks.length, 1);
+  assert.equal(t.acks[0]?.ok, false);
+  assert.match(String(t.acks[0]?.error), /no lobby was created/);
+
+  // ...and it stops looking.
+  const reads = a.calls.filter((c) => c === "getCurrentLobby").length;
+  await runTickAsync(s);
+  assert.equal(a.calls.filter((c) => c === "getCurrentLobby").length, reads);
+});
+
+test("an abort while waiting cancels the pending invite", async () => {
+  const t = makeTransport();
+  const a = makeAdapter({ noLobby: true });
+  const s = makeScheduler();
+  makeController(t, a, s).start();
+
+  t.emit(inviteCmd());
+  await tickMicrotasks();
+  t.emit({
+    type: "abort_command",
+    commandId: "c-abort",
+    matchId: MATCH,
+    hostEpoch: 0,
+    reason: "cancelled",
+  } as unknown as LobbyCommand);
+  await tickMicrotasks();
+  await runTickAsync(s);
+
+  assert.deepEqual(a.invited, [], "a cancelled match must not invite anyone");
+});
+
+test("a client the backend did not name ignores host commands", async () => {
+  // Commands are published to a per-match channel that all ten clients hear.
+  // Before this, every one of them obeyed "create this lobby": ten custom games
+  // for one match, each holding a single player, and ten sets of invitations.
+  const t = makeTransport();
+  const a = makeAdapter();
+  const s = makeScheduler();
+  const c = makeController(t, a, s);
+  c.setAssignedHost(false);
+  c.start();
+
+  t.emit(createCmd());
+  t.emit(inviteCmd());
+  await tickMicrotasks();
+
+  assert.deepEqual(a.calls, [], "no lobby, no invites, nothing");
+  assert.deepEqual(t.acks, [], "and no ack — it was never addressed to us");
+
+  // The guest half is still ours to do: accepting the invite is what makes us
+  // join the one lobby that does exist.
+  t.emit({
+    type: "auto_accept_command",
+    commandId: "c-accept",
+    matchId: MATCH,
+    hostEpoch: 0,
+    expectedInviterPuuid: "puuid-host",
+  } as unknown as LobbyCommand);
+  await tickMicrotasks();
+  assert.deepEqual(a.calls, ["autoAcceptInvite"]);
+});
+
+test("the host lease moving is picked up without rebuilding anything", async () => {
+  const t = makeTransport();
+  const a = makeAdapter();
+  const s = makeScheduler();
+  const c = makeController(t, a, s);
+  c.setAssignedHost(false);
+  c.start();
+
+  t.emit(createCmd());
+  await tickMicrotasks();
+  assert.deepEqual(a.calls, []);
+
+  c.setAssignedHost(true); // the next match poll says the lease is ours now
+  t.emit(createCmd({ commandId: "c2" }));
+  await tickMicrotasks();
+  assert.deepEqual(a.calls, ["createCustomLobby", "invite:3"]);
 });

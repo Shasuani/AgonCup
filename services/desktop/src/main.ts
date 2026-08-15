@@ -29,12 +29,13 @@
  */
 
 import {
-  LcuAdapterSkeleton,
+  LcuAdapterImpl,
   type LcuAdapter,
   type LcuAdapterConfig,
   type LcuSchemaVersion,
   type Puuid,
 } from "@lol/lcu";
+import { createRealLcuRuntime } from "./lcu/realRuntime.js";
 import {
   OrchestrationController,
   type Clock,
@@ -101,7 +102,19 @@ const MATCH_POLL_MS = 15_000;
  * the injected scheduler. */
 export const AUTH_RETRY_MS = 10_000;
 
-/** Build the LCU adapter with writes disabled by default (opt-in per session). */
+/**
+ * Build the LCU adapter with writes disabled by default (opt-in per session).
+ *
+ * This used to hand back the {@link LcuAdapterSkeleton}, whose every method
+ * throws "not implemented". The runnable adapter had been written and was wired
+ * into exactly one place — the read-only current-summoner probe — so the client
+ * dutifully subscribed to its match, received every command, and could not carry
+ * out a single one: create, invite and auto-accept all failed identically at the
+ * first line, and the match sat there with nobody able to say why.
+ *
+ * Constructing it is still pure (no lockfile read, no socket): the runtime only
+ * touches the disk when a call is made.
+ */
 export function createLcuAdapter(): LcuAdapter {
   const config: LcuAdapterConfig = {
     // Writes are OFF until the player explicitly opts in this session, and stay
@@ -119,7 +132,7 @@ export function createLcuAdapter(): LcuAdapter {
     // Pinned, fixture-validated client patch (set by the build; placeholder here).
     schemaVersion: "0.0.0-phase0" as LcuSchemaVersion,
   };
-  return new LcuAdapterSkeleton(config);
+  return new LcuAdapterImpl({ config, runtime: createRealLcuRuntime() });
 }
 
 // --- real runtime seams (wall clock + setInterval scheduler) ---------------- //
@@ -435,9 +448,18 @@ export class DesktopRuntime {
    * Create + start a controller for a newly assigned match. Idempotent. The
    * match's `guildId` (from the backend's match-assigned command) is threaded
    * into the subscribe frame for per-match WS authorization.
+   *
+   * ``isHost`` is the backend's own answer to "is this player opening this
+   * match" and is re-applied on every call, because commands reach all ten
+   * clients and only the named one may act on them (see
+   * `OrchestrationController.setAssignedHost`). Re-applying is the point of
+   * doing it here rather than at construction: the poll repeats, so a lease that
+   * moves is picked up without tearing anything down.
    */
-  onMatchAssigned(matchId: string, guildId?: string): void {
-    if (this.#matches.has(matchId)) {
+  onMatchAssigned(matchId: string, guildId?: string, isHost = false): void {
+    const live = this.#matches.get(matchId);
+    if (live !== undefined) {
+      live.controller.setAssignedHost(isHost);
       return;
     }
     const transport = new WsBackendTransport(
@@ -461,6 +483,7 @@ export class DesktopRuntime {
       clock: this.#clock,
       config: { matchId, heartbeatMs: this.#config.heartbeatMs ?? DEFAULT_HEARTBEAT_MS },
     });
+    controller.setAssignedHost(isHost);
     this.#matches.set(matchId, { controller, transport });
     controller.start();
     transport.connect();
@@ -713,7 +736,7 @@ async function bootstrap(): Promise<void> {
         return;
       }
       for (const match of result.matches) {
-        runtime?.onMatchAssigned(match.matchId, match.guildId);
+        runtime?.onMatchAssigned(match.matchId, match.guildId, match.isHost);
       }
       lastMatches = result.matches;
     };
@@ -1022,6 +1045,23 @@ async function bootstrap(): Promise<void> {
   ipcMain.handle("lol:presence", () =>
     withSession((t) => getPresence({ accessToken: t }, { backendUrl: backendBaseUrl() })),
   );
+
+  // --- LCU write automation: the player's per-session consent ---------------- //
+  // Every lobby write (create, invite, accept) is refused until this is granted,
+  // which is the design (PLAN.md §3.3) — but there was no way to grant it, so
+  // the automation was unreachable rather than opt-in. Deliberately NOT
+  // persisted: consent is re-given each launch, so a client left running on a
+  // shared machine never acts for somebody who is not there.
+  ipcMain.handle("lol:automation-get", () => ({
+    ok: true,
+    enabled: adapter.writeAutomationEnabled(),
+  }));
+  ipcMain.handle("lol:automation-set", (_e, args: { enabled?: unknown }) => {
+    const enabled = args?.enabled === true;
+    adapter.setWriteAutomationOptIn(enabled);
+    log("automation_opt_in", { enabled });
+    return { ok: true, enabled };
+  });
 
   // --- LCU reachability poller (3-5s) -> renderer badge --------------------- //
   const poller = new LcuStatusPoller({

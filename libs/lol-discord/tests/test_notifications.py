@@ -256,8 +256,12 @@ def test_lobby_credentials_promises_an_invite_only_when_a_client_will_host() -> 
             automated=False,
         )
     )
-    assert "create it yourself" in manual
+    assert "you are opening this match" in manual
     assert "your client will create this lobby" not in manual
+    # The create is the only manual step: the reader must not also be sent
+    # chasing nine people, or they will start clicking invites the client is
+    # already sending.
+    assert "invites the other players for you" in manual
     # Either way the credentials themselves are what the reader acts on.
     for blob in (automated, manual):
         assert "LoL-abc12345" in blob and "ABC123" in blob

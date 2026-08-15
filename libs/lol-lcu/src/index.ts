@@ -245,6 +245,25 @@ export interface CustomLobbyHandle {
   readonly hostEpoch: HostEpoch;
 }
 
+/**
+ * The lobby the local client is sitting in right now, as a READ sees it.
+ *
+ * Read, not remembered: the lobby it describes is usually one the *player* made
+ * by hand, which no write of ours knows about. That is the whole point — when
+ * nobody's client is allowed to create a custom game, somebody creates it
+ * themselves and this is how the automation notices it exists and can start
+ * inviting (§3.6.1 manual fallback).
+ */
+export interface CurrentLobby {
+  readonly lobbyId: LcuLobbyId;
+  /**
+   * Best-effort `gameConfig.isCustom`. ADVISORY: an `RE` field name that may
+   * drift, so it must never be the sole test for "the lobby is there" — the
+   * lobby's existence is carried by {@link lobbyId}.
+   */
+  readonly isCustom: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Invite auto-accept filter — §3.6.3
 // ---------------------------------------------------------------------------
@@ -364,6 +383,31 @@ export interface LcuAdapter {
   createCustomLobby(spec: CustomLobbySpec): Promise<CustomLobbyHandle>;
 
   /**
+   * Grant or revoke this SESSION's write opt-in (PLAN.md §3.3).
+   *
+   * The opt-in is a runtime answer, not a build-time setting: the player turns
+   * automation on when they are at the keyboard and about to play, and every
+   * launch starts from off. Reads are unaffected, and this cannot override the
+   * kill-switch or the presence requirement — it only ever supplies the consent
+   * half of the gate.
+   */
+  setWriteAutomationOptIn(enabled: boolean): void;
+
+  /** True when this session has granted the write opt-in (see above). */
+  writeAutomationEnabled(): boolean;
+
+  /**
+   * `RE` — `GET /lol-lobby/v2/lobby`. READ-ONLY, own-client only, ungated (a
+   * read tells the client nothing it cannot already see on screen).
+   *
+   * Returns `null` when no lobby is visible — including the ordinary "not in a
+   * lobby" 404, and any response we cannot read a `partyId` out of. Callers poll
+   * this to notice a lobby a HUMAN created, which is the one lobby no write of
+   * ours can account for (§3.6.1 manual fallback).
+   */
+  getCurrentLobby(): Promise<CurrentLobby | null>;
+
+  /**
    * `RE` — one batched `POST /lol-lobby/v2/lobby/invitations`. WRITE: gated +
    * paced; re-invites use bounded backoff+jitter, keyed by
    * `(matchId, toSummonerId, hostEpoch)`. (§3.6.3)
@@ -457,14 +501,24 @@ const NOT_IMPLEMENTED = 'not implemented' as const;
  */
 export class LcuAdapterSkeleton implements LcuAdapter {
   readonly #config: LcuAdapterConfig;
+  #writeOptIn: boolean;
 
   constructor(config: LcuAdapterConfig) {
     this.#config = config;
+    this.#writeOptIn = config.writeAutomationOptIn;
   }
 
   /** The opt-in / kill-switch / pacing / schema config this adapter runs under. */
   get config(): LcuAdapterConfig {
-    return this.#config;
+    return { ...this.#config, writeAutomationOptIn: this.#writeOptIn };
+  }
+
+  setWriteAutomationOptIn(enabled: boolean): void {
+    this.#writeOptIn = enabled;
+  }
+
+  writeAutomationEnabled(): boolean {
+    return this.#writeOptIn;
   }
 
   /**
@@ -476,7 +530,7 @@ export class LcuAdapterSkeleton implements LcuAdapter {
     if (this.#config.killSwitchEngaged) {
       throw new Error('LCU writes refused: kill-switch engaged');
     }
-    if (!this.#config.writeAutomationOptIn) {
+    if (!this.#writeOptIn) {
       throw new Error('LCU writes refused: per-session opt-in not granted');
     }
     throw new Error(NOT_IMPLEMENTED);
@@ -488,6 +542,10 @@ export class LcuAdapterSkeleton implements LcuAdapter {
 
   createCustomLobby(_spec: CustomLobbySpec): Promise<CustomLobbyHandle> {
     return this.#assertWritesAllowed();
+  }
+
+  getCurrentLobby(): Promise<CurrentLobby | null> {
+    throw new Error(NOT_IMPLEMENTED);
   }
 
   invite(_summonerIds: readonly SummonerId[]): Promise<void> {
@@ -538,6 +596,8 @@ const LCU_PATHS = {
   lobby: '/lol-lobby/v2/lobby',
   /** `RE` — batched invitations endpoint (§3.6.3). */
   invitations: '/lol-lobby/v2/lobby/invitations',
+  /** `RE` — invites addressed to THIS client, polled for auto-accept (§3.6.3). */
+  receivedInvitations: '/lol-lobby/v2/received-invitations',
   /** `RE` — end-of-game scoreboard block (§3.6.5). */
   eogStatsBlock: '/lol-end-of-game/v1/eog-stats-block',
 } as const;
@@ -554,6 +614,16 @@ export class LcuResponseError extends Error {
 
 /** A presence probe that always reports present (real wiring injects a real one). */
 const ALWAYS_PRESENT: PresenceProbe = { isPresent: () => true };
+
+/**
+ * How often an armed guest re-reads its own received invitations.
+ *
+ * Fast enough that accepting looks automatic to the player, slow enough that a
+ * client waiting through a long lobby is doing one cheap loopback GET at a
+ * human cadence — this is a poll standing in for an event socket, not a busy
+ * wait.
+ */
+const INVITE_POLL_INTERVAL_MS = 2_000;
 
 /** Narrowing helper for `unknown` JSON objects under `noUncheckedIndexedAccess`. */
 function asRecord(value: unknown): Record<string, unknown> {
@@ -596,6 +666,13 @@ export class LcuAdapterImpl implements LcuAdapter {
   readonly #rt: LcuRuntime;
   readonly #gate: WriteGate;
   readonly #presence: PresenceProbe;
+  /**
+   * The live consent half of the write gate. Seeded from the config and then
+   * owned here, because the player answers "may this client act for me?" while
+   * the app is running — an adapter rebuilt to carry a new answer would drop
+   * every armed match with it.
+   */
+  #writeOptIn: boolean;
   /** Cached auth from the most recent lockfile read; refreshed on rotation. */
   #auth: import('./lockfile.js').LcuAuth | undefined;
   /** mtime of the lockfile backing {@link #auth}; a change ⇒ creds rotated. */
@@ -609,6 +686,7 @@ export class LcuAdapterImpl implements LcuAdapter {
   }) {
     this.#config = args.config;
     this.#rt = args.runtime;
+    this.#writeOptIn = args.config.writeAutomationOptIn;
     this.#presence = args.presence ?? ALWAYS_PRESENT;
     this.#gate = new WriteGate({
       clock: args.runtime.clock,
@@ -625,7 +703,15 @@ export class LcuAdapterImpl implements LcuAdapter {
 
   /** The opt-in / kill-switch / pacing / schema config this adapter runs under. */
   get config(): LcuAdapterConfig {
-    return this.#config;
+    return { ...this.#config, writeAutomationOptIn: this.#writeOptIn };
+  }
+
+  setWriteAutomationOptIn(enabled: boolean): void {
+    this.#writeOptIn = enabled;
+  }
+
+  writeAutomationEnabled(): boolean {
+    return this.#writeOptIn;
   }
 
   /** Resolve the lockfile path: explicit override or platform default. */
@@ -649,7 +735,7 @@ export class LcuAdapterImpl implements LcuAdapter {
   async #gatedWrite<T>(fn: () => Promise<T>): Promise<T> {
     await this.#gate.acquire({
       killSwitchEngaged: this.#config.killSwitchEngaged,
-      writeAutomationOptIn: this.#config.writeAutomationOptIn,
+      writeAutomationOptIn: this.#writeOptIn,
       requirePresenceForWrites: this.#config.requirePresenceForWrites,
     });
     return fn();
@@ -729,17 +815,13 @@ export class LcuAdapterImpl implements LcuAdapter {
   async createCustomLobby(spec: CustomLobbySpec): Promise<CustomLobbyHandle> {
     return this.#gatedWrite(async () => {
       // Idempotency probe (§3.6.1): if we already own a lobby, reuse it.
-      const existing = await this.#lcuRequest('GET', LCU_PATHS.lobby);
-      if (existing.status >= 200 && existing.status < 300) {
-        const rec = asRecord(existing.json);
-        const existingId = asOptString<LcuLobbyId>(rec['partyId']);
-        if (existingId !== undefined) {
-          return {
-            lobbyId: existingId,
-            lobbyName: spec.lobbyName,
-            hostEpoch: spec.hostEpoch,
-          };
-        }
+      const existing = await this.getCurrentLobby();
+      if (existing !== null) {
+        return {
+          lobbyId: existing.lobbyId,
+          lobbyName: spec.lobbyName,
+          hostEpoch: spec.hostEpoch,
+        };
       }
 
       // `RE` — create payload per §3.6.2 (verbatim, backend-owned spec).
@@ -776,6 +858,31 @@ export class LcuAdapterImpl implements LcuAdapter {
     });
   }
 
+  // -- getCurrentLobby ------------------------------------------------------
+
+  /**
+   * `RE` — `GET /lol-lobby/v2/lobby`. READ-ONLY and ungated.
+   *
+   * "No lobby" is the normal answer while waiting for a player to make one, so
+   * every unreadable outcome collapses to `null` rather than an error: the 404
+   * the LCU returns when you are in no lobby, a body with no `partyId`, and any
+   * other non-2xx (an LCU hiccup means "we cannot see one", which is the same
+   * decision for every caller). Transport failures — League not running,
+   * lockfile gone — still throw, because those are not about the lobby.
+   */
+  async getCurrentLobby(): Promise<CurrentLobby | null> {
+    const res = await this.#lcuRequest('GET', LCU_PATHS.lobby);
+    if (res.status < 200 || res.status >= 300) {
+      return null;
+    }
+    const rec = asRecord(res.json);
+    const lobbyId = asOptString<LcuLobbyId>(rec['partyId']);
+    if (lobbyId === undefined) {
+      return null;
+    }
+    return { lobbyId, isCustom: asRecord(rec['gameConfig'])['isCustom'] === true };
+  }
+
   // -- invite ---------------------------------------------------------------
 
   /**
@@ -801,21 +908,84 @@ export class LcuAdapterImpl implements LcuAdapter {
   // -- autoAcceptInvite -----------------------------------------------------
 
   /**
-   * `RE` — guest-side auto-accept. In production this subscribes to the LCU
-   * invitation WebSocket event; that socket is not part of the injected
-   * transport seam yet, so this returns a closure-based controller you drive
-   * from the WS layer: call {@link InviteAcceptController.handle} with each
-   * observed invitation. Acceptance ONLY fires when the inviter PUUID equals
-   * `filter.expectedInviterPuuid` for the current epoch, party/queue invites
-   * are excluded, AND the write-gate (opt-in + presence) passes (§3.6.3).
+   * `RE` — guest-side auto-accept: watch this client's own received invitations
+   * and accept the one from the designated inviter.
    *
-   * Returns an unsubscribe function per the {@link LcuAdapter} contract; the
-   * controller it tears down is exposed via {@link makeInviteAcceptController}
-   * for tests / the WS wiring.
+   * It **polls** rather than subscribing to the LCU event socket. The socket is
+   * not part of the injected transport seam, and until this loop existed
+   * "arming" a guest did precisely nothing — it built a controller that nothing
+   * ever fed, so every invite sat unanswered while the client reported itself
+   * armed. A read every couple of seconds is well inside human reaction time for
+   * a lobby invite, costs one loopback GET, and reuses the audited request path.
+   *
+   * Acceptance still passes the whole filter: `invitationType === 'lobby'`, the
+   * inviter PUUID equal to `filter.expectedInviterPuuid` for the current epoch,
+   * and the write-gate (opt-in + kill-switch + presence + pacing). The loop stops
+   * on the first acceptance — there is nothing left to wait for — or when the
+   * returned unsubscribe is called.
    */
   async autoAcceptInvite(filter: AutoAcceptInviteFilter): Promise<() => void> {
     const controller = this.makeInviteAcceptController(filter);
-    return () => controller.unsubscribe();
+    let stopped = false;
+    const poll = async (): Promise<void> => {
+      while (!stopped) {
+        try {
+          for (const invitation of await this.getReceivedInvitations()) {
+            const decision = await controller.handle(invitation);
+            if (decision.accepted) {
+              stopped = true;
+              break;
+            }
+          }
+        } catch {
+          // League closed, creds rotated, endpoint drifted: keep waiting rather
+          // than tearing down the arm — the next tick may well succeed.
+        }
+        if (stopped) {
+          break;
+        }
+        await this.#rt.sleeper.sleep(INVITE_POLL_INTERVAL_MS);
+      }
+    };
+    void poll();
+    return () => {
+      stopped = true;
+      controller.unsubscribe();
+    };
+  }
+
+  /**
+   * `RE` — `GET /lol-lobby/v2/received-invitations`. READ-ONLY, ungated: it
+   * reports invites the player can already see in their own client.
+   *
+   * Records missing the fields the filter is made of are dropped rather than
+   * guessed at — an invitation with no readable inviter can never satisfy
+   * "accept only from the designated host", so passing it on could only ever
+   * loosen the fence.
+   */
+  async getReceivedInvitations(): Promise<readonly ReceivedInvitation[]> {
+    const res = await this.#lcuRequest('GET', LCU_PATHS.receivedInvitations);
+    if (res.status < 200 || res.status >= 300) {
+      return [];
+    }
+    const out: ReceivedInvitation[] = [];
+    for (const raw of asArray(res.json)) {
+      const rec = asRecord(raw);
+      const invitationId = asOptString(rec['invitationId']);
+      const fromPuuid = asOptString<Puuid>(rec['fromPuuid']);
+      const invitationType = asOptString(rec['invitationType']);
+      if (invitationId === undefined || fromPuuid === undefined || invitationType === undefined) {
+        continue;
+      }
+      const inviteType = asOptString(rec['gameConfigInviteType']);
+      out.push({
+        invitationId,
+        fromPuuid,
+        invitationType,
+        ...(inviteType === undefined ? {} : { gameConfigInviteType: inviteType }),
+      });
+    }
+    return out;
   }
 
   /**

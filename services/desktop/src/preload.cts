@@ -275,6 +275,9 @@ export type PresenceBridgeResult =
 /** LCU reachability badge state pushed from the main-process poller. */
 export type LcuStatusBridge = "online" | "loading" | "offline";
 
+/** Whether this session may drive the League client (per-session write opt-in). */
+export type AutomationBridgeResult = { ok: true; enabled: boolean };
+
 /** Public API surface exposed on `window.lol`. */
 export interface LolBridge {
   getSession(): Promise<SessionStateBridgeResult>;
@@ -329,6 +332,10 @@ export interface LolBridge {
   deleteTeam(teamId: string): Promise<ActOnRequestBridgeResult>;
   /** Global live presence (who is in a game + which server). */
   presence(): Promise<PresenceBridgeResult>;
+  /** Is this session allowed to drive the League client (lobby writes)? */
+  getAutomation(): Promise<AutomationBridgeResult>;
+  /** Grant/revoke that permission for this session only (never persisted). */
+  setAutomation(enabled: boolean): Promise<AutomationBridgeResult>;
   readSummoner(): Promise<ReadSummonerBridgeResult>;
   /** Subscribe to LCU badge updates. Returns an unsubscribe function. */
   onLcuStatus(callback: (status: LcuStatusBridge) => void): () => void;
@@ -392,6 +399,9 @@ const bridge: LolBridge = {
   deleteTeam: (teamId) =>
     ipcRenderer.invoke("lol:team-delete", { teamId }) as Promise<ActOnRequestBridgeResult>,
   presence: () => ipcRenderer.invoke("lol:presence") as Promise<PresenceBridgeResult>,
+  getAutomation: () => ipcRenderer.invoke("lol:automation-get") as Promise<AutomationBridgeResult>,
+  setAutomation: (enabled) =>
+    ipcRenderer.invoke("lol:automation-set", { enabled }) as Promise<AutomationBridgeResult>,
   readSummoner: () => ipcRenderer.invoke("lol:read-summoner") as Promise<ReadSummonerBridgeResult>,
   onLcuStatus: (callback) => {
     const listener = (_event: unknown, status: LcuStatusBridge): void => callback(status);

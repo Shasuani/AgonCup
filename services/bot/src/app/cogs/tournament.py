@@ -314,10 +314,15 @@ class TournamentAdminCog(commands.Cog):
         name="tournament-start",
         description="Start a tournament & generate the bracket (server admins only).",
     )
-    @app_commands.describe(tournament="Tournament name (or its id).")
+    @app_commands.describe(tournament="Join code, name, or id of the tournament.")
     @app_commands.default_permissions(manage_guild=True)
     async def start(self, interaction: discord.Interaction, tournament: str) -> None:
-        """Generate the bracket and start the tournament (backend gates guild-admin)."""
+        """Generate the bracket, start the tournament, and open round one.
+
+        The join code leads the option's description because it is what the admin
+        has in front of them — ``/tournament-create`` printed it two messages ago.
+        The backend resolves any of the three (code / name / id).
+        """
         await interaction.response.defer(ephemeral=True, thinking=True)
         ctx = context_of(interaction)
         try:
@@ -329,7 +334,9 @@ class TournamentAdminCog(commands.Cog):
             embed=info_embed(
                 "Tournament started",
                 f"Bracket generated: **{res.get('matches_created', '?')}** matches, "
-                f"**{res.get('rounds', '?')}** rounds, **{res.get('byes', 0)}** byes.",
+                f"**{res.get('rounds', '?')}** rounds, **{res.get('byes', 0)}** byes.\n"
+                "Every playable match has been handed to its players — whoever is "
+                "opening each lobby has been DMed the name and password.",
             ),
             ephemeral=True,
         )

@@ -92,6 +92,11 @@ export interface TournamentsApi {
   /** Lock in. Omit `team_id` to lock in the caller's own entry. */
   checkIn(tournamentId: string, body?: CheckInRequest): Promise<RegistrationResponse>;
   start(tournamentId: string): Promise<StartResponse>;
+  /**
+   * Discard a DRAFT tournament. Rejects with 409 for anything past draft, which
+   * holds other people's entries — that is a cancellation, not a deletion.
+   */
+  remove(tournamentId: string): Promise<void>;
 }
 
 export interface TeamsApi {
@@ -191,6 +196,7 @@ export function createClient(config: ClientConfig): ApiClient {
     create: (body) =>
       request<CreatedTournamentResponse>({ method: 'POST', path: '/tournaments', body }),
     list: () => request<TournamentResponse[]>({ method: 'GET', path: '/tournaments' }),
+    remove: (id) => request<void>({ method: 'DELETE', path: `/tournaments/${seg(id)}` }),
     get: (id) => request<TournamentResponse>({ method: 'GET', path: `/tournaments/${seg(id)}` }),
     entrants: (id) =>
       request<EntrantResponse[]>({ method: 'GET', path: `/tournaments/${seg(id)}/entrants` }),

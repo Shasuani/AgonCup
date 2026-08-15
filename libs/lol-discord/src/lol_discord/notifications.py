@@ -121,9 +121,12 @@ def lobby_credentials(
     to act on. These are the same backend-owned credentials the client would
     have used, so a lobby made by hand is the *same* lobby.
 
-    ``automated=False`` means no client opted in to hosting this match, so nothing
-    is coming — telling that reader to wait for their client would be a promise
-    the backend knows it cannot keep.
+    ``automated=False`` means no client opted in to *hosting*, so the custom game
+    itself will not appear on its own — this reader is the one person asked to make
+    it, and telling them to wait for their client would be a promise the backend
+    knows it cannot keep. Only the create is theirs to do: their client invites the
+    rest of the roster the moment the lobby exists, so the message must not send
+    them chasing nine people by hand either.
     """
     fields: list[EmbedField] = [
         _field("Lobby name", f"`{lobby_name}`", inline=True),
@@ -139,9 +142,10 @@ def lobby_credentials(
         )
     else:
         description = (
-            f"**{tournament_name}** — nobody's client is set up to host this match, so "
-            "please create it yourself: a **custom game** with the name and password "
-            "below. Everyone else has the same details and can join it directly."
+            f"**{tournament_name}** — **you are opening this match.** Create a "
+            "**custom game** with the name and password below. Leave the "
+            "LeagueOfLeagues client running: as soon as the lobby exists it invites "
+            "the other players for you, and their clients accept automatically."
         )
     return build_embed(
         "Your match lobby",

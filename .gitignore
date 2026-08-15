@@ -121,3 +121,4 @@ logs/
 *.tmp
 tmp/
 ToDoList.txt
+docs/beta-readiness.md

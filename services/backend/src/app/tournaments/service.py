@@ -280,9 +280,18 @@ async def get_tournament_by_id_prefix(session: AsyncSession, *, prefix: str) -> 
 
 
 async def resolve_tournament_ref(session: AsyncSession, *, ref: str) -> Tournament:
-    """Resolve a tournament from a full id, a name, OR a short id prefix.
+    """Resolve a tournament from a full id, a name, a **join code**, or a short id prefix.
 
-    Precedence: exact UUID -> exact name -> short hex-id prefix.
+    Precedence: exact UUID -> exact name -> join code -> short hex-id prefix.
+
+    The join code is in the chain because it is the identifier an admin actually
+    has to hand: the create form printed it and they pasted it to their players.
+    Without it ``/tournament-start ABCD2345`` was a guaranteed "tournament not
+    found" — the code's alphabet overlaps hex, so an 8-char code is *also* a
+    well-formed id prefix and was resolved as one against zero rows.
+
+    It therefore sits ahead of the id prefix: a code that resolves is never a
+    coincidence, whereas a hex prefix that happens to spell one is.
     """
     ref = ref.strip()
     try:
@@ -292,9 +301,14 @@ async def resolve_tournament_ref(session: AsyncSession, *, ref: str) -> Tourname
     try:
         return await get_tournament_by_name(session, name=ref)
     except TournamentNotFoundError:
-        if _looks_like_id_prefix(ref):
-            return await get_tournament_by_id_prefix(session, prefix=ref)
-        raise
+        pass
+    try:
+        return await get_tournament_by_code(session, code=ref)
+    except InvalidJoinCodeError:
+        pass
+    if _looks_like_id_prefix(ref):
+        return await get_tournament_by_id_prefix(session, prefix=ref)
+    raise TournamentNotFoundError(ref)
 
 
 async def list_tournaments(session: AsyncSession) -> list[Tournament]:
@@ -1275,6 +1289,34 @@ async def _seeded_team_ids(session: AsyncSession, tournament_id: uuid.UUID) -> l
         )
     ).all()
     return [r[0] for r in rows]
+
+
+async def delete_tournament(session: AsyncSession, *, tournament_id: uuid.UUID) -> Tournament:
+    """Discard a **draft** tournament outright (PLAN.md §3.1).
+
+    Filling in a form wrong, or setting one up to try something, used to leave a
+    tournament nobody could get rid of: the only DELETE in the API is the per-user
+    ``/mine`` dismissal, which is a view filter and refuses anything that is not
+    already finished. So a mistake stayed on every admin's list forever.
+
+    **DRAFT only**, and that restriction is the safety property. Registration is
+    open in DRAFT, so this can take entrants' registrations and participant rows
+    with it (they cascade) — which is the intent for a draft being thrown away,
+    but would be somebody else's history for a tournament that ever opened, ran,
+    or completed. Those cannot be deleted at all; a live one that should stop is
+    cancelled, which preserves the record.
+
+    Returns the deleted row so the caller can audit what went (the id alone is
+    useless in a log once the row is gone).
+    """
+    tournament = await get_tournament(session, tournament_id=tournament_id)
+    if tournament.status is not TournamentStatus.DRAFT:
+        raise InvalidStateError(
+            f"only a draft tournament can be deleted (this one is {tournament.status.value})"
+        )
+    await session.delete(tournament)
+    await session.flush()
+    return tournament
 
 
 async def start_tournament(session: AsyncSession, *, tournament_id: uuid.UUID) -> StartResult:

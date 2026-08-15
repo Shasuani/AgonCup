@@ -67,6 +67,11 @@ function harness() {
       capturedSpec = spec;
       return { lobbyId: "lobby-xyz" } as never;
     },
+    // A lobby is already open here: these tests are about the wire bytes, not
+    // about the wait for a hand-made lobby (see controller.test.ts for that).
+    async getCurrentLobby() {
+      return { lobbyId: "lobby-xyz", isCustom: true } as never;
+    },
     async invite(ids: readonly unknown[]) {
       calls.push("invite");
       invited.push(...(ids as string[]));
@@ -82,13 +87,17 @@ function harness() {
   };
   let capturedSpec: Record<string, unknown> | null = null;
 
-  new OrchestrationController({
+  const controller = new OrchestrationController({
     adapter: adapter as never,
     transport,
     scheduler,
     clock: { nowMs: () => 0 },
     config: { matchId: MATCH, heartbeatMs: 2000 },
-  }).start();
+  });
+  // This harness plays the client the backend named as host — the one that acts
+  // on create/invite. Every other client on the channel ignores them.
+  controller.setAssignedHost(true);
+  controller.start();
 
   return {
     emit: (c: LobbyCommand) => handler?.(c),

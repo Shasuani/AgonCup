@@ -32,6 +32,7 @@ from app.accounts import service as accounts_service
 from app.guilds import service as guilds_service
 from app.guilds.settings import GuildSettings, GuildSettingsPatch
 from app.models import Guild, Registration, Team, TeamMember, Tournament, User
+from app.orchestration import service as orchestration_service
 from app.teams import service as teams_service
 from app.tournaments import service as tournaments_service
 
@@ -344,10 +345,20 @@ async def check_in_team(
 async def start_tournament(
     session: AsyncSession, *, ctx: DiscordContext, tournament_ref: str
 ) -> tuple[Tournament, tournaments_service.StartResult]:
-    """Generate the bracket + move to RUNNING (guild_admin; name/short-id ref)."""
+    """Generate the bracket, move to RUNNING, and open round one (guild_admin).
+
+    ``tournament_ref`` is a name, a join code, or an id/short-id — an admin should
+    not have to look up a UUID to start the bracket they just created.
+
+    Opening the matches is not an extra: a bracket nobody is told about is the
+    same as no bracket. The SPA's start has always done it and this one did not,
+    so ``/tournament-start`` moved the tournament to RUNNING and left ten people
+    staring at a client. Same shared best-effort call, so they cannot drift again.
+    """
     await _resolve_actor_admin(session, ctx)
     tournament = await tournaments_service.resolve_tournament_ref(session, ref=tournament_ref)
     result = await tournaments_service.start_tournament(session, tournament_id=tournament.id)
+    await orchestration_service.open_started_tournament(session, tournament_id=tournament.id)
     return tournament, result
 
 

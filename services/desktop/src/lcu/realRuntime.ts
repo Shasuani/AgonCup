@@ -13,10 +13,12 @@
  *     `node:fs/promises`.
  *   - {@link Clock} / {@link Sleeper} / {@link RandomSource} from the system.
  *
- * READ-ONLY USAGE: this runtime is used only for `getCurrentSummoner` +
- * `readLockfileAuth` in the desktop verify flow. No LCU writes are ever issued
- * through it. IMPORT-SAFETY: constructing the runtime opens no sockets and reads
- * no files — IO happens only when the adapter calls into it.
+ * USAGE: the desktop verify flow (`getCurrentSummoner` + `readLockfileAuth`,
+ * read-only) and the orchestration adapter behind it. Lobby writes DO travel
+ * this transport — every one of them through the audited adapter's write gate
+ * (per-session opt-in, kill-switch, presence, pacing), never from here.
+ * IMPORT-SAFETY: constructing the runtime opens no sockets and reads no files —
+ * IO happens only when the adapter calls into it.
  */
 
 import { Agent, request as httpsRequest } from "node:https";

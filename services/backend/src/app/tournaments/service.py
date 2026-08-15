@@ -280,9 +280,18 @@ async def get_tournament_by_id_prefix(session: AsyncSession, *, prefix: str) -> 
 
 
 async def resolve_tournament_ref(session: AsyncSession, *, ref: str) -> Tournament:
-    """Resolve a tournament from a full id, a name, OR a short id prefix.
+    """Resolve a tournament from a full id, a name, a **join code**, or a short id prefix.
 
-    Precedence: exact UUID -> exact name -> short hex-id prefix.
+    Precedence: exact UUID -> exact name -> join code -> short hex-id prefix.
+
+    The join code is in the chain because it is the identifier an admin actually
+    has to hand: the create form printed it and they pasted it to their players.
+    Without it ``/tournament-start ABCD2345`` was a guaranteed "tournament not
+    found" — the code's alphabet overlaps hex, so an 8-char code is *also* a
+    well-formed id prefix and was resolved as one against zero rows.
+
+    It therefore sits ahead of the id prefix: a code that resolves is never a
+    coincidence, whereas a hex prefix that happens to spell one is.
     """
     ref = ref.strip()
     try:
@@ -292,9 +301,14 @@ async def resolve_tournament_ref(session: AsyncSession, *, ref: str) -> Tourname
     try:
         return await get_tournament_by_name(session, name=ref)
     except TournamentNotFoundError:
-        if _looks_like_id_prefix(ref):
-            return await get_tournament_by_id_prefix(session, prefix=ref)
-        raise
+        pass
+    try:
+        return await get_tournament_by_code(session, code=ref)
+    except InvalidJoinCodeError:
+        pass
+    if _looks_like_id_prefix(ref):
+        return await get_tournament_by_id_prefix(session, prefix=ref)
+    raise TournamentNotFoundError(ref)
 
 
 async def list_tournaments(session: AsyncSession) -> list[Tournament]:

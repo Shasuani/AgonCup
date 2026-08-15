@@ -284,7 +284,15 @@ def _equality_filters(statement: Any) -> dict[str, Any]:
             op = getattr(bool_expr, "operator", None)
             left = getattr(bool_expr, "left", None)
             right = getattr(bool_expr, "right", None)
-            if left is None or not hasattr(left, "key"):
+            # ``func.lower(col) == value`` is how every by-name lookup is written.
+            # The fake used to CRASH on it rather than answer: a Function's ``key``
+            # is None, and ``getattr(row, None)`` is a TypeError, so a test that
+            # merely resolved a tournament by name blew up inside the harness.
+            lowered = _lowered_column_key(left)
+            if lowered is not None and op is operator.eq:
+                crit[lowered] = _Lower(_literal(right))
+                continue
+            if left is None or getattr(left, "key", None) is None:
                 continue
             # ``col.in_([...])`` and ``col != x`` are modelled because the sync/
             # onboarding paths filter on them (``discord_guild_id.in_(...)`` +
@@ -329,6 +337,29 @@ class _Ne:
 @dataclass(frozen=True)
 class _IsNull:
     """Marker for an ``IS NULL`` criterion (see :func:`_matches`)."""
+
+
+@dataclass(frozen=True)
+class _Lower:
+    """Marker for a ``func.lower(col) == value`` criterion (see :func:`_matches`)."""
+
+    value: Any
+
+
+def _lowered_column_key(expr: Any) -> str | None:
+    """The column key inside ``func.lower(col)``, or None if that is not the shape.
+
+    Case folding is the point of the call, so the comparison it feeds is
+    case-insensitive — which is what Postgres does with it, and what a caller
+    resolving "Duel Night" from ``duel night`` is relying on.
+    """
+    if type(expr).__name__ != "Function" or getattr(expr, "name", "") != "lower":
+        return None
+    clauses = list(getattr(getattr(expr, "clauses", None), "clauses", ()) or ())
+    if len(clauses) != 1:
+        return None
+    key = getattr(clauses[0], "key", None)
+    return str(key) if key is not None else None
 
 
 def _is_null_literal(operand: Any) -> bool:
@@ -396,6 +427,10 @@ def _matches(row: Any, crit: dict[str, Any]) -> bool:
             continue
         if isinstance(val, _Ne):
             if str(actual) == str(getattr(val.value, "value", val.value)):
+                return False
+            continue
+        if isinstance(val, _Lower):
+            if str(actual).lower() != str(getattr(val.value, "value", val.value)).lower():
                 return False
             continue
         if isinstance(val, _IsNull):

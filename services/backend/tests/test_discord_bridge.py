@@ -391,3 +391,109 @@ async def test_unlink_my_account_unknown_raises() -> None:
             game_name="Ghost",
             tag_line="X",
         )
+
+
+# ---------------------------------------------------------------------------
+# /tournament-start: resolve by the code the admin was given, and open the round
+# ---------------------------------------------------------------------------
+async def _seed_locked_in_duel(session: FakeSession, guild) -> Tournament:  # type: ignore[no-untyped-def]
+    """A 1v1 with two players locked in — one press away from being playable."""
+    from app.models import RiotAccount
+    from app.tournaments import service as tournaments_service
+
+    # The bridge sets this itself; the seeding below runs before it and needs a
+    # tenant of its own (every guild-scoped write fails closed without one).
+    session.current_guild = str(guild.id)
+    tournament = Tournament(
+        id=uuid.uuid4(),
+        guild_id=guild.id,
+        name="Duel Night",
+        game_mode=GameMode.ARAM_1V1,
+        status=TournamentStatus.OPEN,
+        max_teams=16,
+        join_code="ABCD2345",
+    )
+    session.store[Tournament].append(tournament)
+    for tag in ("alice", "bob"):
+        player = User(id=uuid.uuid4(), display_name=tag)
+        session.store[User].append(player)
+        acct = RiotAccount(
+            id=uuid.uuid4(),
+            user_id=player.id,
+            puuid=f"puuid-{tag}",
+            summoner_id=f"sid-{tag}",
+            verified=True,
+        )
+        session.store[RiotAccount].append(acct)
+        await tournaments_service.join_by_code(session, code="ABCD2345", user_id=player.id)
+        await tournaments_service.check_in_self(
+            session, tournament_id=tournament.id, user_id=player.id
+        )
+    return tournament
+
+
+@pytest.mark.asyncio
+async def test_starting_from_discord_by_join_code_hands_the_match_to_its_players(
+    monkeypatch,  # type: ignore[no-untyped-def]
+) -> None:
+    """The two halves of ``/tournament-start`` that were missing.
+
+    The admin has ONE identifier for the tournament they just made — the join code
+    the create form printed — and it was the one thing the command could not
+    resolve: the code's alphabet is hex-compatible, so it was read as a short id
+    prefix and matched nothing.
+
+    And starting from Discord only drew the bracket. The SPA's start has always
+    gone on to open the round; this one returned "3 matches, 2 rounds" and left
+    everybody exactly where they were, which is indistinguishable from nothing
+    having happened.
+    """
+    from app.models import Match, MatchLobby
+    from app.orchestration import service as orchestration_service
+
+    monkeypatch.setattr(orchestration_service, "make_command_publisher", lambda: _NullPublisher())
+
+    session = FakeSession()
+    guild = await _seed_onboarded_guild(session)
+    tournament = await _seed_locked_in_duel(session, guild)
+
+    found, result = await bridge.start_tournament(
+        session,
+        ctx=_ctx(discord_user_id=DISCORD_ADMIN, is_admin=True),
+        tournament_ref="abcd-2345",  # hand-typed: lower case, hyphenated
+    )
+
+    assert found.id == tournament.id
+    assert result.matches_created == 1
+    assert tournament.status == TournamentStatus.RUNNING
+    assert len(session.store[Match]) == 1
+    # Handed over, not just drawn: a lobby with credentials and a named opener.
+    lobby = session.store[MatchLobby][0]
+    assert lobby.lobby_name and lobby.lobby_password
+    assert lobby.host_puuid in {"puuid-alice", "puuid-bob"}
+
+
+@pytest.mark.asyncio
+async def test_a_name_still_wins_over_a_code(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Adding the code to the chain must not shadow the older way of naming one."""
+    from app.orchestration import service as orchestration_service
+
+    monkeypatch.setattr(orchestration_service, "make_command_publisher", lambda: _NullPublisher())
+
+    session = FakeSession()
+    guild = await _seed_onboarded_guild(session)
+    await _seed_locked_in_duel(session, guild)
+
+    found, _ = await bridge.start_tournament(
+        session,
+        ctx=_ctx(discord_user_id=DISCORD_ADMIN, is_admin=True),
+        tournament_ref="Duel Night",
+    )
+    assert found.join_code == "ABCD2345"
+
+
+class _NullPublisher:
+    """Swallows commands: this file is offline and asserts DB state, not wire bytes."""
+
+    async def publish(self, envelope: object) -> None:  # noqa: D102 - test double
+        return None

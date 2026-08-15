@@ -289,6 +289,8 @@ export interface LolBridge {
   signOut(): Promise<{ ok: boolean }>;
   /** The signed-in user's tournaments. */
   listMyTournaments(): Promise<ListTournamentsBridgeResult>;
+  /** Live matches + lobby state; shape mirrors the renderer bridge's MyMatch. */
+  listMyMatches(): Promise<unknown>;
   /** Join a tournament by its code. `teamId` picks the captained team for 5v5. */
   joinTournament(code: string, teamId?: string): Promise<JoinTournamentBridgeResult>;
   /** Clear a FINISHED tournament off this user's own list (per-user, not a delete). */
@@ -350,6 +352,7 @@ const bridge: LolBridge = {
   signOut: () => ipcRenderer.invoke("lol:sign-out") as Promise<{ ok: boolean }>,
   listMyTournaments: () =>
     ipcRenderer.invoke("lol:tournaments-mine") as Promise<ListTournamentsBridgeResult>,
+  listMyMatches: () => ipcRenderer.invoke("lol:matches-mine") as Promise<unknown>,
   joinTournament: (code, teamId) =>
     ipcRenderer.invoke("lol:tournament-join", { code, teamId }) as Promise<JoinTournamentBridgeResult>,
   hideTournament: (tournamentId) =>

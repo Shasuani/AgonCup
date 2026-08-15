@@ -125,15 +125,36 @@ function makeController(t: ReturnType<typeof makeTransport>, a: ReturnType<typeo
   });
 }
 
-function createCmd(over: Partial<LobbyCommand> = {}): LobbyCommand {
+/**
+ * A create command in the EXACT shape the backend puts on the wire.
+ *
+ * These helpers used to invent their own shape (`kind: "create_lobby"`, a spec
+ * holding `invitees`). Both sides then passed their own tests while agreeing on
+ * nothing, which is how the contract drifted far enough that every real command
+ * was dropped. Keep this mirroring `lol_realtime.CreateLobbyCommand`; the golden
+ * fixture in `wireContract.test.ts` is what proves it still does.
+ */
+function createCmd(over: Partial<Record<string, unknown>> = {}): LobbyCommand {
   return {
+    type: "create_lobby_command",
     commandId: "c1",
     matchId: MATCH,
     hostEpoch: 0,
-    kind: "create_lobby",
-    spec: { matchId: MATCH, invitees: ["s1", "s2", "s3"] },
-    ...(over as Record<string, unknown>),
+    spec: wireSpec(),
+    ...over,
   } as unknown as LobbyCommand;
+}
+
+function wireSpec(invitees: readonly string[] = ["s1", "s2", "s3"]): Record<string, unknown> {
+  return {
+    gameMode: "CLASSIC",
+    mapId: 11,
+    teamSize: 5,
+    lobbyName: "LoL-abc12345",
+    lobbyPassword: "ABC123",
+    inviteeSummonerIds: invitees,
+    inviteePuuids: invitees.map((i) => `puuid-${i}`),
+  };
 }
 
 test("host create: creates lobby + invites + acks ok with lobby id", async () => {
@@ -194,8 +215,8 @@ test("guest auto-accept arms the filter and acks ok", async () => {
     commandId: "c2",
     matchId: MATCH,
     hostEpoch: 0,
-    kind: "auto_accept",
-    filter: { expectedInviterPuuid: "host-puuid", hostEpoch: 0 },
+    type: "auto_accept_command",
+    expectedInviterPuuid: "host-puuid",
   } as unknown as LobbyCommand);
   await tickMicrotasks();
   assert.ok(a.calls.includes("autoAcceptInvite"));
@@ -249,7 +270,7 @@ test("host create: invites the exact list the backend ordered, in order", async 
   const s = makeScheduler();
   const ordered = ["mate-1", "mate-2", "mate-3", "mate-4", "rival-captain", "rival-1", "rival-2", "rival-3", "rival-4"];
   makeController(t, a, s).start();
-  t.emit(createCmd({ spec: { matchId: MATCH, invitees: ordered } } as never));
+  t.emit(createCmd({ spec: wireSpec(ordered) }));
   await tickMicrotasks();
 
   assert.deepEqual(a.invited, ordered);
@@ -264,7 +285,7 @@ test("host create: an empty invitee list is a lobby nobody can join", async () =
   const a = makeAdapter();
   const s = makeScheduler();
   makeController(t, a, s).start();
-  t.emit(createCmd({ spec: { matchId: MATCH, invitees: [] } } as never));
+  t.emit(createCmd({ spec: wireSpec([]) }));
   await tickMicrotasks();
 
   assert.deepEqual(a.calls, ["createCustomLobby", "invite:0"]);

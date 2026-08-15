@@ -51,10 +51,12 @@ import {
   hideTournament,
   joinTournamentByCode,
   listEntrants,
+  listMyMatches,
   listMyTournaments,
   lookupTournamentByCode,
   lockIn,
   markReady,
+  type MyMatch,
 } from "./tournaments/tournaments.js";
 import {
   approveJoinRequest,
@@ -82,6 +84,15 @@ import { LcuStatusPoller, type LcuStatus } from "./lcu/statusPoller.js";
 
 /** Default heartbeat cadence while pre-game/in-game (PLAN.md §3.6.1 ~2-3s). */
 const DEFAULT_HEARTBEAT_MS = 2_500;
+
+/**
+ * How often the client asks which matches are its own.
+ *
+ * Deliberately slow: this only has to notice that a bracket started, which is a
+ * human-scale event. Everything time-critical after that arrives on the realtime
+ * channel this poll's answer lets us subscribe to.
+ */
+const MATCH_POLL_MS = 15_000;
 
 /** How long to wait before re-opening sockets a 4401 closed while the backend
  * was unreachable. Long enough that a restarting backend is usually back, short
@@ -609,6 +620,9 @@ async function bootstrap(): Promise<void> {
   let signedOutReason: "needs-pairing" | "unavailable" = "needs-pairing";
   /** Paired-user summary to show while unavailable (restored from the store). */
   let cachedUser: PairedUser | null = null;
+  /** Match-assignment poll (see startMatchAssignmentPoll) + its latest answer. */
+  let matchPollTimer: ReturnType<typeof setInterval> | null = null;
+  let lastMatches: MyMatch[] = [];
 
   const sendToRenderer = (channel: string, payload: unknown): void => {
     mainWindow?.webContents.send(channel, payload);
@@ -623,6 +637,7 @@ async function bootstrap(): Promise<void> {
    */
   const dropSession = (): void => {
     session = null;
+    stopMatchAssignmentPoll();
     runtime?.shutdown();
     runtime = null;
     signedOutReason = "needs-pairing";
@@ -658,16 +673,60 @@ async function bootstrap(): Promise<void> {
       },
     });
 
-    // Dev wiring: join a single match's realtime channel if configured. Real
-    // match-assigned wiring threads each match's guildId from the backend.
+    // Escape hatch for developing against one specific match; the real wiring is
+    // the poll below.
     const matchId = process.env["DESKTOP_MATCH_ID"];
     const guildId = process.env["DESKTOP_GUILD_ID"];
     if (matchId !== undefined && matchId !== "") {
       log("realtime_subscribing", { realtimeUrl, matchId, guildId });
       runtime.onMatchAssigned(matchId, guildId);
-    } else {
-      log("realtime_idle", { hint: "set DESKTOP_MATCH_ID (+DESKTOP_GUILD_ID) to join a match" });
     }
+    startMatchAssignmentPoll();
+  };
+
+  /**
+   * Ask the backend which matches are ours, and open a realtime channel for each.
+   *
+   * The missing half of the orchestration loop. The backend has always published
+   * create/invite/auto-accept commands onto a per-match channel, but the client
+   * only ever subscribed to a match id read from an environment variable — dev
+   * wiring that was never replaced. In a real tournament nobody was subscribed, so
+   * every command was delivered to an empty channel and the lobby was never
+   * created by anyone.
+   *
+   * A poll rather than a push: the client already has to survive being started
+   * mid-tournament, asleep, or offline for a while, and each of those is just a
+   * poll that returns the current truth. Subscribing is idempotent
+   * (`onMatchAssigned` no-ops for a match it already services), so a repeated
+   * answer costs nothing.
+   */
+  const startMatchAssignmentPoll = (): void => {
+    if (matchPollTimer !== null) return;
+    const poll = async (): Promise<void> => {
+      if (session === null || runtime === null) return;
+      const result = await withSession((t) =>
+        listMyMatches({ accessToken: t }, { backendUrl: backendBaseUrl() }),
+      );
+      if (!result.ok) {
+        // A blip must not kill the loop — the next tick simply asks again.
+        log("match_poll_failed", { status: result.status });
+        return;
+      }
+      for (const match of result.matches) {
+        runtime?.onMatchAssigned(match.matchId, match.guildId);
+      }
+      lastMatches = result.matches;
+    };
+    void poll();
+    matchPollTimer = setInterval(() => void poll(), MATCH_POLL_MS);
+  };
+
+  const stopMatchAssignmentPoll = (): void => {
+    if (matchPollTimer !== null) {
+      clearInterval(matchPollTimer);
+      matchPollTimer = null;
+    }
+    lastMatches = [];
   };
 
   /**
@@ -801,6 +860,17 @@ async function bootstrap(): Promise<void> {
   ipcMain.handle("lol:list-accounts", () =>
     withSession((t) => listMyAccounts({ accessToken: t }, { backendUrl: backendBaseUrl() })),
   );
+
+  // The caller's live matches + lobby state — what the Live match screen renders.
+  // Served from the poll's latest answer when it has one, so opening the screen
+  // shows the same thing the realtime subscription is already acting on.
+  ipcMain.handle("lol:matches-mine", async () => {
+    const result = await withSession((t) =>
+      listMyMatches({ accessToken: t }, { backendUrl: backendBaseUrl() }),
+    );
+    if (result.ok) lastMatches = result.matches;
+    return result.ok ? { ok: true, matches: lastMatches } : result;
+  });
 
   // The signed-in user's tournaments + join-by-code.
   ipcMain.handle("lol:tournaments-mine", () =>

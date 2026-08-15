@@ -10,6 +10,21 @@ export type SessionStatus = 'signed-in' | 'needs-pairing' | 'unavailable';
 export interface SessionState { signedIn: boolean; user: BridgeUser | null; status?: SessionStatus }
 export interface ReadSummoner { ok: boolean; puuid?: string; gameName?: string; tagLine?: string; region?: string; reason?: string; detail?: string }
 export interface LinkedAccount { accountId: string; gameName: string | null; tagLine: string | null; region: string | null; verified: boolean; rankText: string }
+/** A live match of the caller's, with whatever is known about its lobby. */
+export interface MyMatch {
+  matchId: string;
+  guildId: string;
+  tournamentName: string;
+  roundLabel: string;
+  /** Null until a lobby is opened; otherwise the lobby state-machine phase. */
+  lobbyState: string | null;
+  lobbyName: string | null;
+  lobbyPassword: string | null;
+  /** Null when nobody's client is hosting — the player creates it themselves. */
+  hostName: string | null;
+  isHost: boolean;
+}
+
 export interface Tournament { id: string; name: string; status: string; format: string; gameMode: string; bestOf: number; maxTeams: number; isSharedToCentral: boolean; registrationOpensAt: string | null; startAt: string | null }
 export interface MyTeam { teamId: string; name: string; role: string; status: string }
 export interface TeamMember { teamId: string; userId: string; role: string; displayName: string }
@@ -33,6 +48,7 @@ export interface LolBridge {
   unlinkAccount(accountId: string): Promise<Res<{ account: LinkedAccount }>>;
   signOut(): Promise<{ ok: boolean }>;
   listMyTournaments(): Promise<Res<{ tournaments: Tournament[] }>>;
+  listMyMatches(): Promise<Res<{ matches: MyMatch[] }>>;
   joinTournament(code: string, teamId?: string): Promise<Res<{ tournament: Tournament }>>;
   hideTournament(tournamentId: string): Promise<Res<Record<string, never>>>;
   tournamentBracket(tournamentId: string): Promise<Res<{ tournament: Tournament; matches: BracketMatch[] }>>;

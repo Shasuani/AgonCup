@@ -14,52 +14,149 @@
 
 import type {
   AutoAcceptInviteFilter,
+  CustomGameConfiguration,
   CustomLobbySpec,
   EogReport,
   GameflowPhase,
+  HostEpoch,
   LcuLobbyId,
+  SummonerId,
 } from "@lol/lcu";
 
-/** Discriminator for a backend->client lobby command. */
-export type CommandKind = "create_lobby" | "promote_host" | "auto_accept" | "abort";
+/**
+ * Discriminator for a backend->client lobby command.
+ *
+ * These are the `type` literals of the `lol_realtime` Pydantic payloads, verbatim
+ * — NOT a parallel vocabulary. This file previously discriminated on a `kind`
+ * field carrying short names (`"create_lobby"`), which the backend never sent:
+ * it emits `type: "create_lobby_command"`. Nothing matched, so every command fell
+ * through the controller's switch in silence.
+ */
+export type CommandType =
+  | "create_lobby_command"
+  | "promote_host_command"
+  | "invite_players_command"
+  | "auto_accept_command"
+  | "abort_command";
 
 interface BaseCommand {
   readonly commandId: string;
   readonly matchId: string;
   /** Host lease the command is bound to; the client rejects a stale epoch. */
   readonly hostEpoch: number;
-  readonly kind: CommandKind;
+  readonly type: CommandType;
+}
+
+/**
+ * The lobby spec exactly as it arrives on the wire (`lol_realtime.LobbySpec`).
+ *
+ * Deliberately NOT `@lol/lcu`'s {@link CustomLobbySpec}: that is the *adapter's*
+ * input shape (nested `configuration`, a flat `invitees` array), while this is
+ * the *backend's* output shape. Conflating them is what let the two drift apart
+ * unnoticed. {@link toCustomLobbySpec} is the one place that converts.
+ */
+export interface WireLobbySpec {
+  readonly gameMode: string;
+  readonly mapId: number;
+  readonly teamSize: number;
+  readonly lobbyName: string;
+  readonly lobbyPassword: string;
+  /** summonerIds — what an LCU invite is addressed by. */
+  readonly inviteeSummonerIds: readonly string[];
+  /** PUUIDs for the same players (collision-immune; guards auto-accept). */
+  readonly inviteePuuids: readonly string[];
 }
 
 /** Become host and create the lobby (initial designation). */
 export interface CreateLobbyCommand extends BaseCommand {
-  readonly kind: "create_lobby";
-  readonly spec: CustomLobbySpec;
+  readonly type: "create_lobby_command";
+  readonly spec: WireLobbySpec;
 }
 
-/** Become host after a failover and RE-create the lobby at a new epoch. */
+/**
+ * Become host after a failover and RE-create the lobby at a new epoch.
+ *
+ * Carries no spec: the backend's `PromoteHostCommand` sends only the new epoch +
+ * successor PUUID. A successor re-creates **verbatim** from the spec it already
+ * holds (PLAN.md §3.6.2); a client that never saw one — because it started after
+ * the original create — acks `ok:false` so the backend falls back to the manual
+ * lobby rather than creating a lobby with the wrong invitees.
+ */
 export interface PromoteHostCommand extends BaseCommand {
-  readonly kind: "promote_host";
-  readonly spec: CustomLobbySpec;
+  readonly type: "promote_host_command";
+  readonly newHostEpoch: number;
+  readonly newHostPuuid: string;
+}
+
+/** Host: invite (or re-invite) this exact roster. */
+export interface InvitePlayersCommand extends BaseCommand {
+  readonly type: "invite_players_command";
+  readonly toSummonerIds: readonly string[];
+  readonly toPuuids: readonly string[];
 }
 
 /** Guest: arm auto-accept for invites from the designated host. */
 export interface AutoAcceptCommand extends BaseCommand {
-  readonly kind: "auto_accept";
-  readonly filter: AutoAcceptInviteFilter;
+  readonly type: "auto_accept_command";
+  /** PUUID of the designated host — the only inviter we auto-accept. */
+  readonly expectedInviterPuuid: string;
 }
 
 /** Tear down all lobby automation (manual fallback / match cancelled). */
 export interface AbortCommand extends BaseCommand {
-  readonly kind: "abort";
+  readonly type: "abort_command";
   readonly reason?: string;
 }
 
 export type LobbyCommand =
   | CreateLobbyCommand
   | PromoteHostCommand
+  | InvitePlayersCommand
   | AutoAcceptCommand
   | AbortCommand;
+
+/**
+ * Convert a backend {@link WireLobbySpec} into the adapter's {@link CustomLobbySpec}.
+ *
+ * The two shapes are genuinely different — the backend sends the custom-game
+ * config flat, the LCU wants it nested under `configuration`, and the invite list
+ * is `inviteeSummonerIds` on one side and `invitees` on the other. `mutators.id: 1`
+ * and `spectatorPolicy` are LCU-side constants (PLAN.md §3.6.2) the backend does
+ * not carry, so they are filled here.
+ */
+export function toCustomLobbySpec(
+  wire: WireLobbySpec,
+  { matchId, hostEpoch }: { matchId: string; hostEpoch: number },
+): CustomLobbySpec {
+  const configuration: CustomGameConfiguration = {
+    gameMode: wire.gameMode === "ARAM" ? "ARAM" : "CLASSIC",
+    mapId: wire.mapId === 12 ? 12 : 11,
+    teamSize: wire.teamSize === 1 ? 1 : 5,
+    mutators: { id: 1 },
+    spectatorPolicy: "AllAllowed",
+  };
+  return {
+    matchId,
+    hostEpoch: fromWire<HostEpoch>(hostEpoch),
+    configuration,
+    lobbyName: wire.lobbyName,
+    lobbyPassword: wire.lobbyPassword,
+    invitees: wire.inviteeSummonerIds.map((id) => fromWire<SummonerId>(id)),
+  };
+}
+
+/**
+ * Brand a value that arrived over the wire.
+ *
+ * `@lol/lcu`'s ids are branded types, so an arbitrary string cannot be passed
+ * where a `SummonerId` is meant. JSON carries plain strings and numbers, so a
+ * brand has to be applied somewhere — this is that somewhere, and the only one.
+ * Keeping it a single named function instead of scattered `as` casts makes the
+ * trust boundary greppable, and the brands keep doing their job everywhere else.
+ */
+export function fromWire<T>(value: string | number): T {
+  return value as unknown as T;
+}
 
 /** Client->server acknowledgement of a command (epoch-fenced server-side). */
 export interface LobbyAck {

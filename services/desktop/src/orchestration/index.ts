@@ -5,7 +5,7 @@ export type {
   AutoAcceptCommand,
   BackendTransport,
   Clock,
-  CommandKind,
+  CommandType,
   CreateLobbyCommand,
   HostHeartbeat,
   LobbyAck,

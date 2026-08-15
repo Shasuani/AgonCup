@@ -206,7 +206,7 @@ describe("Create form gating", () => {
 
 
 describe("TournamentsScreen delete", () => {
-  /** A draft alongside the live ones — only the draft may be deleted. */
+  /** A draft alongside the live ones — all of them deletable by an admin now. */
   const WITH_DRAFT: TournamentResponse[] = [
     ...TOURNAMENTS,
     {
@@ -223,16 +223,30 @@ describe("TournamentsScreen delete", () => {
     },
   ];
 
-  it("offers Delete on a draft and on nothing else", async () => {
-    // A tournament past draft holds other people's entries and the backend
-    // refuses to delete it, so a button there would only ever 409.
+  /** The Delete button inside the named tournament's row. */
+  function deleteButtonIn(name: string): HTMLElement {
+    const row = screen.getByRole("button", { name }).closest("tr");
+    const button = row?.querySelector("[data-delete-tournament]");
+    if (!button) throw new Error(`no delete button in the "${name}" row`);
+    return button as HTMLElement;
+  }
+
+  it("offers Delete on every row for an admin", async () => {
     const { client } = mockClient({ list: vi.fn(async () => WITH_DRAFT) });
     renderScreen(client);
 
     await screen.findByText("Scratch Cup");
     await waitFor(() => {
-      expect(document.querySelectorAll("[data-delete-tournament]")).toHaveLength(1);
+      expect(document.querySelectorAll("[data-delete-tournament]")).toHaveLength(3);
     });
+  });
+
+  it("hides Delete from non-admin roles", async () => {
+    const { client } = mockClient({ list: vi.fn(async () => WITH_DRAFT) });
+    renderScreen(client, ["player"]);
+
+    await screen.findByText("Scratch Cup");
+    expect(document.querySelectorAll("[data-delete-tournament]")).toHaveLength(0);
   });
 
   it("confirms first, then deletes and reloads", async () => {
@@ -241,12 +255,27 @@ describe("TournamentsScreen delete", () => {
     renderScreen(client);
 
     await screen.findByText("Scratch Cup");
-    await userEvent.click(document.querySelector("[data-delete-tournament]") as HTMLElement);
+    await userEvent.click(deleteButtonIn("Scratch Cup"));
 
     await waitFor(() => expect(tournaments.remove).toHaveBeenCalledWith("tour-draft"));
     expect(confirm).toHaveBeenCalled();
     // Reloaded, so the row does not linger after the row is gone server-side.
     await waitFor(() => expect(tournaments.list).toHaveBeenCalledTimes(2));
+    confirm.mockRestore();
+  });
+
+  it("warns that a live tournament's history goes with it", async () => {
+    // Past draft the row holds other people's registrations and results — the
+    // confirm has to say that, not read like tidying up a form mistake.
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const { client, tournaments } = mockClient({ list: vi.fn(async () => WITH_DRAFT) });
+    renderScreen(client);
+
+    await screen.findByText("Summer Clash");
+    await userEvent.click(deleteButtonIn("Summer Clash"));
+
+    await waitFor(() => expect(tournaments.remove).toHaveBeenCalledWith("tour-2"));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("erased for everyone"));
     confirm.mockRestore();
   });
 
@@ -256,26 +285,26 @@ describe("TournamentsScreen delete", () => {
     renderScreen(client);
 
     await screen.findByText("Scratch Cup");
-    await userEvent.click(document.querySelector("[data-delete-tournament]") as HTMLElement);
+    await userEvent.click(deleteButtonIn("Scratch Cup"));
 
     expect(tournaments.remove).not.toHaveBeenCalled();
     confirm.mockRestore();
   });
 
-  it("surfaces a refusal instead of silently doing nothing", async () => {
+  it("surfaces a failure instead of silently doing nothing", async () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     const { client } = mockClient({
       list: vi.fn(async () => WITH_DRAFT),
       remove: vi.fn(async () => {
-        throw new Error("only a draft tournament can be deleted");
+        throw new Error("tournament not found");
       }),
     });
     renderScreen(client);
 
     await screen.findByText("Scratch Cup");
-    await userEvent.click(document.querySelector("[data-delete-tournament]") as HTMLElement);
+    await userEvent.click(deleteButtonIn("Scratch Cup"));
 
-    expect(await screen.findByText(/only a draft tournament can be deleted/)).toBeTruthy();
+    expect(await screen.findByText(/tournament not found/)).toBeTruthy();
     confirm.mockRestore();
   });
 });

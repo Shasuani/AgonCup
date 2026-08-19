@@ -106,7 +106,9 @@ class LeagueBot(commands.AutoShardedBot):
 
             # Typed as Any: the redis client is an injected dependency satisfying
             # the subscriber's structural _Redis protocol at runtime.
-            redis: Any = Redis.from_url(get_settings().redis_url)
+            # socket_timeout MUST be explicit: redis-py >= 8.0 defaults it to 5s,
+            # and a quiet pub/sub listen() then dies with TimeoutError at 5.01s.
+            redis: Any = Redis.from_url(get_settings().redis_url, socket_timeout=None)
         except Exception:  # pragma: no cover - degraded mode
             return None
         return NotificationSubscriber(self, redis=redis, backend=self.backend)

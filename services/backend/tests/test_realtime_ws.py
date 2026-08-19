@@ -788,3 +788,64 @@ async def test_malformed_redis_command_payload_is_skipped() -> None:
     command_frames = [json.loads(s) for s in ws.sent if json.loads(s).get("type") == "command"]
     # Only the one well-formed envelope was relayed; the poison frame was skipped.
     assert len(command_frames) == 1
+
+
+# ---------------------------------------------------------------------------
+# The router's I/O seams — the two regressions that killed live connections
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_ws_teardown_leaves_the_shared_redis_client_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One WebSocket ending must NOT close the process-wide Redis client.
+
+    The old ``finally: await client.aclose()`` closed the shared singleton, so
+    the first client to disconnect severed every other live connection's pub/sub
+    (observed live: second client died with ConnectionError mid-relay).
+    """
+    from app.realtime import redis_client as redis_client_module
+    from app.realtime import router as router_module
+
+    class _SharedClient:
+        def __init__(self) -> None:
+            self.aclosed = False
+
+        def pubsub(self) -> Any:  # pragma: no cover - serve is stubbed out
+            raise AssertionError("serve stub never builds a pubsub")
+
+        async def aclose(self) -> None:
+            self.aclosed = True
+
+    shared = _SharedClient()
+    monkeypatch.setattr(redis_client_module, "get_redis", lambda: shared)
+
+    async def _serve_stub(*args: Any, **kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(router_module.hub, "serve", _serve_stub)
+
+    await router_module.realtime_ws(
+        websocket=FakeWebSocket(token=_token(), inbound=[])  # type: ignore[arg-type]
+    )
+
+    assert shared.aclosed is False
+
+
+@pytest.mark.asyncio
+async def test_shared_redis_client_has_no_socket_timeout() -> None:
+    """redis-py >= 8.0 defaults ``socket_timeout`` to 5s, which turns a QUIET
+    pub/sub ``listen()`` into a TimeoutError at 5.01s and drops the WebSocket.
+    The shared client must therefore pin it to None explicitly."""
+    from app.realtime import redis_client as redis_client_module
+
+    # Build a FRESH client in this test's own event loop (another test may have
+    # already latched the singleton in a loop that is closed by now), and restore
+    # the module state afterwards so ordering never leaks between tests.
+    previous = redis_client_module._client
+    redis_client_module._client = None
+    client = redis_client_module.get_redis()
+    try:
+        assert client.connection_pool.connection_kwargs.get("socket_timeout") is None
+    finally:
+        await client.aclose()
+        redis_client_module._client = previous

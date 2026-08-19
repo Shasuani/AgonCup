@@ -533,6 +533,68 @@ async def test_mark_disputed_creates_disputed_result_no_winner() -> None:
     assert session.store[MatchResult][0].state == MatchResultState.DISPUTED
 
 
+@pytest.mark.asyncio
+async def test_admin_override_resolves_a_queued_dispute() -> None:
+    """Resolving is the dispute queue's whole point — the row upgrades in place.
+
+    ``mark_disputed`` writes ``winner_team_id=None``, so the old conflict guard
+    409'd every admin resolution and the queue was a write-only inbox.
+    """
+    session, _tid, _gid, _teams = _seed_bracket(4)
+    match = _match_at(session, 1, 0)
+    await service.mark_disputed(
+        session,
+        match_id=match.id,
+        agreed_game_id="100",
+        anomaly_flags=["asymmetric_winner_claim"],
+        reports_counted=10,
+        both_teams_represented=True,
+    )
+
+    admin = uuid.uuid4()
+    result = await record_winner(
+        session,
+        match_id=match.id,
+        winner_team_id=match.team_a,
+        decided_by=ResultDecidedBy.ADMIN_OVERRIDE,
+        admin_override_by=admin,
+        admin_override_reason="reviewed the scoreboards",
+    )
+
+    assert result.state == MatchResultState.CONFIRMED
+    assert result.winner_team_id == match.team_a
+    assert result.decided_by == ResultDecidedBy.ADMIN_OVERRIDE
+    assert result.admin_override_by == admin
+    # Upgraded IN PLACE — never a second MatchResult row for the same match.
+    assert len(session.store[MatchResult]) == 1
+    assert match.status == MatchStatus.COMPLETED
+    assert match.winner_team_id == match.team_a
+
+
+@pytest.mark.asyncio
+async def test_late_quorum_cannot_resolve_a_queued_dispute() -> None:
+    """A dispute froze the match BECAUSE reports conflicted — only an admin may
+    unfreeze it; a late quorum re-run must not paper over the conflict."""
+    session, _tid, _gid, _teams = _seed_bracket(4)
+    match = _match_at(session, 1, 0)
+    await service.mark_disputed(
+        session,
+        match_id=match.id,
+        agreed_game_id="100",
+        anomaly_flags=["asymmetric_winner_claim"],
+        reports_counted=10,
+        both_teams_represented=True,
+    )
+
+    with pytest.raises(service.ResultConflictError):
+        await record_winner(
+            session,
+            match_id=match.id,
+            winner_team_id=match.team_a,
+            decided_by=ResultDecidedBy.QUORUM,
+        )
+
+
 async def test_the_final_closes_the_tournament() -> None:
     """A crowned champion should not leave the tournament reading as live.
 

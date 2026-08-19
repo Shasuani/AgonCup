@@ -113,6 +113,7 @@ def _report(
         schema_version="v1",
         received_at=None,
         raw_payload=_payload(winner_puuids, loser_puuids),
+        reported_kda=None,
     )
 
 
@@ -122,6 +123,7 @@ def _build(
     game_mode: GameMode = GameMode.SUMMONERS_RIFT_5V5,
     players_per_team: int = 5,
     best_of: int = 1,
+    sibling_scored: list[list[str]] | None = None,
 ) -> tuple[_QueuedSession, uuid.UUID, uuid.UUID, uuid.UUID]:
     """Seed a queued session for a match where A=team_a, B=team_b checked in.
 
@@ -154,6 +156,7 @@ def _build(
         _Res(sessions),  # 4: ClientSession (user_id, puuid)
         _Res([(game_mode, best_of)]),  # 5: (Tournament.game_mode, best_of)
         _Res(reports),  # 6: ResultReport rows
+        _Res(list(sibling_scored or [])),  # 7: sibling matches' scored_game_ids
     )
     return session, match_id, ta, tb
 
@@ -330,3 +333,27 @@ async def test_already_completed_match_is_skipped() -> None:
 
     assert outcome is None
     assert spy.calls == []
+
+
+@pytest.mark.asyncio
+async def test_game_id_already_scored_by_a_sibling_match_disputes() -> None:
+    """A full agreeing quorum whose eog block was already consumed by ANOTHER
+    match in the tournament must trip the reuse guard, never score — replaying
+    one real game's payload into a second bracket slot is a forgery vector."""
+    reports = [_report(p, _A, _B, game="100") for p in _A + _B]
+    session, match_id, _ta, _tb = _build(reports=reports, sibling_scored=[["100"]])
+    spy = _RecordSpy()
+    dispute_spy = _RecordSpy()
+
+    outcome = await corroboration.adjudicate_match(
+        session,  # type: ignore[arg-type]
+        match_id=match_id,
+        guild_id=uuid.uuid4(),
+        record_winner=spy,
+        mark_disputed=dispute_spy,
+    )
+
+    assert outcome == AdjudicationOutcome.DISPUTE
+    assert spy.calls == []
+    assert len(dispute_spy.calls) == 1
+    assert "reused_game_id" in dispute_spy.calls[0]["anomaly_flags"]

@@ -208,6 +208,22 @@ async def adjudicate_match(
     for r in rows:
         by_game.setdefault(r.lcu_game_id, []).append(r)
 
+    # Game ids OTHER matches in this tournament already consumed: an eog block
+    # replayed from a different match must trip FLAG_REUSED_GAME_ID (dispute),
+    # never score. This match's own scored games are skipped by the loop below.
+    sibling_ids = (
+        (
+            await session.execute(
+                select(Match.scored_game_ids).where(
+                    Match.tournament_id == match.tournament_id, Match.id != match_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    used_elsewhere = frozenset(gid for ids in sibling_ids for gid in (ids or []))
+
     scored = list(match.scored_game_ids or [])
     scored_set = set(scored)
     disputed = False
@@ -225,6 +241,12 @@ async def adjudicate_match(
                 winner=_derive_winner_team(_winning_puuids(r.raw_payload), roster_by_team),
                 schema_version=r.schema_version,
                 received_at=r.received_at,
+                # per_player_kda is DELIBERATELY not wired (the data is in
+                # ResultReport.reported_kda): the eog scoreboard is deterministic,
+                # so all honest clients produce byte-identical KDA blocks — and
+                # lol-core's byte-identical-payload detector would then mark every
+                # reporter suspect and dispute every honest match. Wiring it needs
+                # a detector redesign first (owner decision).
             )
             for r in by_game[game_id]
         ]
@@ -233,6 +255,7 @@ async def adjudicate_match(
             roster_by_team,
             quorum_threshold=game_mode.quorum_threshold,
             total_participants=game_mode.total_participants,
+            used_game_ids=used_elsewhere,
         )
         if verdict.outcome == AdjudicationOutcome.ACCEPT and verdict.winner_team_id is not None:
             if verdict.winner_team_id == match.team_a:

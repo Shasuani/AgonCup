@@ -280,6 +280,7 @@ async def record_winner(
     # rejected (changing it post-advancement would desync the bracket — that
     # needs an explicit un-advance/revise path); and an ADMIN_OVERRIDE outcome is
     # terminal against any non-override (e.g. a late quorum) call.
+    now = datetime.now(UTC)
     if result is not None:
         if result.winner_team_id == winner_team_id:
             logger.info("result.replay_noop", match_id=str(match_id))
@@ -289,28 +290,46 @@ async def record_winner(
             # is otherwise the only no-op an admin has.
             await _complete_if_finished(session, tournament_id=match.tournament_id)
             return result
-        if result.decided_by == ResultDecidedBy.ADMIN_OVERRIDE and not is_override:
+        if (
+            is_override
+            and result.state == MatchResultState.DISPUTED
+            and result.winner_team_id is None
+        ):
+            # A queued dispute is an OPEN question, not a decision: the admin
+            # resolving it UPGRADES the row in place. Without this branch the
+            # conflict guard below 409'd every dispute (winner NULL never equals
+            # the proposed winner), making the dispute queue a write-only inbox.
+            # Only an override resolves it — a late quorum re-run must not paper
+            # over the very conflict that froze the match.
+            result.winner_team_id = winner_team_id
+            result.decided_by = decided_by
+            result.admin_override_by = admin_override_by
+            result.admin_override_reason = admin_override_reason
+            result.state = MatchResultState.CONFIRMED
+            result.decided_at = now
+            logger.info("result.dispute_resolved", match_id=str(match_id))
+        elif result.decided_by == ResultDecidedBy.ADMIN_OVERRIDE and not is_override:
             raise ResultAlreadyDecidedError(
                 f"match {match_id} decided by admin override; cannot overwrite"
             )
-        raise ResultConflictError(
-            f"match {match_id} already decided for a different winner; revise required"
+        else:
+            raise ResultConflictError(
+                f"match {match_id} already decided for a different winner; revise required"
+            )
+    else:
+        # No decided result exists for this match → insert one.
+        result = MatchResult(
+            guild_id=match.guild_id,
+            match_id=match_id,
+            tournament_id=match.tournament_id,
+            winner_team_id=winner_team_id,
+            decided_by=decided_by,
+            admin_override_by=admin_override_by if is_override else None,
+            admin_override_reason=admin_override_reason if is_override else None,
+            state=state,
+            decided_at=now,
         )
-
-    # Past the guard above, no decided result exists for this match → insert one.
-    now = datetime.now(UTC)
-    result = MatchResult(
-        guild_id=match.guild_id,
-        match_id=match_id,
-        tournament_id=match.tournament_id,
-        winner_team_id=winner_team_id,
-        decided_by=decided_by,
-        admin_override_by=admin_override_by if is_override else None,
-        admin_override_reason=admin_override_reason if is_override else None,
-        state=state,
-        decided_at=now,
-    )
-    session.add(result)
+        session.add(result)
 
     # (b) Stamp the match itself.
     match.winner_team_id = winner_team_id

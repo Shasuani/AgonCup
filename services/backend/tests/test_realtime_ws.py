@@ -520,10 +520,14 @@ async def test_inbound_heartbeat_routes_to_ingest_heartbeat() -> None:
         token=_token(),
         inbound=[
             json.dumps({"type": "subscribe", "matchId": str(match_id)}),
+            # The desktop's real frame: `phase` is the raw LCU gameflow phase
+            # ("Lobby", "ChampSelect", ...), NOT a LobbyPhase value. Coercing it
+            # used to ValueError on every frame, so no heartbeat ever landed and
+            # the watchdog saw every host as dead.
             json.dumps(
                 {
                     "type": "heartbeat",
-                    "heartbeat": {"hostEpoch": 0, "phase": LobbyPhase.FILLING.value},
+                    "heartbeat": {"hostEpoch": 0, "phase": "Lobby", "isHost": True},
                 }
             ),
         ],
@@ -533,6 +537,34 @@ async def test_inbound_heartbeat_routes_to_ingest_heartbeat() -> None:
     )
     # ingest_heartbeat stamps liveness on a current-epoch heartbeat.
     assert lobby.last_host_heartbeat_at is not None
+
+
+@pytest.mark.asyncio
+async def test_guest_heartbeat_does_not_stamp_host_liveness() -> None:
+    """All ten clients heartbeat on the shared match channel; only the HOST's
+    beat is liveness. A guest's beat refreshing `last_host_heartbeat_at` would
+    mask a dead host from the watchdog for as long as any guest stays online."""
+    match_id = uuid.uuid4()
+    lobby = _lobby(match_id, host_epoch=0, state=LobbyPhase.FILLING)
+    store = _store(_participant(match_id), lobby)
+    ws = FakeWebSocket(
+        token=_token(),
+        inbound=[
+            json.dumps({"type": "subscribe", "matchId": str(match_id)}),
+            # isHost false — and absent — are both "not the host".
+            json.dumps(
+                {
+                    "type": "heartbeat",
+                    "heartbeat": {"hostEpoch": 0, "phase": "Lobby", "isHost": False},
+                }
+            ),
+            json.dumps({"type": "heartbeat", "heartbeat": {"hostEpoch": 0}}),
+        ],
+    )
+    await hub.serve(
+        ws, session_factory=_session_factory(store), pubsub_factory=lambda: FakePubSub()
+    )
+    assert lobby.last_host_heartbeat_at is None
 
 
 @pytest.mark.asyncio
@@ -686,9 +718,9 @@ async def test_stale_epoch_heartbeat_is_dropped_not_fatal() -> None:
         inbound=[
             json.dumps({"type": "subscribe", "matchId": str(match_id)}),
             # Stale epoch (1 < 2) -> service raises StaleEpochError -> dropped.
-            json.dumps({"type": "heartbeat", "heartbeat": {"hostEpoch": 1}}),
+            json.dumps({"type": "heartbeat", "heartbeat": {"hostEpoch": 1, "isHost": True}}),
             # A subsequent CURRENT-epoch heartbeat still works (socket survived).
-            json.dumps({"type": "heartbeat", "heartbeat": {"hostEpoch": 2}}),
+            json.dumps({"type": "heartbeat", "heartbeat": {"hostEpoch": 2, "isHost": True}}),
         ],
     )
     await hub.serve(
@@ -711,7 +743,7 @@ async def test_malformed_inbound_frame_is_skipped_not_fatal() -> None:
             json.dumps({"type": "subscribe", "matchId": str(match_id)}),
             "}{ not json",  # malformed -> skipped
             json.dumps([1, 2, 3]),  # valid JSON but not an object -> skipped
-            json.dumps({"type": "heartbeat", "heartbeat": {"hostEpoch": 0}}),
+            json.dumps({"type": "heartbeat", "heartbeat": {"hostEpoch": 0, "isHost": True}}),
         ],
     )
     await hub.serve(

@@ -44,7 +44,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 from lol_core import LobbyEvent
-from lol_schemas.enums import LobbyPhase, ResultSource
+from lol_schemas.enums import ResultSource
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -290,12 +290,20 @@ async def _route_heartbeat(
     session: AsyncSession, *, subscription: Subscription, frame: dict[str, Any]
 ) -> None:
     body = frame.get("heartbeat") or {}
+    # HOST liveness only: all ten clients heartbeat on the shared match channel,
+    # and a guest's beat stamping `last_host_heartbeat_at` would mask a dead host
+    # from the watchdog. Guests' frames are simply not liveness input.
+    if not body.get("isHost", False):
+        return
+    # NB: the desktop's `phase` is the raw LCU gameflow phase ("Lobby",
+    # "ChampSelect", ...) — a DIFFERENT vocabulary from LobbyPhase. Coercing it
+    # here used to raise on every single frame, so no heartbeat ever landed and
+    # the watchdog saw every host as dead. Liveness needs only the epoch.
     try:
         await service.ingest_heartbeat(
             session,
             match_id=subscription.match_id,
             host_epoch=int(body["hostEpoch"]),
-            phase=LobbyPhase(body.get("phase", LobbyPhase.FILLING.value)),
         )
     except (KeyError, ValueError, service.OrchestrationError) as exc:
         logger.warning("realtime.inbound.heartbeat_dropped", error=str(exc))

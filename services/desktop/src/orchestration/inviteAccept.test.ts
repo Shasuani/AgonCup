@@ -220,3 +220,99 @@ test("the controller still refuses a stranger's lobby invite", async () => {
   assert.equal(decision.reason, "inviter-mismatch");
   assert.equal(requests.filter((r) => r.method === "POST").length, 0);
 });
+
+test("a failed accept POST is not reported as accepted (the arm stays alive)", async () => {
+  // Regression: the accept's HTTP status was never checked, so a 404 (invite
+  // expired) came back `accepted: true`, which stopped the guest's poll loop
+  // and silently disarmed auto-accept for the rest of the match.
+  const adapter = adapterWith({
+    respond: (req) =>
+      req.method === "POST" ? { status: 404, body: "" } : { status: 200, body: "[]" },
+  });
+  const controller = adapter.makeInviteAcceptController({
+    expectedInviterPuuid: CANONICAL_PUUID,
+    expectedInviterLcuPuuid: HOST_LCU_PUUID,
+    hostEpoch: EPOCH,
+  });
+
+  const decision = await controller.handle({
+    invitationId: "inv-expired",
+    fromPuuid: HOST_LCU_PUUID,
+    invitationType: "lobby",
+  });
+
+  assert.equal(decision.accepted, false);
+  assert.equal(decision.reason, "accept-failed");
+});
+
+// ---------------------------------------------------------------------------
+// createCustomLobby idempotency probe: reuse OUR lobby, never a foreign one
+// ---------------------------------------------------------------------------
+
+const LOBBY_SPEC = {
+  matchId: "match-1",
+  hostEpoch: EPOCH,
+  configuration: {
+    gameMode: "CLASSIC",
+    mapId: 11,
+    mutators: { id: 1 },
+    spectatorPolicy: "NotAllowed",
+    teamSize: 5,
+  },
+  lobbyName: "LoL-abc12345",
+  lobbyPassword: "pw",
+  invitees: [],
+} as never;
+
+function lobbyJson(over: Record<string, unknown>): string {
+  return JSON.stringify({ partyId: "party-9", gameConfig: over });
+}
+
+test("create reuses the current lobby when its name is the match's", async () => {
+  const requests: HttpRequest[] = [];
+  const adapter = adapterWith({
+    requests,
+    respond: () => ({
+      status: 200,
+      body: lobbyJson({ isCustom: true, customLobbyName: "LoL-abc12345" }),
+    }),
+  });
+  const handle = await adapter.createCustomLobby(LOBBY_SPEC);
+  assert.equal(handle.lobbyId, "party-9");
+  assert.equal(requests.filter((r) => r.method === "POST").length, 0);
+});
+
+test("create does NOT adopt a foreign lobby (wrong name, or not custom)", async () => {
+  // Regression: "a lobby exists" used to be reuse enough — a normal-queue party
+  // or a friend's custom game was returned as the match lobby, and nine
+  // tournament players were then invited into it.
+  for (const gameConfig of [
+    { isCustom: true, customLobbyName: "someone-elses-game" },
+    { isCustom: false },
+  ]) {
+    const requests: HttpRequest[] = [];
+    const adapter = adapterWith({
+      requests,
+      respond: (req) =>
+        req.method === "POST"
+          ? { status: 200, body: JSON.stringify({ partyId: "party-new" }) }
+          : { status: 200, body: lobbyJson(gameConfig) },
+    });
+    const handle = await adapter.createCustomLobby(LOBBY_SPEC);
+    assert.equal(handle.lobbyId, "party-new");
+    assert.equal(requests.filter((r) => r.method === "POST").length, 1);
+  }
+});
+
+test("an unreadable lobby name falls back to isCustom and reuses (drift bias)", async () => {
+  // When the RE name field drifts, wrongly re-creating would kick every joined
+  // player; wrongly reusing is repaired by the invite fence. Bias to reuse.
+  const requests: HttpRequest[] = [];
+  const adapter = adapterWith({
+    requests,
+    respond: () => ({ status: 200, body: lobbyJson({ isCustom: true }) }),
+  });
+  const handle = await adapter.createCustomLobby(LOBBY_SPEC);
+  assert.equal(handle.lobbyId, "party-9");
+  assert.equal(requests.filter((r) => r.method === "POST").length, 0);
+});

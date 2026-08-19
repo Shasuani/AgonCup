@@ -103,6 +103,7 @@ function makeAdapter(over: Partial<Record<string, unknown>> = {}) {
       return () => calls.push("unsubInvite");
     },
     async getGameflowPhase() {
+      if (over.phaseThrows) throw new Error("lcu unreachable");
       // Allow a sequence of phases so tests can walk InProgress -> EndOfGame.
       if (Array.isArray(over.phases) && over.phases.length > 0) {
         return (over.phases as string[]).shift() ?? "Lobby";
@@ -467,4 +468,138 @@ test("the host lease moving is picked up without rebuilding anything", async () 
   t.emit(createCmd({ commandId: "c2" }));
   await tickMicrotasks();
   assert.deepEqual(a.calls, ["createCustomLobby", "invite:3"]);
+});
+
+test("a promotion acts — and acks — at the NEW epoch, not the superseded one", async () => {
+  // The command's own `hostEpoch` is the epoch being superseded (that is what it
+  // fences on). Acting at it meant the re-create's ack arrived at the deposed
+  // epoch and was rejected server-side, so the LOBBY_CREATED transition was lost
+  // and the next watchdog tick deposed the host again — straight to epoch
+  // exhaustion and the manual fallback.
+  const t = makeTransport();
+  const a = makeAdapter();
+  const s = makeScheduler();
+  makeController(t, a, s).start();
+
+  t.emit(createCmd()); // seeds #lastSpec at epoch 0
+  await tickMicrotasks();
+  t.emit({
+    type: "promote_host_command",
+    commandId: "c-promote",
+    matchId: MATCH,
+    hostEpoch: 0,
+    newHostEpoch: 1,
+    newHostPuuid: "puuid-me",
+  } as unknown as LobbyCommand);
+  await tickMicrotasks();
+
+  assert.equal(t.acks.length, 2);
+  assert.equal(t.acks[1]?.ok, true);
+  assert.equal(t.acks[1]?.hostEpoch, 1);
+  // Heartbeats now carry the adopted lease too — a beat at the superseded epoch
+  // is fenced out server-side, which reads as a dead host.
+  await runTickAsync(s);
+  assert.equal(t.heartbeats.at(-1)?.hostEpoch, 1);
+});
+
+test("a superseded auto-accept arm tears its OWN loop down, not the winner's", async () => {
+  // Commands dispatch fire-and-forget, so a replayed arm and a live one can
+  // interleave. The loser used to stay armed forever: an orphan 2s poll that
+  // could still accept. Now it finds itself superseded and unsubscribes itself.
+  const t = makeTransport();
+  const s = makeScheduler();
+  const unsubs: string[] = [];
+  let releaseFirst: ((u: () => void) => void) | null = null;
+  const base = makeAdapter().adapter as Record<string, unknown>;
+  const adapter = {
+    ...base,
+    autoAcceptInvite(): Promise<() => void> {
+      if (releaseFirst === null) {
+        // First arm: parked until the test releases it — AFTER the second won.
+        return new Promise((res) => {
+          releaseFirst = res;
+        });
+      }
+      return Promise.resolve(() => unsubs.push("second"));
+    },
+  };
+  const controller = new OrchestrationController({
+    adapter: adapter as never,
+    transport: t.transport,
+    scheduler: s.scheduler,
+    clock: { nowMs: () => 1000 },
+    config: { matchId: MATCH, heartbeatMs: 2000 },
+  });
+  controller.start();
+  const arm = (id: string) =>
+    t.emit({
+      type: "auto_accept_command",
+      commandId: id,
+      matchId: MATCH,
+      hostEpoch: 0,
+      expectedInviterPuuid: "puuid-host",
+    } as unknown as LobbyCommand);
+
+  arm("c1"); // parks inside the adapter
+  await tickMicrotasks();
+  arm("c2"); // wins: installs its loop
+  await tickMicrotasks();
+  // (Read through a variable: TS cannot see the closure assignment above.)
+  const release = releaseFirst as ((u: () => void) => void) | null;
+  release?.(() => unsubs.push("first")); // c1 finally resolves — too late
+  await tickMicrotasks();
+
+  assert.deepEqual(unsubs, ["first"]);
+});
+
+test("a replayed invite does not reset the manual-lobby wait deadline", async () => {
+  // Every reconnect replays the invite command. Overwriting the parked deadline
+  // each time turned the bounded 15-minute wait into an indefinite one.
+  const t = makeTransport();
+  const a = makeAdapter({ noLobby: true });
+  const s = makeScheduler();
+  let now = 0;
+  makeController(t, a, s, 2000, { nowMs: () => now }).start();
+  const inviteCmd = (id: string) =>
+    ({
+      type: "invite_players_command",
+      commandId: id,
+      matchId: MATCH,
+      hostEpoch: 0,
+      toSummonerIds: ["s1"],
+      toPuuids: ["puuid-s1"],
+    }) as unknown as LobbyCommand;
+
+  t.emit(inviteCmd("c1")); // parked; deadline = 15min
+  await tickMicrotasks();
+  now = 14 * 60_000;
+  t.emit(inviteCmd("c1-replay")); // must NOT move the deadline
+  await tickMicrotasks();
+  now = 16 * 60_000; // past the FIRST deadline
+  await runTickAsync(s);
+
+  assert.equal(t.acks.length, 1);
+  assert.equal(t.acks[0]?.ok, false);
+  assert.match(String(t.acks[0]?.error), /no lobby was created/);
+});
+
+test("a flaky phase read does not stall the parked manual-path invite", async () => {
+  // The tick used to bail before the pending-invite retry when the gameflow
+  // read failed — a broken phase endpoint silently froze the manual path.
+  const t = makeTransport();
+  const a = makeAdapter({ phaseThrows: true, lobbyAppearsAfter: 1 });
+  const s = makeScheduler();
+  makeController(t, a, s).start();
+  t.emit({
+    type: "invite_players_command",
+    commandId: "c1",
+    matchId: MATCH,
+    hostEpoch: 0,
+    toSummonerIds: ["s1", "s2"],
+    toPuuids: ["p1", "p2"],
+  } as unknown as LobbyCommand);
+  await tickMicrotasks(); // parked (no lobby yet)
+  await runTickAsync(s); // phase read throws; lobby appears on this retry's read
+  assert.ok(a.calls.includes("invite:2"));
+  assert.equal(t.acks[0]?.ok, true);
 });

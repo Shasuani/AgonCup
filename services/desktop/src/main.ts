@@ -81,6 +81,7 @@ import {
   type RefreshResult,
 } from "./auth/pairClient.js";
 import { SecureStore, type PersistedSession } from "./secureStore.js";
+import { SettingsStore } from "./settingsStore.js";
 import { LcuStatusPoller, type LcuStatus } from "./lcu/statusPoller.js";
 
 /** Default heartbeat cadence while pre-game/in-game (PLAN.md §3.6.1 ~2-3s). */
@@ -632,7 +633,27 @@ async function bootstrap(): Promise<void> {
     dirPath: userData,
   });
 
+  // Plain-JSON device preferences (non-secrets) — survives sign-out and does
+  // not depend on OS keychain availability.
+  const settingsStore = new SettingsStore({
+    fs: {
+      readFile: (p) => fsp.readFile(p),
+      writeFile: (p, data) => fsp.writeFile(p, data),
+      mkdir: (p, opts) => fsp.mkdir(p, opts),
+    },
+    filePath: path.join(userData, "settings.json"),
+    dirPath: userData,
+  });
+
   const adapter = createLcuAdapter();
+  // Re-apply the device's remembered automation consent before any orchestration
+  // command can arrive (the adapter itself always constructs with writes OFF).
+  void settingsStore.load().then((s) => {
+    if (s.automationOptIn === true) {
+      adapter.setWriteAutomationOptIn(true);
+      log("automation_opt_in_restored", { enabled: true });
+    }
+  });
 
   // --- mutable app state (signed-in session + per-process runtime) ---------- //
   let session: DesktopSession | null = null;
@@ -955,6 +976,10 @@ async function bootstrap(): Promise<void> {
             accessToken: t,
             tournamentId: args.tournamentId,
             ...(args.teamId ? { teamId: args.teamId } : {}),
+            // Lock-in doubles as hosting consent: the automation toggle IS the
+            // player's "may my client run the lobby?" answer, so the current
+            // value rides along and the orchestrator can seed them as a host.
+            hostOptIn: adapter.writeAutomationEnabled(),
           },
           { backendUrl: backendBaseUrl() },
         ),
@@ -1055,12 +1080,13 @@ async function bootstrap(): Promise<void> {
     withSession((t) => getPresence({ accessToken: t }, { backendUrl: backendBaseUrl() })),
   );
 
-  // --- LCU write automation: the player's per-session consent ---------------- //
+  // --- LCU write automation: the player's remembered consent ----------------- //
   // Every lobby write (create, invite, accept) is refused until this is granted,
-  // which is the design (PLAN.md §3.3) — but there was no way to grant it, so
-  // the automation was unreachable rather than opt-in. Deliberately NOT
-  // persisted: consent is re-given each launch, so a client left running on a
-  // shared machine never acts for somebody who is not there.
+  // which is the design (PLAN.md §3.3). The answer is PERSISTED per device
+  // (settings.json, non-secret): re-demanding consent every launch trained
+  // players to ignore the toggle and left every match without an eligible host.
+  // It remains an explicit opt-in — a fresh install starts OFF — and turning it
+  // off is persisted just as durably.
   ipcMain.handle("lol:automation-get", () => ({
     ok: true,
     enabled: adapter.writeAutomationEnabled(),
@@ -1068,6 +1094,7 @@ async function bootstrap(): Promise<void> {
   ipcMain.handle("lol:automation-set", (_e, args: { enabled?: unknown }) => {
     const enabled = args?.enabled === true;
     adapter.setWriteAutomationOptIn(enabled);
+    void settingsStore.save({ automationOptIn: enabled });
     log("automation_opt_in", { enabled });
     return { ok: true, enabled };
   });

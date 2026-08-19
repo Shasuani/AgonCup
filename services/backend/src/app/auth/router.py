@@ -189,10 +189,26 @@ class DesktopPairResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+# Privilege order for choosing the DEFAULT acting guild at login/refresh: the
+# guild where the user holds their most powerful role wins, so a server admin's
+# very first token already opens the admin screens for the server they manage.
+_ACTING_GUILD_ROLE_RANK = {
+    UserGuildRoleName.PLATFORM_OPERATOR.value: 0,
+    UserGuildRoleName.GUILD_ADMIN.value: 1,
+    UserGuildRoleName.CAPTAIN.value: 2,
+    UserGuildRoleName.PLAYER.value: 3,
+}
+
+
 async def _roles_for(session: AsyncSession, user_id: str) -> tuple[str | None, tuple[str, ...]]:
     """Return the (acting_guild, role_values) to bake into the access JWT.
 
-    Picks the user's first role row as the default acting guild. With none, the
+    The default acting guild is the one where the user holds their MOST
+    privileged role (admin beats captain beats player), guild id as a stable
+    tie-break. It used to be the first row in whatever order Postgres returned
+    them — nondeterministic, so an admin of guild A who was also a player in
+    guild B could land on B, read ``roles: ["player"]`` in the SPA's gate, and
+    bounce off every admin screen with "You don't have access". With no rows the
     token is guild-less (the client selects a guild later via header/path).
 
     ``user_guild_roles`` is under FORCE RLS, and at login/refresh time no
@@ -215,13 +231,20 @@ async def _roles_for(session: AsyncSession, user_id: str) -> tuple[str | None, t
     ).all()
     if not rows:
         return None, ()
-    acting_guild = str(rows[0][0])
-    roles = tuple(
-        str(role.value if hasattr(role, "value") else role)
-        for gid, role in rows
-        if str(gid) == acting_guild
-    )
-    return acting_guild, roles
+
+    by_guild: dict[str, list[str]] = {}
+    for gid, role in rows:
+        value = str(role.value if hasattr(role, "value") else role)
+        by_guild.setdefault(str(gid), []).append(value)
+
+    def _rank(guild_id: str) -> tuple[int, str]:
+        best = min(
+            _ACTING_GUILD_ROLE_RANK.get(v, len(_ACTING_GUILD_ROLE_RANK)) for v in by_guild[guild_id]
+        )
+        return best, guild_id
+
+    acting_guild = min(by_guild, key=_rank)
+    return acting_guild, tuple(by_guild[acting_guild])
 
 
 async def _issue_pair(session: AsyncSession, user_id: str, settings: Settings) -> TokenPair:

@@ -299,6 +299,27 @@ test("lockIn: an explicit teamId is forwarded (captain of several teams)", async
   assert.deepEqual(body, { team_id: "tm7" });
 });
 
+test("lockIn: the hosting answer rides along, and its absence stays absent", async () => {
+  let body: unknown;
+  const spyFetch: typeof fetch = (async (_url: string, init?: RequestInit) => {
+    body = init?.body ? JSON.parse(init.body as string) : undefined;
+    return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
+  }) as unknown as typeof fetch;
+
+  // An explicit answer (the automation toggle) is forwarded — true OR false.
+  await lockIn(
+    { accessToken: "jwt", tournamentId: "t1", hostOptIn: true },
+    { fetch: spyFetch, backendUrl: "http://x" },
+  );
+  assert.deepEqual(body, { host_opt_in: true });
+
+  await lockIn(
+    { accessToken: "jwt", tournamentId: "t1", teamId: "tm7", hostOptIn: false },
+    { fetch: spyFetch, backendUrl: "http://x" },
+  );
+  assert.deepEqual(body, { team_id: "tm7", host_opt_in: false });
+});
+
 test("lockIn: 400 surfaces the backend detail", async () => {
   const spyFetch: typeof fetch = (async () =>
     new Response(JSON.stringify({ detail: "you have not joined this tournament" }), {

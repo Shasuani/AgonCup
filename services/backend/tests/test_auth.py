@@ -1422,3 +1422,27 @@ async def test_logout_without_any_session_still_succeeds(
 
     assert result == {"status": "logged_out"}
     assert session_cookie.cookie_name() in response.deleted
+
+
+@pytest.mark.asyncio
+async def test_default_acting_guild_prefers_the_most_privileged_role() -> None:
+    """An admin of guild A who is also a player in guild B must get A as the
+    token's default acting guild regardless of row order. ``rows[0]`` used to
+    win — nondeterministic — so a real server admin could land on the guild
+    where they were only a player and bounce off every admin screen."""
+    session = FakeSession()
+    user_id = uuid.uuid4()
+    player_guild, admin_guild = uuid.uuid4(), uuid.uuid4()
+    # The player row is seeded FIRST: the old first-row pick chose this guild.
+    for guild_id, role in (
+        (player_guild, UserGuildRoleName.PLAYER),
+        (admin_guild, UserGuildRoleName.GUILD_ADMIN),
+    ):
+        row = UserGuildRole(user_id=user_id, guild_id=guild_id, role=role)
+        row.id = uuid.uuid4()
+        session.store[UserGuildRole].append(row)
+
+    acting, roles = await auth_router._roles_for(session, str(user_id))
+
+    assert acting == str(admin_guild)
+    assert roles == (UserGuildRoleName.GUILD_ADMIN.value,)

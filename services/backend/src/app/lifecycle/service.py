@@ -42,6 +42,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from lol_schemas.enums import GuildStatus
 from sqlalchemy import CursorResult, Delete, Update, delete, update
+from sqlalchemy.exc import IntegrityError
 
 from app.auth import tokens
 from app.logging import get_logger
@@ -135,6 +136,16 @@ class GuildNotFoundError(LookupError):
 
 class UserNotFoundError(LookupError):
     """Raised when a deletion targets a user that does not exist."""
+
+
+class UserStillCaptainError(RuntimeError):
+    """Raised when PII deletion is blocked because the user still captains teams.
+
+    ``teams.captain_user_id`` deliberately does NOT cascade (a team must keep a
+    captain), and the pre-check cannot be a SELECT: ``teams`` is under guild RLS
+    and this global path runs with no tenant GUC, so the rows are invisible here.
+    The database's FK rejection IS the check; this error is its domain shape.
+    """
 
 
 async def purge_guild(
@@ -242,11 +253,18 @@ async def delete_user(
 
     Raises:
         UserNotFoundError: no user row matches ``user_id``.
+        UserStillCaptainError: the user still captains a team (RESTRICT FK).
     """
     # Revoke the user's refresh tokens BEFORE the cascading DELETE (defense in depth).
     await tokens.revoke_all_for_user(session, user_id=user_id)
 
-    result = await _dml(session, delete(User).where(User.id == user_id))
+    try:
+        result = await _dml(session, delete(User).where(User.id == user_id))
+    except IntegrityError as exc:
+        if "fk_teams_captain_user_id_users" in str(exc.orig):
+            raise UserStillCaptainError(user_id) from exc
+        raise
+
     if (result.rowcount or 0) == 0:
         raise UserNotFoundError(user_id)
 

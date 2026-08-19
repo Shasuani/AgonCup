@@ -34,6 +34,7 @@ from app.lifecycle import service
 from app.lifecycle.service import (
     GuildNotFoundError,
     UserNotFoundError,
+    UserStillCaptainError,
     delete_user,
     purge_guild,
     purge_guild_by_discord_id,
@@ -256,6 +257,40 @@ async def test_delete_user_missing_raises() -> None:
     session = FakeSession()
     with pytest.raises(UserNotFoundError):
         await delete_user(session, user_id=str(uuid.uuid4()))
+
+
+@pytest.mark.asyncio
+async def test_delete_user_still_captain_surfaces_domain_error() -> None:
+    """A captained team blocks PII deletion with a domain error, not a raw 500.
+
+    ``teams`` is under guild RLS and this path has no tenant GUC, so the captain
+    check cannot be a SELECT — the database's RESTRICT FK is the check, and the
+    service must translate its IntegrityError instead of letting it escape.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    class _CaptainBlockedSession(FakeSession):
+        def _execute_delete(self, statement: Any) -> _Result:
+            if str(statement.table.name) == "users":
+                raise IntegrityError(
+                    "DELETE FROM users",
+                    {},
+                    Exception(
+                        'update or delete on table "users" violates foreign key '
+                        'constraint "fk_teams_captain_user_id_users" on table "teams"'
+                    ),
+                )
+            return super()._execute_delete(statement)
+
+    session = _CaptainBlockedSession()
+    user = User(discord_user_id=778, display_name="cap")
+    user.id = uuid.uuid4()
+    session.seed(user)
+
+    with pytest.raises(UserStillCaptainError):
+        await delete_user(session, user_id=str(user.id))
+    # Any OTHER integrity failure still escapes untranslated (nothing swallowed).
+    assert session.rows(User) == [user]
 
 
 def _seed_refresh_token(session: FakeSession, *, user_id: Any) -> RefreshToken:

@@ -863,13 +863,24 @@ async def resolve_check_in_team(
 
 
 async def check_in(
-    session: AsyncSession, *, tournament_id: uuid.UUID, team_id: uuid.UUID
+    session: AsyncSession,
+    *,
+    tournament_id: uuid.UUID,
+    team_id: uuid.UUID,
+    acting_user_id: uuid.UUID | None = None,
+    host_opt_in: bool | None = None,
 ) -> Registration:
     """Force a whole team CHECKED_IN — the admin override, not the player path.
 
     Players lock themselves in one by one (:func:`check_in_self`). This bypasses
     that: it marks every member locked in and flips the registration, for an admin
     unblocking a bracket held up by a teammate who never showed.
+
+    ``host_opt_in`` is recorded for the **acting user only** (when they are on the
+    roster): hosting consent is personal (PLAN.md §3.6.1), so forcing a team in
+    can never opt anyone else in — but it must not silently drop the caller's own
+    answer either, which is what left every match without an eligible host when a
+    captain locked their team in with ``{"team_id": ..., "host_opt_in": true}``.
     """
     reg = await _registration_for(session, tournament_id=tournament_id, team_id=team_id)
     now = _utcnow()
@@ -878,7 +889,11 @@ async def check_in(
     ):
         if participant.locked_in_at is None:
             participant.locked_in_at = now
-        await record_client_presence(session, user_id=participant.user_id)
+        await record_client_presence(
+            session,
+            user_id=participant.user_id,
+            host_opt_in=host_opt_in if participant.user_id == acting_user_id else None,
+        )
     reg.status = RegistrationStatus.CHECKED_IN
     await session.flush()
     return reg

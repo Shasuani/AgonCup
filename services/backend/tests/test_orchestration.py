@@ -306,7 +306,7 @@ def test_server_seed_is_deterministic_and_match_bound() -> None:
 # initialize_lobby
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_initialize_lobby_designates_host_and_publishes_create_invite() -> None:
+async def test_initialize_lobby_designates_host_and_publishes_create_and_arm() -> None:
     session, match_id, succession = _seeded_session(opt_ins=3)
     pub = RecordingPublisher()
 
@@ -326,16 +326,17 @@ async def test_initialize_lobby_designates_host_and_publishes_create_invite() ->
     assert result.succession == tuple(succession)
     assert result.state == LobbyPhase.AWAITING_CREATE
 
-    # CreateLobby + Invite + AutoAccept envelopes, all fenced at epoch 0. The
+    # CreateLobby + AutoAccept envelopes, all fenced at epoch 0. The invitees
+    # travel INSIDE the create's spec (the host invites right after creating), so
+    # a standalone invite command here would double every roster invite. The
     # auto-accept is what saves the other nine from clicking Accept by hand — an
     # invite nobody accepts automatically is only half the automation.
     payload_types = [e.payload.type for e in pub.published]
     assert payload_types == [
         "create_lobby_command",
-        "invite_players_command",
         "auto_accept_command",
     ]
-    arm = pub.published[2].payload
+    arm = pub.published[1].payload
     assert isinstance(arm, AutoAcceptCommand)
     # Fenced to THIS match's designated host — never "accept anything".
     assert arm.expected_inviter_puuid == succession[0]
@@ -395,7 +396,6 @@ async def test_auto_initialize_lobby_spins_up_when_host_present() -> None:
     assert result.state == LobbyPhase.AWAITING_CREATE
     assert [e.payload.type for e in pub.published] == [
         "create_lobby_command",
-        "invite_players_command",
         "auto_accept_command",
     ]
 
@@ -664,7 +664,8 @@ async def test_failover_promotes_when_host_still_connected() -> None:
 @pytest.mark.asyncio
 async def test_failover_recreates_when_host_gone() -> None:
     # Host gone (not connected) => RECREATE by the next successor at a new epoch,
-    # state reset to AWAITING_CREATE, create+invite re-published.
+    # state reset to AWAITING_CREATE, create (spec carries the invitees) + a
+    # re-arm for the NEW host re-published.
     session = FakeSession()
     match_id = uuid.uuid4()
     session.store[ClientSession].append(_client_session(match_id, "host-a", host_opt_in=True))
@@ -693,7 +694,6 @@ async def test_failover_recreates_when_host_gone() -> None:
     types = [e.payload.type for e in pub.published]
     assert types == [
         "create_lobby_command",
-        "invite_players_command",
         "auto_accept_command",
     ]
     assert pub.published[0].payload.host_epoch == 1

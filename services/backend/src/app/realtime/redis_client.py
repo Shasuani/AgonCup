@@ -24,7 +24,10 @@ def get_redis() -> Any:
     if _client is None:
         from redis.asyncio import Redis  # noqa: PLC0415 - deferred so import stays IO-free
 
-        _client = Redis.from_url(get_settings().redis_url)
+        # socket_timeout MUST be explicit: redis-py >= 8.0 defaults it to 5s,
+        # which turns every quiet pub/sub listen() into a TimeoutError at 5.01s
+        # and tears down the WebSocket it was relaying for.
+        _client = Redis.from_url(get_settings().redis_url, socket_timeout=None)
     return _client
 
 

@@ -153,6 +153,12 @@ async def delete_user(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="user not found"
             ) from exc
+        except service.UserStillCaptainError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="user still captains one or more teams; "
+                "transfer captaincy or delete those teams first",
+            ) from exc
 
     return UserDeletionResponse(user_id=result.user_id, deleted=result.deleted)
 

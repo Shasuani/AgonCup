@@ -506,7 +506,13 @@ async def check_in(
                 await service.assert_team_captain(
                     session, team_id=team_id, user_id=uuid.UUID(principal.user_id)
                 )
-            reg = await service.check_in(session, tournament_id=tournament_id, team_id=team_id)
+            reg = await service.check_in(
+                session,
+                tournament_id=tournament_id,
+                team_id=team_id,
+                acting_user_id=uuid.UUID(principal.user_id),
+                host_opt_in=body.host_opt_in if body is not None else None,
+            )
     except service.NotTeamCaptainError as exc:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, detail="only the team captain can lock the team in"

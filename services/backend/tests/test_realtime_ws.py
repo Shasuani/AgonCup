@@ -520,10 +520,14 @@ async def test_inbound_heartbeat_routes_to_ingest_heartbeat() -> None:
         token=_token(),
         inbound=[
             json.dumps({"type": "subscribe", "matchId": str(match_id)}),
+            # The desktop's real frame: `phase` is the raw LCU gameflow phase
+            # ("Lobby", "ChampSelect", ...), NOT a LobbyPhase value. Coercing it
+            # used to ValueError on every frame, so no heartbeat ever landed and
+            # the watchdog saw every host as dead.
             json.dumps(
                 {
                     "type": "heartbeat",
-                    "heartbeat": {"hostEpoch": 0, "phase": LobbyPhase.FILLING.value},
+                    "heartbeat": {"hostEpoch": 0, "phase": "Lobby", "isHost": True},
                 }
             ),
         ],
@@ -533,6 +537,34 @@ async def test_inbound_heartbeat_routes_to_ingest_heartbeat() -> None:
     )
     # ingest_heartbeat stamps liveness on a current-epoch heartbeat.
     assert lobby.last_host_heartbeat_at is not None
+
+
+@pytest.mark.asyncio
+async def test_guest_heartbeat_does_not_stamp_host_liveness() -> None:
+    """All ten clients heartbeat on the shared match channel; only the HOST's
+    beat is liveness. A guest's beat refreshing `last_host_heartbeat_at` would
+    mask a dead host from the watchdog for as long as any guest stays online."""
+    match_id = uuid.uuid4()
+    lobby = _lobby(match_id, host_epoch=0, state=LobbyPhase.FILLING)
+    store = _store(_participant(match_id), lobby)
+    ws = FakeWebSocket(
+        token=_token(),
+        inbound=[
+            json.dumps({"type": "subscribe", "matchId": str(match_id)}),
+            # isHost false — and absent — are both "not the host".
+            json.dumps(
+                {
+                    "type": "heartbeat",
+                    "heartbeat": {"hostEpoch": 0, "phase": "Lobby", "isHost": False},
+                }
+            ),
+            json.dumps({"type": "heartbeat", "heartbeat": {"hostEpoch": 0}}),
+        ],
+    )
+    await hub.serve(
+        ws, session_factory=_session_factory(store), pubsub_factory=lambda: FakePubSub()
+    )
+    assert lobby.last_host_heartbeat_at is None
 
 
 @pytest.mark.asyncio
@@ -686,9 +718,9 @@ async def test_stale_epoch_heartbeat_is_dropped_not_fatal() -> None:
         inbound=[
             json.dumps({"type": "subscribe", "matchId": str(match_id)}),
             # Stale epoch (1 < 2) -> service raises StaleEpochError -> dropped.
-            json.dumps({"type": "heartbeat", "heartbeat": {"hostEpoch": 1}}),
+            json.dumps({"type": "heartbeat", "heartbeat": {"hostEpoch": 1, "isHost": True}}),
             # A subsequent CURRENT-epoch heartbeat still works (socket survived).
-            json.dumps({"type": "heartbeat", "heartbeat": {"hostEpoch": 2}}),
+            json.dumps({"type": "heartbeat", "heartbeat": {"hostEpoch": 2, "isHost": True}}),
         ],
     )
     await hub.serve(
@@ -711,7 +743,7 @@ async def test_malformed_inbound_frame_is_skipped_not_fatal() -> None:
             json.dumps({"type": "subscribe", "matchId": str(match_id)}),
             "}{ not json",  # malformed -> skipped
             json.dumps([1, 2, 3]),  # valid JSON but not an object -> skipped
-            json.dumps({"type": "heartbeat", "heartbeat": {"hostEpoch": 0}}),
+            json.dumps({"type": "heartbeat", "heartbeat": {"hostEpoch": 0, "isHost": True}}),
         ],
     )
     await hub.serve(
@@ -756,3 +788,64 @@ async def test_malformed_redis_command_payload_is_skipped() -> None:
     command_frames = [json.loads(s) for s in ws.sent if json.loads(s).get("type") == "command"]
     # Only the one well-formed envelope was relayed; the poison frame was skipped.
     assert len(command_frames) == 1
+
+
+# ---------------------------------------------------------------------------
+# The router's I/O seams — the two regressions that killed live connections
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_ws_teardown_leaves_the_shared_redis_client_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One WebSocket ending must NOT close the process-wide Redis client.
+
+    The old ``finally: await client.aclose()`` closed the shared singleton, so
+    the first client to disconnect severed every other live connection's pub/sub
+    (observed live: second client died with ConnectionError mid-relay).
+    """
+    from app.realtime import redis_client as redis_client_module
+    from app.realtime import router as router_module
+
+    class _SharedClient:
+        def __init__(self) -> None:
+            self.aclosed = False
+
+        def pubsub(self) -> Any:  # pragma: no cover - serve is stubbed out
+            raise AssertionError("serve stub never builds a pubsub")
+
+        async def aclose(self) -> None:
+            self.aclosed = True
+
+    shared = _SharedClient()
+    monkeypatch.setattr(redis_client_module, "get_redis", lambda: shared)
+
+    async def _serve_stub(*args: Any, **kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(router_module.hub, "serve", _serve_stub)
+
+    await router_module.realtime_ws(
+        websocket=FakeWebSocket(token=_token(), inbound=[])  # type: ignore[arg-type]
+    )
+
+    assert shared.aclosed is False
+
+
+@pytest.mark.asyncio
+async def test_shared_redis_client_has_no_socket_timeout() -> None:
+    """redis-py >= 8.0 defaults ``socket_timeout`` to 5s, which turns a QUIET
+    pub/sub ``listen()`` into a TimeoutError at 5.01s and drops the WebSocket.
+    The shared client must therefore pin it to None explicitly."""
+    from app.realtime import redis_client as redis_client_module
+
+    # Build a FRESH client in this test's own event loop (another test may have
+    # already latched the singleton in a loop that is closed by now), and restore
+    # the module state afterwards so ordering never leaks between tests.
+    previous = redis_client_module._client
+    redis_client_module._client = None
+    client = redis_client_module.get_redis()
+    try:
+        assert client.connection_pool.connection_kwargs.get("socket_timeout") is None
+    finally:
+        await client.aclose()
+        redis_client_module._client = previous

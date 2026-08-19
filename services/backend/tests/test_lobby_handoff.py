@@ -170,6 +170,48 @@ async def test_hosting_is_opt_in_and_a_later_lock_in_does_not_revoke_it() -> Non
     assert len(session.store[ClientSession]) == 1
 
 
+async def test_forcing_a_team_in_keeps_the_callers_hosting_answer() -> None:
+    """``check_in`` with a ``team_id`` must not drop the caller's ``host_opt_in``.
+
+    A captain locking their whole team in with ``{"team_id": ..., "host_opt_in":
+    true}`` used to lose the answer entirely (only the self path forwarded it),
+    leaving every match with no eligible host. Consent stays personal: it lands
+    on the acting caller's standing record only, never on a teammate's.
+    """
+    guild_id = uuid.uuid4()
+    alice, bob = uuid.uuid4(), uuid.uuid4()
+    session = FakeSession()
+    session.current_guild = str(guild_id)
+    tournament = _tournament(guild_id=guild_id, game_mode=GameMode.SUMMONERS_RIFT_5V5)
+    session.store[Tournament].append(tournament)
+    team = Team(id=uuid.uuid4(), guild_id=guild_id, name="Team A", captain_user_id=alice)
+    session.store[Team].append(team)
+    for user_id, role in ((alice, TeamMemberRole.CAPTAIN), (bob, TeamMemberRole.PLAYER)):
+        session.store[TeamMember].append(
+            TeamMember(
+                guild_id=guild_id,
+                team_id=team.id,
+                user_id=user_id,
+                role=role,
+                status=TeamMemberStatus.ACTIVE,
+            )
+        )
+    _verified(session, alice, "alice")
+    _verified(session, bob, "bob")
+    await service.join_by_code(session, code=_CODE, user_id=alice)
+
+    await service.check_in(
+        session,
+        tournament_id=tournament.id,
+        team_id=team.id,
+        acting_user_id=alice,
+        host_opt_in=True,
+    )
+
+    standing = {c.puuid: c.host_opt_in for c in session.store[ClientSession] if c.match_id is None}
+    assert standing == {"puuid-alice": True, "puuid-bob": False}
+
+
 # ---------------------------------------------------------------------------
 # bind_match_roster — the join between a drawn bracket and a buildable lobby
 # ---------------------------------------------------------------------------

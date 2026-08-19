@@ -69,14 +69,15 @@ async def realtime_ws(websocket: WebSocket) -> None:
         # signatures don't structurally unify, so cast at this seam boundary.
         return cast("hub.PubSubLike", client.pubsub())
 
-    try:
-        await hub.serve(
-            websocket,
-            session_factory=SessionLocal,
-            pubsub_factory=_pubsub_factory,
-        )
-    finally:
-        await client.aclose()
+    # The client is the PROCESS-WIDE singleton (redis_client.get_redis): closing
+    # it here would tear down every other live WebSocket's pub/sub mid-relay.
+    # The hub closes the per-connection PubSub; the shared client is closed once,
+    # in the app lifespan's aclose_redis().
+    await hub.serve(
+        websocket,
+        session_factory=SessionLocal,
+        pubsub_factory=_pubsub_factory,
+    )
 
 
 __all__ = ["router"]

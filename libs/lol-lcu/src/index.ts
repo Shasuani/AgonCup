@@ -262,6 +262,12 @@ export interface CurrentLobby {
    * lobby's existence is carried by {@link lobbyId}.
    */
   readonly isCustom: boolean;
+  /**
+   * Best-effort `gameConfig.customLobbyName`. ADVISORY (`RE`, may drift), but
+   * when readable it is the one field that identifies WHICH custom game this is
+   * — the backend owns the name, so a match against the spec means "ours".
+   */
+  readonly customLobbyName?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -496,7 +502,7 @@ export { WriteGate, WriteRefusedError, backoffDelayMs } from './writeGate.js';
 
 import type { LcuRuntime } from './transport.js';
 import { deriveAuth, parseLockfile } from './lockfile.js';
-import { WriteGate, type PresenceProbe } from './writeGate.js';
+import { WriteGate, WriteRefusedError, type PresenceProbe } from './writeGate.js';
 
 // ---------------------------------------------------------------------------
 // Phase-0 skeleton implementation (every method throws "not implemented")
@@ -654,6 +660,21 @@ function asNumber(value: unknown, fallback = 0): number {
 
 function asOptString<T extends string>(value: unknown): T | undefined {
   return typeof value === 'string' ? (value as T) : undefined;
+}
+
+/**
+ * Is the client's current lobby THIS match's lobby (vs. some unrelated party)?
+ *
+ * The backend-owned name is authoritative when readable; otherwise `isCustom`
+ * is the best remaining signal. Both are `RE` fields, so the unreadable-name
+ * case deliberately errs toward "yes" for a custom lobby: wrongly re-creating
+ * kicks every joined player, wrongly reusing is repaired by the invite fence.
+ */
+function isMatchLobby(lobby: CurrentLobby, expectedName: string): boolean {
+  if (lobby.customLobbyName !== undefined) {
+    return lobby.customLobbyName === expectedName;
+  }
+  return lobby.isCustom;
 }
 
 /**
@@ -825,9 +846,15 @@ export class LcuAdapterImpl implements LcuAdapter {
    */
   async createCustomLobby(spec: CustomLobbySpec): Promise<CustomLobbyHandle> {
     return this.#gatedWrite(async () => {
-      // Idempotency probe (§3.6.1): if we already own a lobby, reuse it.
+      // Idempotency probe (§3.6.1): if we already own THIS MATCH's lobby, reuse
+      // it. "A lobby exists" is not enough — the client can be sitting in a
+      // normal-queue party or a friend's custom game, and adopting that would
+      // invite nine tournament players into it. The backend owns the lobby name,
+      // so a readable name decides; when the name is unreadable (RE drift) we
+      // fall back to `isCustom`, biased toward REUSE because the wrong "create"
+      // here replaces the player's current lobby and kicks everyone in it.
       const existing = await this.getCurrentLobby();
-      if (existing !== null) {
+      if (existing !== null && isMatchLobby(existing, spec.lobbyName)) {
         return {
           lobbyId: existing.lobbyId,
           lobbyName: spec.lobbyName,
@@ -891,7 +918,13 @@ export class LcuAdapterImpl implements LcuAdapter {
     if (lobbyId === undefined) {
       return null;
     }
-    return { lobbyId, isCustom: asRecord(rec['gameConfig'])['isCustom'] === true };
+    const gameConfig = asRecord(rec['gameConfig']);
+    const customLobbyName = asOptString(gameConfig['customLobbyName']);
+    return {
+      lobbyId,
+      isCustom: gameConfig['isCustom'] === true,
+      ...(customLobbyName === undefined ? {} : { customLobbyName }),
+    };
   }
 
   // -- invite ---------------------------------------------------------------
@@ -1018,10 +1051,16 @@ export class LcuAdapterImpl implements LcuAdapter {
     let active = true;
     const accept = async (invitationId: string): Promise<void> => {
       // `RE` — `POST /lol-lobby/v2/received-invitations/{id}/accept`.
-      await this.#lcuRequest(
+      const res = await this.#lcuRequest(
         'POST',
         `/lol-lobby/v2/received-invitations/${invitationId}/accept`,
       );
+      // A failed accept (invite expired, lobby full, LCU drift) must NOT be
+      // reported as accepted — that would stop the poll loop and silently
+      // disarm the guest for the rest of the match.
+      if (res.status < 200 || res.status >= 300) {
+        throw new LcuResponseError(`accept failed: HTTP ${res.status}`, res.status);
+      }
     };
     return {
       unsubscribe: () => {
@@ -1047,7 +1086,12 @@ export class LcuAdapterImpl implements LcuAdapter {
         try {
           await this.#gatedWrite(() => accept(invitation.invitationId));
         } catch (err) {
-          return { accepted: false, reason: 'write-gated', error: err };
+          if (err instanceof WriteRefusedError) {
+            return { accepted: false, reason: 'write-gated', error: err };
+          }
+          // The POST itself failed — keep the arm alive so the next invite (or
+          // a retried one) can still be taken.
+          return { accepted: false, reason: 'accept-failed', error: err };
         }
         return { accepted: true };
       },
@@ -1275,8 +1319,9 @@ export interface InviteDecision {
     | 'not-a-lobby-invite'
     | 'inviter-mismatch'
     | 'invite-type-mismatch'
-    | 'write-gated';
-  /** The underlying error when `reason === 'write-gated'`. */
+    | 'write-gated'
+    | 'accept-failed';
+  /** The underlying error when `reason` is `'write-gated'` / `'accept-failed'`. */
   readonly error?: unknown;
 }
 

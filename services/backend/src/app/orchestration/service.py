@@ -723,8 +723,10 @@ async def _issue_lobby_commands(
     """Publish the command set that drives one lobby. Returns how many went out.
 
     One place, because there are three callers and they must agree: the automated
-    path (create + invite + arm), the hand-made path (invite + arm — the human is
-    the create), and the replay a client gets when it subscribes.
+    path (create + arm — the create's spec carries the invitees, which the host
+    invites right after creating), the hand-made path (invite + arm — the human is
+    the create, so the invite must travel alone), and the replay a client gets
+    when it subscribes.
 
     Deliberate invite order: the host's own side first, then the opposing captain,
     then their roster (see :func:`order_invitees`). The summonerId join happens
@@ -768,7 +770,12 @@ async def _issue_lobby_commands(
             )
         )
         published += 1
-    if invitee_summoner_ids:
+    # The standalone invite is the MANUAL-path lane (the human is the create, so
+    # no spec ever reaches the client). Alongside a create it is a duplicate: the
+    # spec already carries the invitees and the host invites right after creating,
+    # so publishing both sent every roster invite twice — and each replay-on-
+    # subscribe burned four writes of the client's rate budget instead of two.
+    if invitee_summoner_ids and not include_create:
         await publisher.publish(
             wrap_envelope(
                 build_invite_command(
@@ -1497,7 +1504,7 @@ async def ingest_heartbeat(
     *,
     match_id: uuid.UUID,
     host_epoch: int,
-    phase: LobbyPhase,
+    phase: LobbyPhase | None = None,
 ) -> IngestResult:
     """Ingest a pre-game host heartbeat, fencing stale epochs (PLAN.md §3.6.1).
 
@@ -1505,6 +1512,10 @@ async def ingest_heartbeat(
     (split-brain) and is rejected via the pure :func:`lol_core.reject_stale_ack`
     fence — it must not refresh liveness. A current-epoch heartbeat stamps
     ``last_host_heartbeat_at`` so the watchdog's grace window resets.
+
+    ``phase`` is advisory and unused: liveness is decided by the epoch fence
+    alone, and the desktop reports the raw LCU gameflow phase — a different
+    vocabulary from :class:`LobbyPhase` — so it is never coerced here.
     """
     lobby = await _get_lobby(session, match_id)
     if reject_stale_ack(host_epoch, lobby.host_epoch):
@@ -1786,14 +1797,10 @@ async def _apply_recreate(
     create_cmd = build_create_lobby_command(
         match_id=lobby.match_id, host_epoch=lobby.host_epoch, spec=spec
     )
-    invite_cmd = build_invite_command(
-        match_id=lobby.match_id,
-        host_epoch=lobby.host_epoch,
-        to_summoner_ids=spec.invitee_summoner_ids,
-        to_puuids=spec.invitee_puuids,
-    )
+    # No standalone invite alongside the create: the spec carries the invitees
+    # and the successor invites right after creating (same rule as
+    # `_issue_lobby_commands`) — a second command doubled every invite.
     await publisher.publish(wrap_envelope(create_cmd, guild_id=guild_id, match_id=lobby.match_id))
-    await publisher.publish(wrap_envelope(invite_cmd, guild_id=guild_id, match_id=lobby.match_id))
     # Re-arm the guests for the NEW host. Auto-accept is fenced to a specific
     # inviter PUUID, so guests still armed for the deposed host would refuse the
     # successor's invite — the automation would look alive and accept nothing.

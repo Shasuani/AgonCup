@@ -123,6 +123,12 @@ export class OrchestrationController {
   #unsubscribeCommands: (() => void) | null = null;
   #unsubscribeInvite: (() => void) | null = null;
   #cancelHeartbeat: (() => void) | null = null;
+  /**
+   * Monotonic auto-accept arm counter. Arms race (fire-and-forget dispatch), and
+   * an arm that loses must not leave an orphaned accept loop behind — see
+   * `#guestAutoAccept`. Bumped by abort/stop so an in-flight arm dies too.
+   */
+  #armSeq = 0;
 
   constructor(deps: {
     adapter: LcuAdapter;
@@ -165,6 +171,7 @@ export class OrchestrationController {
 
   /** Tear everything down (match ended, aborted, or app shutdown). */
   stop(): void {
+    this.#armSeq++; // kill any auto-accept arm still resolving
     this.#unsubscribeCommands?.();
     this.#unsubscribeInvite?.();
     this.#cancelHeartbeat?.();
@@ -204,7 +211,11 @@ export class OrchestrationController {
           await this.#ack(command, false, "no lobby spec to re-create from");
           break;
         }
-        await this.#hostCreate(command, this.#lastSpec);
+        // Adopt the freshly-leased epoch. The command's own `hostEpoch` is the
+        // one being SUPERSEDED (that is what it fences on); acting — and acking —
+        // at it would be rejected server-side as a deposed host's ack.
+        this.#currentEpoch = command.newHostEpoch;
+        await this.#hostCreate(command, this.#lastSpec, command.newHostEpoch);
         break;
       case "invite_players_command":
         await this.#hostInvite(command);
@@ -213,6 +224,7 @@ export class OrchestrationController {
         await this.#guestAutoAccept(command);
         break;
       case "abort_command":
+        this.#armSeq++; // kill any arm still resolving, not just the installed one
         this.#unsubscribeInvite?.();
         this.#unsubscribeInvite = null;
         this.#pendingInvite = null;
@@ -225,11 +237,12 @@ export class OrchestrationController {
   async #hostCreate(
     command: CreateLobbyCommand | PromoteHostCommand,
     wire: WireLobbySpec,
+    epoch: number = command.hostEpoch,
   ): Promise<void> {
     try {
       const spec = toCustomLobbySpec(wire, {
         matchId: command.matchId,
-        hostEpoch: command.hostEpoch,
+        hostEpoch: epoch,
       });
       const handle = await this.#adapter.createCustomLobby(spec);
       await this.#adapter.invite(spec.invitees);
@@ -238,7 +251,7 @@ export class OrchestrationController {
       await this.#transport.sendAck({
         commandId: command.commandId,
         matchId: command.matchId,
-        hostEpoch: command.hostEpoch,
+        hostEpoch: epoch,
         ok: true,
         lcuLobbyId: handle.lobbyId,
       });
@@ -275,9 +288,12 @@ export class OrchestrationController {
       lobby = null;
     }
     if (lobby === null) {
+      // Keep the FIRST deadline: replays re-issue this command on every
+      // reconnect, and resetting the clock each time would turn a bounded wait
+      // into an indefinite one.
       this.#pendingInvite = {
         command,
-        deadlineMs: this.#clock.nowMs() + MANUAL_LOBBY_WAIT_MS,
+        deadlineMs: this.#pendingInvite?.deadlineMs ?? this.#clock.nowMs() + MANUAL_LOBBY_WAIT_MS,
       };
       return;
     }
@@ -328,14 +344,21 @@ export class OrchestrationController {
   }
 
   async #guestAutoAccept(command: AutoAcceptCommand): Promise<void> {
+    // Commands are dispatched fire-and-forget, so two arms (a live publish and
+    // a subscribe replay, say) can interleave across the await below. The
+    // sequence number makes the LAST arm the only survivor: a loop that comes
+    // back to find itself superseded tears itself down instead of polling —
+    // and accepting — forever as an orphan.
+    const arm = ++this.#armSeq;
     try {
       this.#unsubscribeInvite?.();
+      this.#unsubscribeInvite = null;
       // The LCU-side identifiers are nullable on the wire (hosts verified before
       // they were captured); pass only what is actually known so an absent field
       // can never satisfy the adapter's inviter fence.
       const lcuPuuid = command.expectedInviterLcuPuuid;
       const summonerId = command.expectedInviterSummonerId;
-      this.#unsubscribeInvite = await this.#adapter.autoAcceptInvite({
+      const unsubscribe = await this.#adapter.autoAcceptInvite({
         expectedInviterPuuid: fromWire<Puuid>(command.expectedInviterPuuid),
         ...(lcuPuuid ? { expectedInviterLcuPuuid: fromWire<Puuid>(lcuPuuid) } : {}),
         ...(summonerId
@@ -343,6 +366,11 @@ export class OrchestrationController {
           : {}),
         hostEpoch: fromWire<HostEpoch>(command.hostEpoch),
       });
+      if (arm !== this.#armSeq) {
+        unsubscribe();
+      } else {
+        this.#unsubscribeInvite = unsubscribe;
+      }
       await this.#ack(command, true);
     } catch (err) {
       await this.#ack(command, false, errorMessage(err));
@@ -355,7 +383,10 @@ export class OrchestrationController {
     try {
       phase = await this.#adapter.getGameflowPhase();
     } catch {
-      return; // transient LCU read failure — skip this tick, stay alive.
+      // Transient LCU read failure — no heartbeat this tick, but the parked
+      // manual-path invite must not stall behind a flaky phase read.
+      await this.#resumePendingInvite();
+      return;
     }
     await this.#safe(() =>
       this.#transport.sendHeartbeat({

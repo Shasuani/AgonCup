@@ -738,6 +738,15 @@ async function bootstrap(): Promise<void> {
       for (const match of result.matches) {
         runtime?.onMatchAssigned(match.matchId, match.guildId, match.isHost);
       }
+      // The backend stops listing a match once it completes. Tear those
+      // controllers down — without this every finished match kept its
+      // heartbeat, WS socket and (for guests) 2s invite poll alive until the
+      // app itself was closed.
+      for (const previous of lastMatches) {
+        if (!result.matches.some((m) => m.matchId === previous.matchId)) {
+          runtime?.onMatchEnded(previous.matchId);
+        }
+      }
       lastMatches = result.matches;
     };
     void poll();

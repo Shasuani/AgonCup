@@ -8,6 +8,8 @@ needing a live Redis/Postgres. The v3 jobs are stubs and must raise
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from app.main import (
@@ -37,10 +39,53 @@ async def test_ping_returns_pong() -> None:
     "job, arg",
     [
         (lobby_watchdog, "match-1"),
-        (score_corroboration, "match-1"),
         (account_verification_poll, "attempt-1"),
     ],
 )
-async def test_v3_jobs_are_explicit_phase0_stubs(job, arg) -> None:
+async def test_v3_jobs_refuse_a_bare_ctx(job, arg) -> None:
     with pytest.raises(NotImplementedError):
         await job({}, arg)
+
+
+async def test_score_corroboration_refuses_a_bare_ctx() -> None:
+    # The sweep takes no match arg (it discovers its own work list), but an
+    # unwired ctx (no gateway, no settings) must still refuse to run.
+    with pytest.raises(NotImplementedError):
+        await score_corroboration({})
+
+
+async def test_corroboration_sweep_escalates_stalled_matches() -> None:
+    from app.main import StalledMatch
+
+    class _FakeGateway:
+        def __init__(self) -> None:
+            self.marked: list[Any] = []
+            self.cutoff: Any = None
+
+        async def list_stalled_matches(self, *, cutoff: Any) -> list[StalledMatch]:
+            self.cutoff = cutoff
+            return [
+                StalledMatch("m-1", "g-1", "t-1", reports_counted=5),
+                StalledMatch("m-2", "g-2", "t-2", reports_counted=3),
+            ]
+
+        async def mark_disputed_timeout(self, match: StalledMatch, *, ts: Any) -> int:
+            self.marked.append(match.match_id)
+            return 1
+
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime(2026, 6, 20, 12, 0, 0, tzinfo=UTC)
+    gateway = _FakeGateway()
+    ctx: dict[str, Any] = {
+        "corroboration_gateway": gateway,
+        "now_fn": lambda: now,
+        "corroboration_timeout_seconds": 120.0,
+    }
+
+    outcome = await score_corroboration(ctx)
+
+    assert outcome == "stalled:2 escalated:2"
+    assert gateway.marked == ["m-1", "m-2"]
+    # The staleness cutoff honors the injected clock and timeout knob.
+    assert gateway.cutoff == now - timedelta(seconds=120.0)

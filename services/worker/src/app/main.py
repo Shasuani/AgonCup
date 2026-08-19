@@ -25,7 +25,7 @@ as authoritative; corroboration + anomaly scoring + admin override is the model.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from arq import cron  # noqa: F401  (re-exported for the commented cron example below)
@@ -113,12 +113,22 @@ class LobbyGateway(Protocol):
     :class:`VerificationGateway`).
     """
 
-    async def load_lobby(self, match_id: str) -> LobbyRecord | None: ...
+    async def load_lobby(self, match_id: str, *, guild_id: str | None = None) -> LobbyRecord | None:
+        """Load one lobby. ``guild_id`` scopes the RLS GUC — REQUIRED under the
+        app_rw role (``match_lobbies`` is FORCE-RLS; a GUC-less read sees zero
+        rows); ``None`` only works on a BYPASSRLS/dev owner connection."""
+        ...
+
+    async def list_live_lobbies(self) -> list[tuple[str, str]]:
+        """All (match_id, guild_id) pairs whose lobby is in a host-bearing state,
+        across every active guild (the sweep's work list)."""
+        ...
 
     async def apply_failover(
         self,
         *,
         match_id: str,
+        guild_id: str,
         expected_epoch: int,
         new_epoch: int | None,
         new_host_puuid: str | None,
@@ -139,7 +149,7 @@ class LobbyGateway(Protocol):
     ) -> None: ...
 
 
-async def lobby_watchdog(ctx: dict[str, Any], match_id: str) -> str:
+async def lobby_watchdog(ctx: dict[str, Any], match_id: str, guild_id: str | None = None) -> str:
     """Per-match lobby-orchestration heartbeat / host-failover state-machine tick.
 
     PLAN.md §3.6.1 ("Host designation + failover state machine — fenced,
@@ -199,7 +209,7 @@ async def lobby_watchdog(ctx: dict[str, Any], match_id: str) -> str:
     interval: float = ctx.get("lobby_heartbeat_interval_seconds", _HEARTBEAT_INTERVAL_SECONDS)
     max_epochs: int = ctx.get("lobby_max_epochs", _MAX_FAILOVER_EPOCHS)
 
-    record = await gateway.load_lobby(match_id)
+    record = await gateway.load_lobby(match_id, guild_id=guild_id)
     if record is None:
         log.warning("job.lobby_watchdog.missing", match_id=match_id)
         return "missing"
@@ -233,6 +243,31 @@ async def lobby_watchdog(ctx: dict[str, Any], match_id: str) -> str:
         return decision.action.value
 
     return await _apply_failover(gateway, record, decision, now=now)
+
+
+async def lobby_watchdog_sweep(ctx: dict[str, Any]) -> str:
+    """Cron sweep: run a watchdog tick over every live lobby (PLAN.md §3.6.1).
+
+    The per-match :func:`lobby_watchdog` is the brain, but nothing ever enqueued
+    it — failover only fired when a client happened to call the HTTP endpoint.
+    This sweep is the missing driver: every 30s it lists the host-bearing lobbies
+    across all active guilds and ticks each one. ``decide_failover`` no-ops
+    inside the grace window, so the cadence is safe; one failing lobby is logged
+    and skipped rather than aborting the sweep.
+    """
+    gateway = _resolve_lobby_gateway(ctx)
+    lobbies = await gateway.list_live_lobbies()
+    acted = 0
+    for match_id, guild_id in lobbies:
+        try:
+            outcome = await lobby_watchdog(ctx, match_id, guild_id)
+        except Exception:
+            log.exception("job.lobby_watchdog_sweep.tick_failed", match_id=match_id)
+            continue
+        if outcome in ("promote", "recreate", "abort_to_manual"):
+            acted += 1
+    log.info("job.lobby_watchdog_sweep.done", swept=len(lobbies), acted=acted)
+    return f"swept:{len(lobbies)} acted:{acted}"
 
 
 # --- lobby watchdog: tuning knobs + helpers (PLAN.md §3.6.1) ---------------
@@ -310,6 +345,7 @@ async def _apply_failover(
 
     rows = await gateway.apply_failover(
         match_id=record.match_id,
+        guild_id=record.guild_id,
         expected_epoch=record.host_epoch,
         new_epoch=decision.new_epoch,
         new_host_puuid=new_host,
@@ -397,48 +433,79 @@ def _resolve_lobby_gateway(ctx: dict[str, Any]) -> LobbyGateway:
     return gateway
 
 
-async def score_corroboration(ctx: dict[str, Any], match_id: str) -> None:
-    """Quorum + anomaly scoring for a match's result reports.
+@dataclass(frozen=True)
+class StalledMatch:
+    """A match whose reports went quiet without reaching a verdict."""
 
-    SKELETON (PLAN.md §3.6.6 — "Result corroboration + admin-override integrity
-    scheme"). Delegates the verdict to the shared, unit-tested adjudication logic
-    in ``lol-core`` so backend and worker score results identically.
+    match_id: str
+    guild_id: str
+    tournament_id: str
+    reports_counted: int
 
-    The full job (Phase 6) will:
 
-    * Load this match's (up to 10) identity-bound ``ResultReport`` rows and the
-      registered ``roster_by_team`` mapping.
-    * Call :func:`lol_core.adjudication.adjudicate_result` — which enforces the
-      ``>=6/10`` agreeing reports with **both teams represented** quorum,
-      unanimous-game-id binding, kill-stream cross-correlation, and the anomaly
-      pipeline (asymmetric winner claims, byte-identical payloads, KDA-vs-kill
-      contradictions, schema-version disagreement).
-    * Map the :class:`~lol_core.adjudication.AdjudicationOutcome`:
-      ``ACCEPT`` → mark ``MatchResult`` provisional + advance the bracket;
-      ``DISPUTE`` → freeze + push to the anomaly-ranked admin override queue;
-      ``INSUFFICIENT`` → re-request within the persistence window, do not advance.
+class CorroborationGateway(Protocol):
+    """The DB collaborators the corroboration timeout sweep needs (injectable)."""
 
-    No source is authoritative; admin override is the final escape hatch on every
-    branch (PLAN.md §9 trust boundary invariant).
+    async def list_stalled_matches(self, *, cutoff: datetime) -> list[StalledMatch]:
+        """Matches with >=1 report, no MatchResult, newest report older than cutoff."""
+        ...
 
-    Args:
-        ctx: arq job context.
-        match_id: the match whose reports to corroborate.
+    async def mark_disputed_timeout(self, match: StalledMatch, *, ts: datetime) -> int:
+        """Freeze the stalled match as DISPUTED (+ audit); 0 rows if already decided."""
+        ...
 
-    Raises:
-        NotImplementedError: always — Phase-0 stub. The call into ``lol-core``'s
-            ``adjudicate_result`` (itself a Phase-0 stub) is wired in Phase 6.
+
+#: Quiet window after the LAST report before a stalemate escalates to the admin
+#: dispute queue. Overridable via ``ctx["corroboration_timeout_seconds"]``.
+_CORROBORATION_TIMEOUT_SECONDS = 600.0
+
+
+async def score_corroboration(ctx: dict[str, Any]) -> str:
+    """Cron sweep: escalate report stalemates to the admin dispute queue.
+
+    The happy path is INLINE (PLAN.md §3.6.6): every WS report re-runs
+    ``adjudicate_match`` in the backend, so a clean quorum decides itself the
+    moment enough reports land. What the inline path cannot do is act when
+    reports STOP arriving — with (say) 5 agreeing reports and 5 clients that
+    never sent one, the verdict stays INSUFFICIENT forever, because the only
+    trigger is the next report. This sweep is the missing timer: a match with at
+    least one report, no decided/queued result, and nothing new for the timeout
+    window is frozen as DISPUTED so an admin decides — mirroring the trust
+    boundary (admin override is the escape hatch on every branch, PLAN.md §9).
     """
-    # Import here (not at module top) so the stub raise is the only behavior in
-    # Phase 0 and lol-core stays an explicit, documented dependency edge.
-    from lol_core.adjudication import adjudicate_result  # noqa: F401
+    gateway = _resolve_corroboration_gateway(ctx)
+    now = ctx.get("now_fn", _utcnow)()
+    timeout: float = ctx.get("corroboration_timeout_seconds", _CORROBORATION_TIMEOUT_SECONDS)
+    cutoff = now - timedelta(seconds=timeout)
 
-    log.info("job.score_corroboration.stub", match_id=match_id)
-    raise NotImplementedError(
-        "score_corroboration is a Phase-0 stub; it will call "
-        "lol_core.adjudication.adjudicate_result over the match's ResultReports "
-        "in Phase 6 (PLAN.md §3.6.6)."
-    )
+    stalled = await gateway.list_stalled_matches(cutoff=cutoff)
+    escalated = 0
+    for match in stalled:
+        try:
+            escalated += await gateway.mark_disputed_timeout(match, ts=now)
+        except Exception:
+            log.exception("job.score_corroboration.escalate_failed", match_id=match.match_id)
+    if stalled:
+        log.info("job.score_corroboration.done", stalled=len(stalled), escalated=escalated)
+    return f"stalled:{len(stalled)} escalated:{escalated}"
+
+
+def _resolve_corroboration_gateway(ctx: dict[str, Any]) -> CorroborationGateway:
+    """ctx-injected gateway (tests), else build the Postgres one from settings.
+
+    Mirrors :func:`_resolve_lobby_gateway`: a bare ``ctx`` cannot run.
+    """
+    gateway: CorroborationGateway | None = ctx.get("corroboration_gateway")
+    if gateway is not None:
+        return gateway
+    if "settings" not in ctx:
+        raise NotImplementedError(
+            "score_corroboration needs a gateway (DB engine) in ctx; inject "
+            "ctx['corroboration_gateway'] to run."
+        )
+    built = _PostgresCorroborationGateway.from_settings(ctx["settings"])
+    ctx["corroboration_gateway"] = built
+    return built
 
 
 # ---------------------------------------------------------------------------
@@ -800,6 +867,18 @@ _SQL_LOAD_LOBBY = """
     FROM match_lobbies
     WHERE match_id = :match_id
 """
+#: Host-bearing lobby states the sweep ticks. IN_GAME and later are excluded:
+#: decide_failover hard-no-ops in-game, and post-game states have no host lease
+#: worth policing — skipping them keeps the sweep query cheap.
+_SQL_LIST_ACTIVE_GUILDS = """
+    SELECT id::text FROM guilds WHERE status <> 'removed'
+"""
+_SQL_LIST_LIVE_LOBBIES = """
+    SELECT match_id::text
+    FROM match_lobbies
+    WHERE state IN ('assigned_host', 'awaiting_create', 'lobby_open',
+                    'filling', 'ready', 'starting')
+"""
 _SQL_APPLY_FAILOVER = """
     UPDATE match_lobbies
     SET host_epoch = COALESCE(:new_epoch, host_epoch),
@@ -855,10 +934,18 @@ class _PostgresLobbyGateway:
             )
         return self._engine
 
-    async def load_lobby(self, match_id: str) -> LobbyRecord | None:
+    async def load_lobby(self, match_id: str, *, guild_id: str | None = None) -> LobbyRecord | None:
         from sqlalchemy import text
 
-        async with self._get_engine().connect() as conn:
+        # match_lobbies is FORCE-RLS: under app_rw the read MUST run with the
+        # tenant GUC set or it silently sees zero rows. A None guild_id is the
+        # legacy/dev path (owner or BYPASSRLS connection only).
+        async with self._get_engine().begin() as conn:
+            if guild_id is not None:
+                await conn.execute(
+                    text("SELECT set_config('app.current_guild', :guild_id, true)"),
+                    {"guild_id": guild_id},
+                )
             row = (
                 (await conn.execute(text(_SQL_LOAD_LOBBY), {"match_id": match_id}))
                 .mappings()
@@ -880,6 +967,7 @@ class _PostgresLobbyGateway:
         self,
         *,
         match_id: str,
+        guild_id: str,
         expected_epoch: int,
         new_epoch: int | None,
         new_host_puuid: str | None,
@@ -888,17 +976,14 @@ class _PostgresLobbyGateway:
         from sqlalchemy import text
 
         # The fenced UPDATE touches a guild-scoped table, so set the tenant GUC
-        # first. We do not know the guild_id until we have loaded the row, so the
-        # caller passes match_id and the WHERE is fenced on (match_id, host_epoch);
-        # RLS still requires app.current_guild — set it from the loaded row by
-        # re-resolving inside the transaction via a sub-select on match_id.
+        # first — DIRECTLY from the loaded record's guild_id. The old sub-select
+        # trick (resolve guild_id from match_lobbies inside the txn) was circular
+        # under app_rw: that read itself ran GUC-less under RLS, returned NULL,
+        # and the UPDATE matched nothing.
         async with self._get_engine().begin() as conn:
             await conn.execute(
-                text(
-                    "SELECT set_config('app.current_guild', "
-                    "(SELECT guild_id::text FROM match_lobbies WHERE match_id = :match_id), true)"
-                ),
-                {"match_id": match_id},
+                text("SELECT set_config('app.current_guild', :guild_id, true)"),
+                {"guild_id": guild_id},
             )
             result = await conn.execute(
                 text(_SQL_APPLY_FAILOVER),
@@ -911,6 +996,24 @@ class _PostgresLobbyGateway:
                 },
             )
         return result.rowcount or 0
+
+    async def list_live_lobbies(self) -> list[tuple[str, str]]:
+        from sqlalchemy import text
+
+        # `guilds` is the global tenant root (not under guild RLS), so it is the
+        # one table a GUC-less connection can enumerate; the per-guild lobby scan
+        # then runs under that guild's own GUC so RLS binds normally.
+        pairs: list[tuple[str, str]] = []
+        async with self._get_engine().begin() as conn:
+            guild_ids = [r[0] for r in (await conn.execute(text(_SQL_LIST_ACTIVE_GUILDS))).all()]
+            for guild_id in guild_ids:
+                await conn.execute(
+                    text("SELECT set_config('app.current_guild', :guild_id, true)"),
+                    {"guild_id": guild_id},
+                )
+                rows = (await conn.execute(text(_SQL_LIST_LIVE_LOBBIES))).all()
+                pairs.extend((r[0], guild_id) for r in rows)
+        return pairs
 
     async def write_audit_log(
         self,
@@ -944,6 +1047,132 @@ class _PostgresLobbyGateway:
             )
 
 
+_SQL_LIST_STALLED_MATCHES = """
+    SELECT m.id::text AS match_id,
+           m.tournament_id::text AS tournament_id,
+           count(DISTINCT r.reporter_puuid) AS reporters
+    FROM matches m
+    JOIN result_reports r ON r.match_id = m.id
+    WHERE m.status <> 'completed'
+      AND NOT EXISTS (SELECT 1 FROM match_results mr WHERE mr.match_id = m.id)
+    GROUP BY m.id, m.tournament_id
+    HAVING max(r.received_at) < :cutoff
+"""
+# id / state default server-side (gen_random_uuid() / 'disputed'); the NOT EXISTS
+# guard makes the escalation idempotent against a concurrently-decided result.
+_SQL_INSERT_TIMEOUT_DISPUTE = """
+    INSERT INTO match_results
+        (match_id, tournament_id, winner_team_id, decided_by, quorum_detail,
+         state, guild_id, decided_at)
+    SELECT :match_id, :tournament_id, NULL, 'quorum', CAST(:detail AS jsonb),
+           'disputed', :guild_id, :ts
+    WHERE NOT EXISTS (SELECT 1 FROM match_results WHERE match_id = :match_id)
+"""
+
+
+class _PostgresCorroborationGateway:
+    """Postgres :class:`CorroborationGateway` (same engine pattern as the lobby one).
+
+    Every statement runs with the tenant GUC set for the guild it touches, so
+    RLS binds normally under the app_rw role; the cross-guild work list comes
+    from the global ``guilds`` root, never from a GUC-less guild-scoped scan.
+    """
+
+    def __init__(self, settings: Any) -> None:
+        self._settings = settings
+        self._engine: Any = None
+
+    @classmethod
+    def from_settings(cls, settings: Any) -> _PostgresCorroborationGateway:
+        return cls(settings)
+
+    def _database_url(self) -> str:
+        app_url = getattr(self._settings, "app_database_url", "") or ""
+        return app_url or self._settings.database_url
+
+    def _get_engine(self) -> Any:
+        if self._engine is None:
+            from sqlalchemy.ext.asyncio import create_async_engine
+
+            self._engine = create_async_engine(
+                self._database_url(), pool_pre_ping=True, future=True
+            )
+        return self._engine
+
+    async def list_stalled_matches(self, *, cutoff: datetime) -> list[StalledMatch]:
+        from sqlalchemy import text
+
+        stalled: list[StalledMatch] = []
+        async with self._get_engine().begin() as conn:
+            guild_ids = [r[0] for r in (await conn.execute(text(_SQL_LIST_ACTIVE_GUILDS))).all()]
+            for guild_id in guild_ids:
+                await conn.execute(
+                    text("SELECT set_config('app.current_guild', :guild_id, true)"),
+                    {"guild_id": guild_id},
+                )
+                rows = (
+                    (await conn.execute(text(_SQL_LIST_STALLED_MATCHES), {"cutoff": cutoff}))
+                    .mappings()
+                    .all()
+                )
+                stalled.extend(
+                    StalledMatch(
+                        match_id=row["match_id"],
+                        guild_id=guild_id,
+                        tournament_id=row["tournament_id"],
+                        reports_counted=int(row["reporters"]),
+                    )
+                    for row in rows
+                )
+        return stalled
+
+    async def mark_disputed_timeout(self, match: StalledMatch, *, ts: datetime) -> int:
+        import json
+
+        from sqlalchemy import text
+
+        detail = {
+            "anomaly_flags": ["report_timeout"],
+            "reports_counted": match.reports_counted,
+            "both_teams_represented": False,
+        }
+        async with self._get_engine().begin() as conn:
+            await conn.execute(
+                text("SELECT set_config('app.current_guild', :guild_id, true)"),
+                {"guild_id": match.guild_id},
+            )
+            result = await conn.execute(
+                text(_SQL_INSERT_TIMEOUT_DISPUTE),
+                {
+                    "match_id": match.match_id,
+                    "tournament_id": match.tournament_id,
+                    "guild_id": match.guild_id,
+                    "detail": json.dumps(detail),
+                    "ts": ts,
+                },
+            )
+            rows = result.rowcount or 0
+            if rows:
+                await conn.execute(
+                    text(_SQL_INSERT_AUDIT),
+                    {
+                        "guild_id": match.guild_id,
+                        "action": "result.disputed",
+                        "entity": "match",
+                        "before": json.dumps({"match_id": match.match_id}),
+                        "after": json.dumps(detail),
+                        "ts": ts,
+                    },
+                )
+        if rows:
+            log.warning(
+                "job.score_corroboration.timeout_dispute",
+                match_id=match.match_id,
+                reports_counted=match.reports_counted,
+            )
+        return rows
+
+
 # ---------------------------------------------------------------------------
 # Worker settings — `arq app.main.WorkerSettings`
 # ---------------------------------------------------------------------------
@@ -957,6 +1186,7 @@ class WorkerSettings:
     functions = [
         ping,
         lobby_watchdog,
+        lobby_watchdog_sweep,
         score_corroboration,
         account_verification_poll,
     ]
@@ -968,14 +1198,14 @@ class WorkerSettings:
     redis_settings = get_settings().arq_redis_settings()
 
     # --- Scheduled jobs (cron) ------------------------------------------------
-    # Reconciliation sweep example — periodic cross-check of orchestration state
-    # vs. observed reality (stuck-match alerts, orphan-lobby reaping, capture-race
-    # re-requests). Enable in Phase 2/3 once the jobs below are implemented.
-    #
-    # cron_jobs = [
-    #     # Every 60s: scan for matches stuck in AWAITING_CREATE/LOBBY_OPEN past
-    #     # the SLO threshold and alert (PLAN.md §3.3 alert set / §9 dead-lobby).
-    #     cron(reconcile_stuck_matches, second={0}),
-    #     # Nightly 03:17 UTC: Postgres backup trigger (PLAN.md §7 Phase 1).
-    #     cron(run_backup, hour={3}, minute={17}),
-    # ]
+    # The per-match jobs are the brains; these sweeps are the timers that drive
+    # them — without a cron NOTHING enqueued the watchdog and failover only fired
+    # when a client happened to call the HTTP endpoint.
+    cron_jobs = [
+        # Every 30s: tick the failover watchdog over every live lobby
+        # (decide_failover no-ops inside the heartbeat grace window).
+        cron(lobby_watchdog_sweep, second={0, 30}),
+        # Every minute: escalate report stalemates to the admin dispute queue
+        # (the inline adjudication only runs when a NEW report arrives).
+        cron(score_corroboration, second={15}),
+    ]

@@ -47,16 +47,23 @@ _NOW = datetime(2026, 6, 20, 12, 0, 0, tzinfo=UTC)
 class _FakeLobbyGateway:
     record: LobbyRecord | None
     rows_updated: int = 1
+    live: list[tuple[str, str]] = field(default_factory=list)
     applied: list[dict[str, Any]] = field(default_factory=list)
     audits: list[dict[str, Any]] = field(default_factory=list)
+    loaded_with: list[tuple[str, str | None]] = field(default_factory=list)
 
-    async def load_lobby(self, match_id: str) -> LobbyRecord | None:
+    async def load_lobby(self, match_id: str, *, guild_id: str | None = None) -> LobbyRecord | None:
+        self.loaded_with.append((match_id, guild_id))
         return self.record
+
+    async def list_live_lobbies(self) -> list[tuple[str, str]]:
+        return list(self.live)
 
     async def apply_failover(
         self,
         *,
         match_id: str,
+        guild_id: str,
         expected_epoch: int,
         new_epoch: int | None,
         new_host_puuid: str | None,
@@ -65,6 +72,7 @@ class _FakeLobbyGateway:
         self.applied.append(
             {
                 "match_id": match_id,
+                "guild_id": guild_id,
                 "expected_epoch": expected_epoch,
                 "new_epoch": new_epoch,
                 "new_host_puuid": new_host_puuid,
@@ -150,6 +158,7 @@ async def test_promote_when_host_still_connected() -> None:
     assert gateway.applied == [
         {
             "match_id": "match-1",
+            "guild_id": "guild-1",  # the RLS scope travels with the write
             "expected_epoch": 0,
             "new_epoch": 1,
             "new_host_puuid": "HOST-0",  # promote keeps the current host
@@ -324,3 +333,47 @@ async def test_bare_ctx_raises_not_implemented() -> None:
     # refuses to run (keeps the Phase-0 queue-shape smoke test honest).
     with pytest.raises(NotImplementedError):
         await lobby_watchdog({}, "match-1")
+
+
+# ---------------------------------------------------------------------------
+# The cron sweep — the timer that finally drives the watchdog
+# ---------------------------------------------------------------------------
+async def test_sweep_ticks_every_live_lobby_with_its_guild() -> None:
+    from app.main import lobby_watchdog_sweep
+
+    gateway = _FakeLobbyGateway(
+        record=_lobby(state=LobbyPhase.FILLING, heartbeat_age_seconds=60.0),
+        live=[("m-1", "g-1"), ("m-2", "g-2")],
+    )
+    ctx: dict[str, Any] = {"lobby_gateway": gateway, "now_fn": lambda: _NOW}
+
+    outcome = await lobby_watchdog_sweep(ctx)
+
+    # Both lobbies ticked, each loaded under ITS OWN guild (the RLS scope).
+    assert gateway.loaded_with == [("m-1", "g-1"), ("m-2", "g-2")]
+    # A 60s-stale FILLING host fails over on both ticks.
+    assert outcome == "swept:2 acted:2"
+    assert len(gateway.applied) == 2
+
+
+async def test_sweep_survives_one_failing_tick() -> None:
+    from app.main import lobby_watchdog_sweep
+
+    class _ExplodingGateway(_FakeLobbyGateway):
+        async def load_lobby(
+            self, match_id: str, *, guild_id: str | None = None
+        ) -> LobbyRecord | None:
+            if match_id == "m-boom":
+                raise RuntimeError("db hiccup")
+            return await super().load_lobby(match_id, guild_id=guild_id)
+
+    gateway = _ExplodingGateway(
+        record=_lobby(state=LobbyPhase.IN_GAME),  # hard NO-OP for the survivor
+        live=[("m-boom", "g-1"), ("m-2", "g-2")],
+    )
+    ctx: dict[str, Any] = {"lobby_gateway": gateway, "now_fn": lambda: _NOW}
+
+    outcome = await lobby_watchdog_sweep(ctx)
+
+    # The failing lobby is skipped; the healthy one still ticks (as a no-op).
+    assert outcome == "swept:2 acted:0"

@@ -333,20 +333,27 @@ export async function listEntrants(
 
 /** Lock in for a tournament (POST /{id}/check-in).
  *
- * The body is sent empty on purpose: a solo (1v1) entrant has no team to name,
- * and the backend resolves the caller's own entry. `teamId` is only needed by a
- * captain of several teams.
+ * A solo (1v1) entrant sends no `teamId` — the backend resolves the caller's
+ * own entry; `teamId` is only needed by a captain of several teams. `hostOptIn`
+ * carries the player's current "may my client run the lobby?" answer (the
+ * automation toggle) so lock-in doubles as the hosting consent the orchestrator
+ * seeds hosts from; omitted, any standing answer is left alone.
  */
 export async function lockIn(
-  args: AuthedArgs & { tournamentId: string; teamId?: string },
+  args: AuthedArgs & { tournamentId: string; teamId?: string; hostOptIn?: boolean },
   deps: HttpDeps = {},
 ): Promise<LockInResult> {
   const doFetch = deps.fetch ?? fetch;
   const backendUrl = resolveBackendUrl(deps.backendUrl);
 
-  const payload: { team_id?: string } = {};
+  const payload: { team_id?: string; host_opt_in?: boolean } = {};
   if (args.teamId !== undefined && args.teamId !== "") {
     payload.team_id = args.teamId;
+  }
+  // Omitted (undefined) means "no new answer" — the backend leaves any standing
+  // consent alone; an explicit true/false records the caller's current answer.
+  if (args.hostOptIn !== undefined) {
+    payload.host_opt_in = args.hostOptIn;
   }
 
   let res: Response;

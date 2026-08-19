@@ -94,13 +94,13 @@ function AutomationToggle() {
         <div style={{ fontSize: 14, color: enabled === 'unavailable' ? t.red : t.text }}>
           {enabled === 'loading' && 'Automation — checking…'}
           {enabled === 'unavailable' && 'Automation is unavailable — this client is running an old build. Close it fully and start it again from VS Code.'}
-          {enabled === true && 'Automation is on for this session'}
+          {enabled === true && 'Automation is on'}
           {enabled === false && 'Automation is off'}
         </div>
         <div style={{ fontSize: 12, color: t.textDim, marginTop: 4, lineHeight: 1.5, maxWidth: 520 }}>
-          Lets this app invite your opponents and accept the lobby invite for you.
-          It never touches anything in a game, and it is off again next time you
-          open the client.
+          Lets this app create the lobby, invite your opponents and accept the
+          lobby invite for you. It never touches anything in a game, and your
+          choice is remembered on this device until you change it.
         </div>
       </div>
       {typeof enabled === 'boolean' && (

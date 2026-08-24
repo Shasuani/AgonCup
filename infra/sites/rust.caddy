@@ -1,0 +1,14 @@
+# infra/sites/rust.caddy — static host-level site: legacy rust.gameras.gr.
+#
+# rust.gameras.gr predates this stack (host nginx + certbot until 24 Aug 2026,
+# when the host nginx was retired and lol-caddy took ports 80/443) and now just
+# redirects to the app. The deploy job ships it VERBATIM to $EDGE_DIR/sites/ on
+# the DEVEL host only — its DNS A record points at that server; shipping it to
+# any other host would put Caddy into an endless ACME retry loop for a name
+# that resolves elsewhere.
+#
+# www.rust.gameras.gr is deliberately absent: it has no DNS record, and naming
+# it here would trigger the same endless-ACME failure mode.
+rust.gameras.gr {
+	redir https://lol.gameras.gr{uri} permanent
+}

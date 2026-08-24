@@ -1,7 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { theme as t } from '../theme';
 import { Kicker } from '../ui';
-import { lol, useAsync, errText, type MyMatch } from '../bridge';
+import {
+  lol, useAsync, useChampSelect, errText,
+  type MyMatch, type ChampSelectBoard, type ChampSelectMember,
+} from '../bridge';
 
 // The live lobby, as the backend knows it. This screen used to show only which
 // tournaments were RUNNING and say the orchestration state "is not yet on the IPC
@@ -116,6 +119,63 @@ function AutomationToggle() {
   );
 }
 
+/** How the RE champ-select timer phase reads to a player. */
+const SELECT_PHASE_TEXT: Record<string, string> = {
+  PLANNING: 'Declaring intent',
+  BAN_PICK: 'Picking champions',
+  FINALIZATION: 'Everyone is locked — loading soon',
+  GAME_STARTING: 'Game starting',
+};
+
+function Seat({ m }: { m: ChampSelectMember }) {
+  const champ = m.championName ?? (m.championId > 0 ? `Champion #${m.championId}` : null);
+  return (
+    <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, padding: '7px 0', borderBottom: `1px solid ${t.line}` }}>
+      <div style={{ fontSize: 13, color: t.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {m.gameName ?? `Player ${m.cellId + 1}`}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, whiteSpace: 'nowrap' }}>
+        <span style={{ fontSize: 13, color: champ ? t.goldBright : t.textDim }}>{champ ?? '—'}</span>
+        <span style={{ fontSize: 10, letterSpacing: '.1em', textTransform: 'uppercase', color: m.locked ? t.gold : t.textDim }}>
+          {m.locked ? '◆ locked' : champ ? 'picking…' : 'choosing…'}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The live champion-select board, read from THIS machine's League client. In a
+ * custom every member's LCU exposes both teams, so each player sees the full
+ * pick/lock state here without any server involvement; the panel disappears on
+ * its own when the game loads (the LCU session ends).
+ */
+function ChampSelectPanel({ board }: { board: ChampSelectBoard }) {
+  const mine = board.members.filter((m) => m.side === 'my');
+  const theirs = board.members.filter((m) => m.side === 'their');
+  const phase = (board.timerPhase && SELECT_PHASE_TEXT[board.timerPhase]) ?? 'Champion select';
+  const column = (label: string, seats: ChampSelectMember[]) => (
+    <div style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ fontSize: 11, color: t.textDim, letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 6 }}>{label}</div>
+      {seats.length === 0 && <div style={{ fontSize: 13, color: t.textDim }}>—</div>}
+      {seats.map((m) => <Seat key={`${m.side}:${m.cellId}`} m={m} />)}
+    </div>
+  );
+  return (
+    <div style={{ border: `1px solid ${t.gold}`, background: t.panel, padding: '18px 22px', marginBottom: 18 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 16 }}>
+        <div style={{ fontFamily: t.display, fontSize: 20, color: t.goldBright }}>Champion select</div>
+        <Dot colour={t.gold} />
+      </div>
+      <div style={{ fontSize: 13, color: t.text, marginTop: 6 }}>{phase}</div>
+      <div style={{ display: 'flex', gap: 36, marginTop: 14 }}>
+        {column('Your team', mine)}
+        {column('Enemy team', theirs)}
+      </div>
+    </div>
+  );
+}
+
 function MatchCard({ m }: { m: MyMatch }) {
   const exists = lobbyExists(m.lobbyState);
   // "By hand" = no client took the host lease, so a human opens the custom game.
@@ -191,6 +251,7 @@ function MatchCard({ m }: { m: MyMatch }) {
 
 export default function LiveMatchScreen() {
   const b = lol();
+  const board = useChampSelect();
   const { data, loading, error } = useAsync(async () => {
     const r = await b!.listMyMatches();
     if (!r.ok) throw new Error(errText(r));
@@ -205,6 +266,8 @@ export default function LiveMatchScreen() {
       <h1 style={{ fontFamily: t.display, fontWeight: 700, fontSize: 32, color: t.goldBright, margin: '10px 0 0' }}>Live match</h1>
 
       <div style={{ marginTop: 24 }}><AutomationToggle /></div>
+
+      {board !== null && <ChampSelectPanel board={board} />}
 
       {loading && <div style={{ color: t.textDim, marginTop: 24 }}>Loading…</div>}
       {error && <div style={{ color: t.red, marginTop: 24, fontSize: 13 }}>{error}</div>}

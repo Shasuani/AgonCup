@@ -219,6 +219,8 @@ Discord developer portal.
     ├── Caddyfile                # global options + import sites/*.caddy
     ├── docker-compose.edge.yml
     ├── sites/devel.caddy        # generated; each stack writes only its own
+    ├── sites/rust.caddy         # static, from infra/sites/ (devel host only):
+    │                            #   legacy rust.gameras.gr -> lol redirect
     └── data/caddy/              # CERTIFICATES — losing this re-issues them,
                                  # and Let's Encrypt rate-limits that
 ```

@@ -458,6 +458,13 @@ security:images:
     - scp -P "$SSH_PORT" infra/Caddyfile "$SSH_TARGET:$EDGE_DIR/Caddyfile"
     # Only THIS environment's site file — the other stack's stays untouched.
     - scp -P "$SSH_PORT" /tmp/site.caddy "$SSH_TARGET:$EDGE_DIR/sites/$STACK.caddy"
+    # Static (checked-in) site files. rust.gameras.gr is a legacy-domain redirect
+    # whose DNS points at the devel host — ship it THERE only: on any other host
+    # Caddy would retry ACME forever for a name that resolves elsewhere.
+    - |
+      if [ "$STACK" = "devel" ]; then
+        scp -P "$SSH_PORT" infra/sites/rust.caddy "$SSH_TARGET:$EDGE_DIR/sites/rust.caddy"
+      fi
     - ssh -p "$SSH_PORT" "$SSH_TARGET" "chmod 600 '$APP_DIR/.env' '$APP_DIR/.overrides.env' '$APP_DIR/.registry.env' && chmod +x '$APP_DIR/deploy.sh'"
 
     # --- run the deployment on the server ------------------------------------

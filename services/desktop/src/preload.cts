@@ -275,6 +275,22 @@ export type PresenceBridgeResult =
 /** LCU reachability badge state pushed from the main-process poller. */
 export type LcuStatusBridge = "online" | "loading" | "offline";
 
+/** One champ-select seat as shown in the renderer (display labels only). */
+export interface ChampSelectMemberBridge {
+  cellId: number;
+  side: "my" | "their";
+  gameName?: string;
+  championId: number;
+  championName?: string;
+  locked: boolean;
+}
+
+/** The live champ-select board (`null` = the client is not in champ select). */
+export interface ChampSelectBridge {
+  timerPhase?: string;
+  members: ChampSelectMemberBridge[];
+}
+
 /** Whether this session may drive the League client (per-session write opt-in). */
 export type AutomationBridgeResult = { ok: true; enabled: boolean };
 
@@ -339,6 +355,8 @@ export interface LolBridge {
   readSummoner(): Promise<ReadSummonerBridgeResult>;
   /** Subscribe to LCU badge updates. Returns an unsubscribe function. */
   onLcuStatus(callback: (status: LcuStatusBridge) => void): () => void;
+  /** Subscribe to live champ-select board updates (`null` = not in select). */
+  onChampSelect(callback: (board: ChampSelectBridge | null) => void): () => void;
   /** Subscribe to "session expired" events. Returns an unsubscribe function. */
   onAuthLost(callback: () => void): () => void;
   /** Subscribe to "a background retry got the session back" events, so a screen
@@ -407,6 +425,11 @@ const bridge: LolBridge = {
     const listener = (_event: unknown, status: LcuStatusBridge): void => callback(status);
     ipcRenderer.on("lol:lcu-status", listener);
     return () => ipcRenderer.removeListener("lol:lcu-status", listener);
+  },
+  onChampSelect: (callback) => {
+    const listener = (_event: unknown, board: ChampSelectBridge | null): void => callback(board);
+    ipcRenderer.on("lol:champ-select", listener);
+    return () => ipcRenderer.removeListener("lol:champ-select", listener);
   },
   onAuthLost: (callback) => {
     const listener = (): void => callback();

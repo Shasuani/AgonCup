@@ -18,7 +18,10 @@ Flow (PLAN.md §3.6.6):
    (:class:`ClientSession`) joined to **team membership** — NEVER from the reports.
 3. For each report, derive the *claimed* winning team id from the eog
    ``isWinningTeam`` block mapped through the roster (the persisted row leaves
-   ``claimed_winner_team`` NULL — that mapping is this layer's job).
+   ``claimed_winner_team`` NULL — that mapping is this layer's job). A
+   first-blood mode (``GameMode.decides_on_first_blood``, the 1v1 ARAM duel)
+   instead votes by the report's own kill-stream capture — the duel is won at
+   first blood, the eog winner bit is only the fallback (``_claimed_winner``).
 4. Adjudicate. ``ACCEPT`` -> :func:`record_winner` (``decided_by = QUORUM``) which
    advances the bracket; ``DISPUTE`` -> do NOT advance (log; admin override is the
    backstop); ``INSUFFICIENT`` -> do nothing (more reports may still arrive — the
@@ -34,7 +37,7 @@ from __future__ import annotations
 import uuid
 from typing import Any, Protocol
 
-from lol_core.adjudication import AdjudicationOutcome, adjudicate_result
+from lol_core.adjudication import AdjudicationOutcome, adjudicate_result, derive_first_blood_team
 from lol_schemas import ResultReportDTO
 from lol_schemas.enums import GameMode, MatchStatus, ResultDecidedBy
 from sqlalchemy import select
@@ -42,7 +45,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit import service as audit_service
 from app.logging import get_logger
-from app.models import ClientSession, Match, MatchResult, ResultReport, TeamMember, Tournament
+from app.models import (
+    ClientSession,
+    Match,
+    MatchResult,
+    ResultReport,
+    RiotAccount,
+    TeamMember,
+    Tournament,
+)
 from app.results import service as results_service
 
 logger = get_logger(__name__)
@@ -113,6 +124,79 @@ def _derive_winner_team(
         elif n == best_n and n > 0:
             tie = True
     return None if best_n == 0 or tie else best
+
+
+def _kill_stream_events(kill_stream: Any) -> list[dict[str, Any]]:
+    """The camelCase event list out of a persisted ``kill_stream`` JSONB blob."""
+    if not isinstance(kill_stream, dict):
+        return []
+    events = kill_stream.get("events")
+    if not isinstance(events, list):
+        return []
+    return [e for e in events if isinstance(e, dict)]
+
+
+async def _puuid_by_name(
+    session: AsyncSession, roster_by_team: dict[uuid.UUID, frozenset[str]]
+) -> dict[str, str]:
+    """Normalized live-client display name -> roster PUUID, for first-blood votes.
+
+    Riot ID display fields are refreshable and NEVER identity (:class:`RiotAccount`);
+    here they only translate a forgeable kill-stream name into one winner *vote*,
+    which corroboration still has to agree on across reports (§3.6.6). Keys are
+    ``casefold().strip()``-normalized: the bare game name plus ``name#tag``. A
+    name shared by two roster PUUIDs is dropped rather than guessed.
+    """
+    puuids = sorted({p for roster in roster_by_team.values() for p in roster})
+    if not puuids:
+        return {}
+    rows = (
+        await session.execute(
+            select(
+                RiotAccount.puuid, RiotAccount.riot_id_game_name, RiotAccount.riot_id_tag_line
+            ).where(RiotAccount.puuid.in_(puuids))
+        )
+    ).all()
+    mapping: dict[str, str] = {}
+    collided: set[str] = set()
+    for puuid, game_name, tag_line in rows:
+        if not game_name or not game_name.strip():
+            continue
+        base = game_name.casefold().strip()
+        keys = {base}
+        if tag_line and tag_line.strip():
+            keys.add(f"{base}#{tag_line.casefold().strip()}")
+        for key in keys:
+            if key in collided:
+                continue
+            if key in mapping and mapping[key] != str(puuid):
+                del mapping[key]
+                collided.add(key)
+                continue
+            mapping[key] = str(puuid)
+    return mapping
+
+
+def _claimed_winner(
+    report: ResultReport,
+    roster_by_team: dict[uuid.UUID, frozenset[str]],
+    first_blood_names: dict[str, str] | None,
+) -> uuid.UUID | None:
+    """One report's winner vote (flow step 3).
+
+    In a first-blood mode (``GameMode.decides_on_first_blood`` — the 1v1 ARAM
+    duel) the vote derives from the report's own kill-stream capture: the duel is
+    won at first blood, and the eog ``isWinningTeam`` bit (whoever outlasted the
+    other after the duelists leave) is only the fallback when the capture is
+    missing or unmappable. Every other mode votes by the eog winner as before.
+    """
+    if first_blood_names is not None:
+        vote = derive_first_blood_team(
+            _kill_stream_events(report.kill_stream), first_blood_names, roster_by_team
+        )
+        if vote is not None:
+            return vote
+    return _derive_winner_team(_winning_puuids(report.raw_payload), roster_by_team)
 
 
 async def _roster_by_team(session: AsyncSession, match: Match) -> dict[uuid.UUID, frozenset[str]]:
@@ -199,6 +283,11 @@ async def adjudicate_match(
     best_of = meta[1] if meta and meta[1] else 1
     needed = best_of // 2 + 1
 
+    # First-blood modes vote by kill stream; the name->PUUID map is per-match.
+    first_blood_names: dict[str, str] | None = None
+    if game_mode.decides_on_first_blood:
+        first_blood_names = await _puuid_by_name(session, roster_by_team)
+
     rows = (
         (await session.execute(select(ResultReport).where(ResultReport.match_id == match_id)))
         .scalars()
@@ -238,7 +327,7 @@ async def adjudicate_match(
                 lcu_game_id=r.lcu_game_id,
                 reporter_puuid=r.reporter_puuid,
                 source=r.source,
-                winner=_derive_winner_team(_winning_puuids(r.raw_payload), roster_by_team),
+                winner=_claimed_winner(r, roster_by_team, first_blood_names),
                 schema_version=r.schema_version,
                 received_at=r.received_at,
                 # per_player_kda is DELIBERATELY not wired (the data is in

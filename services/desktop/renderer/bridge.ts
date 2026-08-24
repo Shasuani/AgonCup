@@ -5,6 +5,18 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 export type LcuStatus = 'online' | 'loading' | 'offline';
 
+/** One champ-select seat (display labels only — no identity fields). */
+export interface ChampSelectMember {
+  cellId: number;
+  side: 'my' | 'their';
+  gameName?: string;
+  championId: number;
+  championName?: string;
+  locked: boolean;
+}
+/** The live champ-select board; null while the client is not in champ select. */
+export interface ChampSelectBoard { timerPhase?: string; members: ChampSelectMember[] }
+
 export interface BridgeUser { userId: string; discordUserId: string; displayName: string }
 export type SessionStatus = 'signed-in' | 'needs-pairing' | 'unavailable';
 export interface SessionState { signedIn: boolean; user: BridgeUser | null; status?: SessionStatus }
@@ -74,6 +86,7 @@ export interface LolBridge {
   setAutomation(enabled: boolean): Promise<{ ok: true; enabled: boolean }>;
   readSummoner(): Promise<ReadSummoner>;
   onLcuStatus(cb: (s: LcuStatus) => void): () => void;
+  onChampSelect?(cb: (board: ChampSelectBoard | null) => void): () => void;
   onAuthLost(cb: () => void): () => void;
   onSessionRestored(cb: () => void): () => void;
 }
@@ -124,6 +137,17 @@ export function useLcuStatus(): LcuStatus {
     return b.onLcuStatus(setStatus);
   }, []);
   return status;
+}
+
+/** Live champ-select board; null while not in champ select (or an old build). */
+export function useChampSelect(): ChampSelectBoard | null {
+  const [board, setBoard] = useState<ChampSelectBoard | null>(null);
+  useEffect(() => {
+    const b = lol();
+    if (!b || typeof b.onChampSelect !== 'function') return;
+    return b.onChampSelect(setBoard);
+  }, []);
+  return board;
 }
 
 /** Narrow a bridge Res<T> to its detail string on failure. */

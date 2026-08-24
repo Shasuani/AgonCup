@@ -90,6 +90,17 @@ class GameMode(StrEnum):
         """Agreeing-report floor to auto-decide a winner (2/2 for 1v1, 6/10 for 5v5)."""
         return 2 if self is GameMode.ARAM_1V1 else 6
 
+    @property
+    def decides_on_first_blood(self) -> bool:
+        """Whether a game of this mode is won at first blood, not at the nexus.
+
+        A 1v1 ARAM duel is decided by first blood (see the class docstring): the
+        winner vote of each report derives from the corroborated ``:2999`` kill
+        stream (PLAN.md §3.6.4) — the eog ``isWinningTeam`` bit is only the
+        fallback, since duelists are expected to leave after the deciding kill.
+        """
+        return self is GameMode.ARAM_1V1
+
 
 class RegistrationStatus(StrEnum):
     PENDING = "pending"

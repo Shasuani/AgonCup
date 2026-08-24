@@ -149,6 +149,109 @@ class KillStreamSummary:
 
 
 # ---------------------------------------------------------------------------
+# First-blood winner derivation (GameMode.decides_on_first_blood) — §3.6.4
+# ---------------------------------------------------------------------------
+_EVENT_FIRST_BLOOD = "FirstBlood"
+_EVENT_CHAMPION_KILL = "ChampionKill"
+# FirstBlood rides on a ChampionKill emitted at the same EventTime; allow a small
+# skew so a same-tick pair still pairs up while an unrelated later kill never does.
+_FIRST_BLOOD_KILL_TOLERANCE_S = 2.0
+
+
+def _resolve_name(name: object, puuid_by_name: Mapping[str, str]) -> str | None:
+    """Map a live-client display name to a roster PUUID, or ``None``.
+
+    ``puuid_by_name`` keys must be pre-normalized (``casefold().strip()``) and
+    unique — the caller drops colliding names rather than guessing. A
+    ``GameName#TAG`` form falls back to the bare game name, since the live client
+    has shipped both shapes across patches.
+    """
+    if not isinstance(name, str) or not name.strip():
+        return None
+    key = name.casefold().strip()
+    hit = puuid_by_name.get(key)
+    if hit is None and "#" in key:
+        hit = puuid_by_name.get(key.split("#", 1)[0].strip())
+    return hit
+
+
+def derive_first_blood_team(
+    events: Sequence[Mapping[str, object]],
+    puuid_by_name: Mapping[str, str],
+    roster_by_team: Mapping[UUID, frozenset[str]],
+) -> UUID | None:
+    """One report's first-blood winner vote from its captured kill stream (§3.6.4).
+
+    For a mode with ``decides_on_first_blood`` (the 1v1 ARAM duel) the game is won
+    at first blood, not at the nexus — duelists are expected to leave right after
+    the deciding kill, so the eog ``isWinningTeam`` bit is unreliable. This maps
+    the report's own (forgeable — §3.6.6) kill-stream capture to a team id; truth
+    still comes from cross-report agreement, never from this one vote.
+
+    ``events`` are the desktop's camelCase kill-stream entries
+    (``eventName``/``eventTime``/``eventId``/``killerName``/``recipient``).
+    Returns ``None`` — no vote — when no ``FirstBlood`` event was captured (the
+    duel has not been decided) or when no captured name maps to a roster PUUID.
+
+    Scorer resolution, in order:
+
+    1. The ``FirstBlood`` event's ``Recipient`` (captures from adapters that keep
+       it — the scorer named by the game itself).
+    2. The killer of the ``ChampionKill`` closest in time to the ``FirstBlood``
+       event (same-tick pair), skipping kills whose killer is no roster player:
+       a turret/minion execute is not first blood.
+
+    Total and deterministic on adversarial input: malformed entries are skipped,
+    ordering ties break on ``eventId``, and an ambiguous scorer yields ``None``.
+    """
+    parsed: list[tuple[float, int, str, Mapping[str, object]]] = []
+    for entry in events:
+        if not isinstance(entry, Mapping):
+            continue
+        event_name = entry.get("eventName")
+        if not isinstance(event_name, str):
+            continue
+        try:
+            event_time = float(entry.get("eventTime") or 0.0)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            event_time = 0.0
+        try:
+            event_id = int(entry.get("eventId") or 0)  # type: ignore[call-overload]
+        except (TypeError, ValueError):
+            event_id = 0
+        parsed.append((event_time, event_id, event_name, entry))
+    parsed.sort(key=lambda p: (p[0], p[1]))
+
+    first_blood = next((p for p in parsed if p[2] == _EVENT_FIRST_BLOOD), None)
+    if first_blood is None:
+        return None  # first blood has not happened — this report casts no vote.
+
+    scorer = _resolve_name(first_blood[3].get("recipient"), puuid_by_name)
+    if scorer is None:
+        # Capture without `Recipient` — pair the FirstBlood event with the
+        # champion kill it rode on (nearest EventTime within tolerance).
+        kills = sorted(
+            (p for p in parsed if p[2] == _EVENT_CHAMPION_KILL),
+            key=lambda p: (abs(p[0] - first_blood[0]), p[0], p[1]),
+        )
+        for kill in kills:
+            if abs(kill[0] - first_blood[0]) > _FIRST_BLOOD_KILL_TOLERANCE_S:
+                break  # sorted by distance: everything after is further away.
+            scorer = _resolve_name(kill[3].get("killerName"), puuid_by_name)
+            if scorer is not None:
+                break
+    if scorer is None:
+        return None
+
+    owning = [
+        team_id
+        for team_id, roster in sorted(roster_by_team.items(), key=lambda kv: str(kv[0]))
+        if scorer in roster
+    ]
+    return owning[0] if len(owning) == 1 else None
+
+
+# ---------------------------------------------------------------------------
 # Internal severity model (module-private; NOT exported, NOT in lol_schemas).
 # ---------------------------------------------------------------------------
 class _Severity(StrEnum):

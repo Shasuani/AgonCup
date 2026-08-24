@@ -13,6 +13,7 @@ from .adjudication import (
     AdjudicationResult,
     KillStreamSummary,
     adjudicate_result,
+    derive_first_blood_team,
 )
 from .bracket import (
     MAX_TEAMS,
@@ -56,6 +57,7 @@ __all__ = [
     "MAX_TEAMS",
     # adjudication
     "adjudicate_result",
+    "derive_first_blood_team",
     "AdjudicationOutcome",
     "AdjudicationResult",
     "KillStreamSummary",

@@ -25,6 +25,7 @@ from lol_core import (
     AdjudicationResult,
     KillStreamSummary,
     adjudicate_result,
+    derive_first_blood_team,
 )
 from lol_core.adjudication import (
     FLAG_ASYMMETRIC_WINNER_CLAIM,
@@ -569,3 +570,83 @@ def test_1v1_conflicting_claims_dispute() -> None:
     reports = [rep("a1", TEAM_A), rep("b1", TEAM_B)]
     result = adjudicate_result(reports, _DUEL_ROSTER, quorum_threshold=2, total_participants=2)
     assert result.outcome == AdjudicationOutcome.DISPUTE
+
+
+# ---------------------------------------------------------------------------
+# derive_first_blood_team (GameMode.decides_on_first_blood — §3.6.4)
+# ---------------------------------------------------------------------------
+_FB_NAMES = {"alice": "puuid-a", "alice#eune": "puuid-a", "bob": "puuid-b", "bob#eune": "puuid-b"}
+_FB_ROSTER: dict[UUID, frozenset[str]] = {
+    TEAM_A: frozenset({"puuid-a"}),
+    TEAM_B: frozenset({"puuid-b"}),
+}
+
+
+def _ck(killer: str, victim: str, *, at: float, eid: int = 10) -> dict[str, object]:
+    return {
+        "eventId": eid,
+        "eventName": "ChampionKill",
+        "eventTime": at,
+        "killerName": killer,
+        "victimName": victim,
+    }
+
+
+def test_first_blood_recipient_names_the_scorer() -> None:
+    events = [{"eventId": 3, "eventName": "FirstBlood", "eventTime": 90.0, "recipient": "Bob"}]
+    assert derive_first_blood_team(events, _FB_NAMES, _FB_ROSTER) == TEAM_B
+
+
+def test_first_blood_pairs_with_the_same_tick_champion_kill() -> None:
+    # No Recipient (older capture): the killer of the same-tick ChampionKill scores.
+    events = [
+        {"eventId": 1, "eventName": "GameStart", "eventTime": 0.0},
+        _ck("Alice", "Bob", at=90.0),
+        {"eventId": 11, "eventName": "FirstBlood", "eventTime": 90.0},
+        _ck("Bob", "Alice", at=200.0, eid=20),  # a later kill must not matter
+    ]
+    assert derive_first_blood_team(events, _FB_NAMES, _FB_ROSTER) == TEAM_A
+
+
+def test_first_blood_skips_a_turret_execute() -> None:
+    # An execute (unmappable killer) precedes the real first blood: FirstBlood
+    # fires with the LATER champion kill and must pair with it, not the execute.
+    events = [
+        _ck("Turret_T2_C_05_A", "Alice", at=60.0, eid=5),
+        _ck("Bob", "Alice", at=180.0, eid=9),
+        {"eventId": 10, "eventName": "FirstBlood", "eventTime": 180.0},
+    ]
+    assert derive_first_blood_team(events, _FB_NAMES, _FB_ROSTER) == TEAM_B
+
+
+def test_no_first_blood_event_casts_no_vote() -> None:
+    # A ChampionKill alone (e.g. a capture from a mode where FB was disabled, or a
+    # forged stream missing the pair) never votes without the FirstBlood marker.
+    assert derive_first_blood_team([_ck("Alice", "Bob", at=90.0)], _FB_NAMES, _FB_ROSTER) is None
+    assert derive_first_blood_team([], _FB_NAMES, _FB_ROSTER) is None
+
+
+def test_first_blood_riot_id_tag_falls_back_to_game_name() -> None:
+    events = [{"eventId": 3, "eventName": "FirstBlood", "eventTime": 9.0, "recipient": "Bob#NA1"}]
+    # "bob#na1" is not a key, but the pre-# game name "bob" is.
+    assert derive_first_blood_team(events, _FB_NAMES, _FB_ROSTER) == TEAM_B
+
+
+def test_first_blood_unmappable_or_malformed_is_total() -> None:
+    # Unknown names, junk entries, and bad field types must yield None, not raise.
+    events: list[dict[str, object]] = [
+        {"eventId": "x", "eventName": "FirstBlood", "eventTime": "y", "recipient": "Nobody"},
+        {"eventName": 42},
+        {"eventId": 2, "eventName": "ChampionKill", "eventTime": 1.0, "killerName": "Stranger"},
+    ]
+    assert derive_first_blood_team(events, _FB_NAMES, _FB_ROSTER) is None
+
+
+def test_first_blood_far_away_kill_does_not_pair() -> None:
+    # The only mappable kill is far outside the pairing tolerance: no vote is
+    # safer than guessing (the FB pair should have been captured together).
+    events = [
+        {"eventId": 1, "eventName": "FirstBlood", "eventTime": 10.0},
+        _ck("Bob", "Alice", at=300.0),
+    ]
+    assert derive_first_blood_team(events, _FB_NAMES, _FB_ROSTER) is None

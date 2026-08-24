@@ -83,6 +83,7 @@ import {
 import { SecureStore, type PersistedSession } from "./secureStore.js";
 import { SettingsStore } from "./settingsStore.js";
 import { LcuStatusPoller, type LcuStatus } from "./lcu/statusPoller.js";
+import { ChampSelectPoller, type ChampSelectView } from "./lcu/champSelectPoller.js";
 
 /** Default heartbeat cadence while pre-game/in-game (PLAN.md §3.6.1 ~2-3s). */
 const DEFAULT_HEARTBEAT_MS = 2_500;
@@ -1118,6 +1119,26 @@ async function bootstrap(): Promise<void> {
     },
   });
 
+  // --- champ-select board poller -> renderer live status -------------------- //
+  // Read-only spectator surface: each client renders the full board from its
+  // OWN LCU (a custom exposes both teams to every member), so everyone sees who
+  // picked / locked what without any server round-trip.
+  const champSelectPoller = new ChampSelectPoller({
+    readSession: () => adapter.getChampSelectSession(),
+    readChampionNames: async () => {
+      const entries = await adapter.getChampionSummary();
+      return new Map(entries.map((e) => [e.id, e.name]));
+    },
+    onUpdate: (view: ChampSelectView | null) => {
+      sendToRenderer("lol:champ-select", view);
+      log("champ_select", {
+        inSelect: view !== null,
+        members: view?.members.length ?? 0,
+        phase: view?.timerPhase ?? null,
+      });
+    },
+  });
+
   const createWindow = (): import("electron").BrowserWindow => {
     const win = new BrowserWindow({
       width: 1280,
@@ -1201,6 +1222,7 @@ async function bootstrap(): Promise<void> {
 
   // Status poller runs regardless of sign-in (the badge is always visible).
   poller.start();
+  champSelectPoller.start();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow();
@@ -1208,6 +1230,7 @@ async function bootstrap(): Promise<void> {
 
   app.on("window-all-closed", () => {
     poller.stop();
+    champSelectPoller.stop();
     if (process.platform !== "darwin") app.quit();
   });
 }

@@ -319,6 +319,13 @@ export interface LiveClientKillEvent {
   readonly killerName?: string;
   readonly victimName?: string;
   readonly assisters?: readonly string[];
+  /**
+   * `Recipient` — the scorer named by a `FirstBlood` event (that event carries
+   * no killer/victim). Load-bearing for first-blood-decided modes downstream
+   * (`GameMode.decides_on_first_blood`): adjudication reads it as the duel's
+   * winner vote.
+   */
+  readonly recipient?: string;
 }
 
 /** Captured live-client kill stream for one game (corroboration signal). */
@@ -327,6 +334,46 @@ export interface LiveClientEventCapture {
   readonly events: readonly LiveClientKillEvent[];
   /** Stamp of the pinned contract this capture was parsed under. */
   readonly schemaVersion: LcuSchemaVersion;
+}
+
+// ---------------------------------------------------------------------------
+// Champ-select live status (RE session read) — display-only spectator surface
+// ---------------------------------------------------------------------------
+
+/** One player's seat on the champ-select board, as THIS client's LCU sees it. */
+export interface ChampSelectMember {
+  readonly cellId: number;
+  /** Which side of the session the seat sits on, relative to this viewer. */
+  readonly side: 'my' | 'their';
+  /** Best-effort display name (`gameName` vs `summonerName` — RE drift). */
+  readonly gameName?: string;
+  /** 36-char LCU uuid — advisory only, never the canonical PUUID (§2). */
+  readonly puuid?: string;
+  readonly summonerId?: SummonerId;
+  /** Current pick: the locked champion, else the hover intent (0 = none yet). */
+  readonly championId: number;
+  /** True once this cell's `pick` action is completed (champion locked). */
+  readonly locked: boolean;
+}
+
+/**
+ * `RE` — a read-only snapshot of `GET /lol-champ-select/v1/session`. In a
+ * custom game every member's LCU exposes BOTH teams, so each client can render
+ * the full board locally. Display-only: never an identity or result input.
+ */
+export interface ChampSelectSnapshot {
+  readonly source: 'champSelectSession';
+  /** RE timer phase (`PLANNING` / `BAN_PICK` / `FINALIZATION`), verbatim. */
+  readonly timerPhase?: string;
+  readonly members: readonly ChampSelectMember[];
+  /** Stamp of the pinned contract this snapshot was parsed under. */
+  readonly schemaVersion: LcuSchemaVersion;
+}
+
+/** `RE` — one row of the client's own champion-id -> name catalogue. */
+export interface ChampionSummaryEntry {
+  readonly id: number;
+  readonly name: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -456,6 +503,21 @@ export interface LcuAdapter {
   getGameflowPhase(): Promise<GameflowPhase>;
 
   /**
+   * `RE` — `GET /lol-champ-select/v1/session`. READ-ONLY, ungated. The live
+   * champ-select board as THIS client sees it (a custom exposes both teams to
+   * every member). `null` when not in champ select — the normal answer most of
+   * the time. Display-only status surface; never an identity or result input.
+   */
+  getChampSelectSession(): Promise<ChampSelectSnapshot | null>;
+
+  /**
+   * `RE` — `GET /lol-game-data/assets/v1/champion-summary.json`. READ-ONLY,
+   * ungated: the client's own static champion-id -> name catalogue, used only
+   * to label champ-select picks in the UI. Advisory display data.
+   */
+  getChampionSummary(): Promise<readonly ChampionSummaryEntry[]>;
+
+  /**
    * `RE` — on `EndOfGame`, read `GET /lol-end-of-game/v1/eog-stats-block` and
    * build the report. READ-ONLY, background, time-boxed (block clears fast).
    * Optionally bundles a pre-captured Live-Client kill stream (§3.6.4) and the
@@ -581,6 +643,14 @@ export class LcuAdapterSkeleton implements LcuAdapter {
     throw new Error(NOT_IMPLEMENTED);
   }
 
+  getChampSelectSession(): Promise<ChampSelectSnapshot | null> {
+    throw new Error(NOT_IMPLEMENTED);
+  }
+
+  getChampionSummary(): Promise<readonly ChampionSummaryEntry[]> {
+    throw new Error(NOT_IMPLEMENTED);
+  }
+
   captureEndOfGame(
     _reporterPuuid?: Puuid,
     _liveClientEvents?: LiveClientEventCapture,
@@ -617,6 +687,10 @@ const LCU_PATHS = {
   receivedInvitations: '/lol-lobby/v2/received-invitations',
   /** `RE` — end-of-game scoreboard block (§3.6.5). */
   eogStatsBlock: '/lol-end-of-game/v1/eog-stats-block',
+  /** `RE` — live champ-select session (read-only status board). */
+  champSelectSession: '/lol-champ-select/v1/session',
+  /** `RE` — the client's own champion-id -> name catalogue (display labels). */
+  championSummary: '/lol-game-data/assets/v1/champion-summary.json',
 } as const;
 
 /** Thrown when an LCU/EOG/live-client response is shaped unexpectedly (drift). */
@@ -1164,6 +1238,95 @@ export class LcuAdapterImpl implements LcuAdapter {
     return res.json as GameflowPhase;
   }
 
+  // -- getChampSelectSession -------------------------------------------------
+
+  /**
+   * `RE` — `GET /lol-champ-select/v1/session`. READ-ONLY and ungated, like
+   * {@link getCurrentLobby}: the 404 outside champ select is the normal answer,
+   * so every non-2xx collapses to `null` rather than an error.
+   *
+   * Lock detection: a seat is `locked` when a completed `pick` action exists
+   * for its cell in the RE `actions` grid. `championId` prefers the member
+   * row's own `championId` (the current/locked selection) and falls back to
+   * `championPickIntent` (the hover). All field names are RE and drift-prone;
+   * an unknown shape degrades to fewer/empty seats, never a throw.
+   */
+  async getChampSelectSession(): Promise<ChampSelectSnapshot | null> {
+    const res = await this.#lcuRequest('GET', LCU_PATHS.champSelectSession);
+    if (res.status < 200 || res.status >= 300) {
+      return null;
+    }
+    const root = asRecord(res.json);
+    const lockedCells = new Set<number>();
+    for (const round of asArray(root['actions'])) {
+      for (const action of asArray(round)) {
+        const act = asRecord(action);
+        if (act['type'] === 'pick' && act['completed'] === true) {
+          lockedCells.add(asNumber(act['actorCellId'], -1));
+        }
+      }
+    }
+    const toMember =
+      (side: 'my' | 'their') =>
+      (raw: unknown): ChampSelectMember => {
+        const rec = asRecord(raw);
+        const cellId = asNumber(rec['cellId'], -1);
+        // RE name-field drift: `gameName` (riot-id era) vs `summonerName` (older).
+        const gameName = asOptString(rec['gameName']) ?? asOptString(rec['summonerName']);
+        const puuid = asOptString(rec['puuid']);
+        const rawSummonerId = rec['summonerId'];
+        const summonerId =
+          typeof rawSummonerId === 'number' || typeof rawSummonerId === 'string'
+            ? (String(rawSummonerId) as SummonerId)
+            : undefined;
+        const picked = asNumber(rec['championId']);
+        const championId = picked > 0 ? picked : asNumber(rec['championPickIntent']);
+        return {
+          cellId,
+          side,
+          ...(gameName === undefined ? {} : { gameName }),
+          ...(puuid === undefined ? {} : { puuid }),
+          ...(summonerId === undefined ? {} : { summonerId }),
+          championId,
+          locked: lockedCells.has(cellId),
+        };
+      };
+    const members = [
+      ...asArray(root['myTeam']).map(toMember('my')),
+      ...asArray(root['theirTeam']).map(toMember('their')),
+    ].filter((m) => m.cellId >= 0);
+    const timerPhase = asOptString(asRecord(root['timer'])['phase']);
+    return {
+      source: 'champSelectSession',
+      ...(timerPhase === undefined ? {} : { timerPhase }),
+      members,
+      schemaVersion: this.#config.schemaVersion,
+    };
+  }
+
+  // -- getChampionSummary ----------------------------------------------------
+
+  /**
+   * `RE` — `GET /lol-game-data/assets/v1/champion-summary.json`, the client's
+   * own locally-served champion catalogue. READ-ONLY, ungated; display labels
+   * only. The catalogue's `id: -1` "None" row is filtered out.
+   */
+  async getChampionSummary(): Promise<readonly ChampionSummaryEntry[]> {
+    const res = await this.#lcuRequest('GET', LCU_PATHS.championSummary);
+    if (res.status < 200 || res.status >= 300) {
+      throw new LcuResponseError(`getChampionSummary failed: HTTP ${res.status}`, res.status);
+    }
+    return asArray(res.json)
+      .map((raw): ChampionSummaryEntry => {
+        const rec = asRecord(raw);
+        return {
+          id: asNumber(rec['id'], -1),
+          name: typeof rec['name'] === 'string' ? rec['name'] : '',
+        };
+      })
+      .filter((c) => c.id > 0 && c.name.length > 0);
+  }
+
   // -- captureEndOfGame -----------------------------------------------------
 
   /**
@@ -1265,6 +1428,7 @@ export class LcuAdapterImpl implements LcuAdapter {
           .filter((a): a is string => typeof a === 'string');
         const killerName = asOptString<string>(ev['KillerName']);
         const victimName = asOptString<string>(ev['VictimName']);
+        const recipient = asOptString<string>(ev['Recipient']);
         return {
           eventId: asNumber(ev['EventID']),
           eventName: typeof ev['EventName'] === 'string' ? ev['EventName'] : '',
@@ -1272,6 +1436,7 @@ export class LcuAdapterImpl implements LcuAdapter {
           ...(killerName !== undefined ? { killerName } : {}),
           ...(victimName !== undefined ? { victimName } : {}),
           ...(assisters.length > 0 ? { assisters } : {}),
+          ...(recipient !== undefined ? { recipient } : {}),
         };
       },
     );

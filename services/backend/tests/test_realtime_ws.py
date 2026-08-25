@@ -774,6 +774,40 @@ async def test_inbound_first_blood_report_persists_live_client_row() -> None:
 
 
 @pytest.mark.asyncio
+async def test_route_inbound_defers_report_adjudication_but_not_others() -> None:
+    """A report frame returns its match id (adjudicate AFTER commit); others None.
+
+    Regression for the concurrent-ingest race: with a needs-two-teams quorum
+    (5v5) the ten clients report near-simultaneously, each in its own
+    transaction. Adjudicating inside the per-frame transaction meant a pass saw
+    only its own still-uncommitted report (READ COMMITTED), never reached quorum,
+    and honest matches stalled to the timeout DISPUTE sweep. route_inbound now
+    hands the match id back so the caller adjudicates in a fresh transaction that
+    can see every committed report; a heartbeat/ack still returns None.
+    """
+    match_id = uuid.uuid4()
+    lobby = _lobby(match_id, host_epoch=0, state=LobbyPhase.IN_GAME)
+    store = _store(_participant(match_id), lobby)
+    session = FakeSession(store)
+    session.current_guild = str(_GUILD)
+    sub = hub.Subscription(
+        match_id=match_id,
+        guild_id=_GUILD,
+        channel=hub.command_channel(_GUILD, match_id),
+        reporter_puuid="puuid-1",
+    )
+
+    report_frame = {"type": "report", "report": {"hostEpoch": 0, "report": _eog_report()}}
+    assert await hub.route_inbound(session, subscription=sub, frame=report_frame) == match_id
+
+    hb_frame = {"type": "heartbeat", "heartbeat": {"hostEpoch": 0, "isHost": True}}
+    assert await hub.route_inbound(session, subscription=sub, frame=hb_frame) is None
+
+    ack_frame = {"type": "ack", "ack": {"commandId": "c", "hostEpoch": 0, "ok": False}}
+    assert await hub.route_inbound(session, subscription=sub, frame=ack_frame) is None
+
+
+@pytest.mark.asyncio
 async def test_inbound_eog_report_with_blank_reporter_still_persists() -> None:
     """Regression: the real desktop sends `reporterPuuid: ""` in its eog report.
 

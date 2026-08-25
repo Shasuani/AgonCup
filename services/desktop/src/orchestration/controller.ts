@@ -103,6 +103,16 @@ export class OrchestrationController {
   #assignedHost = false;
   #reported = false;
   /**
+   * Whether this match's mode is decided at FIRST BLOOD, not at the nexus (the
+   * 1v1 ARAM duel — `GameMode.decides_on_first_blood`, PLAN.md §3.6.4). When
+   * true, the corroboration report is sent the moment the live kill stream
+   * shows a `FirstBlood` event — duelists leave after the deciding kill, so an
+   * eog block may never exist to report from. Comes from the backend's own
+   * match answer (`GET /orchestration/matches/mine` → `gameMode`), re-applied
+   * like `setAssignedHost`. Default false — a 5v5 keeps the eog-only path.
+   */
+  #firstBloodDecides = false;
+  /**
    * The last lobby spec the backend sent. A promotion carries no spec, so this is
    * what "re-create verbatim" (PLAN.md §3.6.2) re-creates from.
    */
@@ -152,6 +162,14 @@ export class OrchestrationController {
    */
   setAssignedHost(isHost: boolean): void {
     this.#assignedHost = isHost;
+  }
+
+  /**
+   * Tell this controller whether first blood decides this match (1v1 duel).
+   * Re-applied on every match poll, same as {@link setAssignedHost}.
+   */
+  setFirstBloodDecides(decides: boolean): void {
+    this.#firstBloodDecides = decides;
   }
 
   /** Begin consuming commands and emitting heartbeats. Idempotent. */
@@ -400,6 +418,13 @@ export class OrchestrationController {
     await this.#resumePendingInvite();
     if (phase === IN_PROGRESS_PHASE) {
       await this.#captureLiveEvents();
+      // A first-blood mode is DECIDED mid-game (§3.6.4): report the moment the
+      // deciding event shows up instead of waiting for an eog block that may
+      // never exist. #reported is the same single-shot guard the eog path uses,
+      // so whichever fires first is the one report this client sends.
+      if (this.#firstBloodDecides && !this.#reported && this.#firstBloodSeen()) {
+        await this.#reportFirstBlood();
+      }
     }
     if (phase === TERMINAL_PHASE && !this.#reported) {
       await this.#captureAndReport();
@@ -443,6 +468,40 @@ export class OrchestrationController {
       // Best-effort: a failed capture/send degrades to "honest missing" in the
       // corroboration quorum, never a crash. Clear the guard so the next tick
       // retries while the eog block is still readable.
+      this.#reported = false;
+      void errorMessage(err);
+    }
+  }
+
+  /** Whether the freshest live capture already shows the deciding first blood. */
+  #firstBloodSeen(): boolean {
+    return (
+      this.#liveClientEvents?.events.some((e) => e.eventName === "FirstBlood") === true
+    );
+  }
+
+  /**
+   * Send the mid-game first-blood report for a duel (§3.6.4/§3.6.5): the kill
+   * stream just captured, keyed by the running game's own id (read by the
+   * adapter from the gameflow session). Mirrors `#captureAndReport`: single-shot
+   * on success (heartbeat stops — the match is decided), guard cleared on
+   * failure so the next tick retries while the game is still running.
+   */
+  async #reportFirstBlood(): Promise<void> {
+    this.#reported = true; // single-shot guard, shared with the eog path.
+    try {
+      const report = await this.#adapter.captureLiveClientReport(
+        undefined,
+        this.#liveClientEvents ?? undefined,
+      );
+      await this.#transport.sendReport({
+        matchId: this.#matchId,
+        hostEpoch: this.#currentEpoch,
+        report,
+      });
+      this.#cancelHeartbeat?.();
+      this.#cancelHeartbeat = null;
+    } catch (err) {
       this.#reported = false;
       void errorMessage(err);
     }

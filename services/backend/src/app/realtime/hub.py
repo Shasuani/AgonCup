@@ -187,6 +187,11 @@ class Subscription:
     match_id: uuid.UUID
     guild_id: uuid.UUID
     channel: str
+    #: The participant's check-in PUUID (``ClientSession.puuid``) — the SERVER-
+    #: known reporter identity every report on this socket is stamped with
+    #: (§3.6.6 identity-bound counting; a client cannot report as someone else).
+    #: ``None`` only for the platform-operator exemption (no roster row).
+    reporter_puuid: str | None = None
 
 
 def authenticate(websocket: WebSocketLike) -> Principal:
@@ -242,22 +247,29 @@ async def authorize_subscription(
         {"gid": str(guild_id)},
     )
 
+    reporter_puuid: str | None = None
     if not principal.is_platform_operator:
         member = (
-            await session.execute(
-                select(ClientSession.id).where(
-                    ClientSession.user_id == principal.user_id,
-                    ClientSession.match_id == match_id,
+            (
+                await session.execute(
+                    select(ClientSession).where(
+                        ClientSession.user_id == principal.user_id,
+                        ClientSession.match_id == match_id,
+                    )
                 )
             )
-        ).first()
+            .scalars()
+            .first()
+        )
         if member is None:
             raise SubscriptionError("principal is not a participant of the match")
+        reporter_puuid = member.puuid or None
 
     return Subscription(
         match_id=match_id,
         guild_id=guild_id,
         channel=command_channel(guild_id, match_id),
+        reporter_puuid=reporter_puuid,
     )
 
 
@@ -400,31 +412,44 @@ def _as_int(value: Any) -> int:
 async def _persist_result_report(
     session: AsyncSession, *, subscription: Subscription, body: dict[str, Any]
 ) -> None:
-    """Persist one client's end-of-game report as a ``result_reports`` row (§3.6.6).
+    """Persist one client's game report as a ``result_reports`` row (§3.6.6).
 
-    The eog block is ``body["report"]`` (the desktop ``EogReport``); a phase-only
-    report (no eog block) is a no-op. Idempotent on
+    The report block is ``body["report"]`` (the desktop ``EogReport``): the
+    post-game eog capture (``source: "eogStatsBlock"``), or the MID-GAME
+    kill-stream report a first-blood duel sends the moment the deciding kill
+    lands (``source: "liveClientData"`` — §3.6.4; ``teams`` is empty there). A
+    phase-only report (no block) is a no-op. Idempotent on
     ``(lcu_game_id, reporter_puuid, source)`` — first-write-wins, since the
-    durable client queue may re-send the same final report across reconnects. The
-    row is tenant-stamped from the authorized ``subscription.guild_id`` (the RLS
-    GUC enforces it on INSERT); reporter identity is advisory/forgeable by design —
-    truth is established by cross-client corroboration, never one row.
+    durable client queue may re-send the same final report across reconnects.
+
+    The row is tenant-stamped from the authorized ``subscription.guild_id`` (the
+    RLS GUC enforces it on INSERT), and the reporter identity is stamped from the
+    subscription's own ``ClientSession.puuid`` — server-known, so one socket
+    cannot mint reports under other players' identities (§3.6.6 identity-bound
+    counting). The payload's ``reporterPuuid`` is only the operator-exemption
+    fallback. The payload itself stays advisory/forgeable by design — truth is
+    established by cross-client corroboration, never one row.
     """
     eog = body.get("report")
     if not isinstance(eog, dict):
-        return  # phase-only report (no eog-stats-block) — nothing to corroborate.
+        return  # phase-only report (no report block) — nothing to corroborate.
     lcu_game_id = eog.get("lcuGameId")
-    reporter_puuid = eog.get("reporterPuuid")
+    reporter_puuid = subscription.reporter_puuid or eog.get("reporterPuuid")
     if not lcu_game_id or not reporter_puuid:
         logger.warning("realtime.inbound.report_unpersisted", reason="missing_join_keys")
         return
+    source = (
+        ResultSource.LIVE_CLIENT_DATA
+        if eog.get("source") == "liveClientData"
+        else ResultSource.EOG_STATS_BLOCK
+    )
 
     existing = (
         await session.execute(
             select(ResultReport.id).where(
                 ResultReport.lcu_game_id == str(lcu_game_id),
                 ResultReport.reporter_puuid == str(reporter_puuid),
-                ResultReport.source == ResultSource.EOG_STATS_BLOCK,
+                ResultReport.source == source,
             )
         )
     ).first()
@@ -438,7 +463,7 @@ async def _persist_result_report(
         guild_id=subscription.guild_id,
         lcu_game_id=str(lcu_game_id),
         reporter_puuid=str(reporter_puuid),
-        source=ResultSource.EOG_STATS_BLOCK,
+        source=source,
         # claimed_winner_team stays NULL here: the eog winner is a player set, not
         # our team UUID; mapping it is the adjudicator's job (Phase 6).
         reported_kda=_kda_by_puuid(eog.get("teams") or []),

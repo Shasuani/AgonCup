@@ -412,9 +412,14 @@ export interface EogTeamStats {
  * keyed by `(lcuGameId, reporterPuuid)`. Fully forgeable / user-attestable —
  * truth is established by cross-client corroboration, never by this alone.
  * (PLAN.md §3.6.5 / §3.6.6.)
+ *
+ * `source` names the capture surface: `'eogStatsBlock'` is the post-game
+ * scoreboard read; `'liveClientData'` is the MID-GAME variant for a mode decided
+ * before the nexus falls (the 1v1 first-blood duel, §3.6.4) — `teams` is empty
+ * there and the verdict rides entirely on `liveClientEvents`.
  */
 export interface EogReport {
-  readonly source: 'eogStatsBlock';
+  readonly source: 'eogStatsBlock' | 'liveClientData';
   /** Root `gameId` — the corroboration join key. */
   readonly lcuGameId: LcuGameId;
   /** This client's reporter PUUID (advisory). */
@@ -541,6 +546,19 @@ export interface LcuAdapter {
    * only while `gameflow-phase = InProgress`. (§3.6.4)
    */
   captureLiveClientEvents(): Promise<LiveClientEventCapture>;
+
+  /**
+   * `RE` + `Documented` — build a MID-GAME report for a mode decided before the
+   * nexus falls (the 1v1 first-blood duel, §3.6.4). Keys the bundled kill stream
+   * by the RUNNING game's platform id (`GET /lol-gameflow/v1/session` →
+   * `gameData.gameId` — the same id the eog block reports later), so the two
+   * duelists' captures corroborate without anyone waiting for an eog block that
+   * may never exist (duelists leave after the deciding kill). READ-ONLY. (§3.6.5)
+   */
+  captureLiveClientReport(
+    reporterPuuid?: Puuid,
+    liveClientEvents?: LiveClientEventCapture,
+  ): Promise<EogReport>;
 }
 
 // ---------------------------------------------------------------------------
@@ -668,6 +686,13 @@ export class LcuAdapterSkeleton implements LcuAdapter {
   captureLiveClientEvents(): Promise<LiveClientEventCapture> {
     throw new Error(NOT_IMPLEMENTED);
   }
+
+  captureLiveClientReport(
+    _reporterPuuid?: Puuid,
+    _liveClientEvents?: LiveClientEventCapture,
+  ): Promise<EogReport> {
+    throw new Error(NOT_IMPLEMENTED);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -694,6 +719,8 @@ const LCU_PATHS = {
   receivedInvitations: '/lol-lobby/v2/received-invitations',
   /** `RE` — end-of-game scoreboard block (§3.6.5). */
   eogStatsBlock: '/lol-end-of-game/v1/eog-stats-block',
+  /** `RE` — gameflow session; `gameData.gameId` keys the MID-GAME duel report. */
+  gameflowSession: '/lol-gameflow/v1/session',
   /** `RE` — live champ-select session (read-only status board). */
   champSelectSession: '/lol-champ-select/v1/session',
   /** `RE` — the client's own champion-id -> name catalogue (display labels). */
@@ -1453,6 +1480,48 @@ export class LcuAdapterImpl implements LcuAdapter {
       source: 'liveClientData',
       events,
       schemaVersion: this.#config.schemaVersion,
+    };
+  }
+
+  // -- captureLiveClientReport ----------------------------------------------
+
+  /**
+   * `RE` + `Documented` — the MID-GAME report (see {@link LcuAdapter}). Reads
+   * `GET /lol-gameflow/v1/session` for the running game's `gameData.gameId`
+   * (READ-ONLY; the id is platform-established at game start, so every
+   * participant keys the same value), takes the bundled kill stream — or
+   * captures a fresh one when the caller has none — and emits an
+   * {@link EogReport} with `source: 'liveClientData'` and an empty `teams`
+   * (no scoreboard exists yet; adjudication derives the winner from the kill
+   * stream — §3.6.4/§3.6.6).
+   */
+  async captureLiveClientReport(
+    reporterPuuid?: Puuid,
+    liveClientEvents?: LiveClientEventCapture,
+  ): Promise<EogReport> {
+    const res = await this.#lcuRequest('GET', LCU_PATHS.gameflowSession);
+    if (res.status < 200 || res.status >= 300) {
+      throw new LcuResponseError(
+        `captureLiveClientReport failed: HTTP ${res.status}`,
+        res.status,
+      );
+    }
+    const gameId = asNumber(asRecord(asRecord(res.json)['gameData'])['gameId']);
+    if (gameId <= 0) {
+      throw new LcuResponseError(
+        'captureLiveClientReport: no gameId in gameflow session',
+        res.status,
+      );
+    }
+    const events = liveClientEvents ?? (await this.captureLiveClientEvents());
+    return {
+      source: 'liveClientData',
+      lcuGameId: String(gameId) as LcuGameId,
+      reporterPuuid: reporterPuuid ?? ('' as Puuid),
+      teams: [],
+      liveClientEvents: events,
+      schemaVersion: this.#config.schemaVersion,
+      capturedAtMs: this.#rt.clock.nowMs(),
     };
   }
 }

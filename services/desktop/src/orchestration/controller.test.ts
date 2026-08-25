@@ -123,7 +123,24 @@ function makeAdapter(over: Partial<Record<string, unknown>> = {}) {
       calls.push("captureLiveClientEvents");
       return {
         source: "liveClientData",
-        events: [{ eventId: 1, eventName: "ChampionKill", eventTime: 12.3 }],
+        events: (over.liveEvents as unknown[]) ?? [
+          { eventId: 1, eventName: "ChampionKill", eventTime: 12.3 },
+        ],
+      } as never;
+    },
+    async captureLiveClientReport(_reporterPuuid?: unknown, liveClientEvents?: unknown) {
+      calls.push("captureLiveClientReport");
+      // `liveReportFailures` = how many initial attempts fail (gameflow session
+      // unreadable), so a test can watch the retry-next-tick path.
+      if (typeof over.liveReportFailures === "number" && over.liveReportFailures > 0) {
+        over.liveReportFailures = (over.liveReportFailures as number) - 1;
+        throw new Error("gameflow session unreadable");
+      }
+      return {
+        source: "liveClientData",
+        lcuGameId: "g-live-1",
+        teams: [],
+        ...(liveClientEvents !== undefined ? { liveClientEvents } : {}),
       } as never;
     },
   };
@@ -277,6 +294,78 @@ test("captures :2999 live events while InProgress and bundles them into the eog 
   const bundled = t.reports[0]?.report.liveClientEvents;
   assert.equal(bundled?.source, "liveClientData");
   assert.equal(bundled?.events[0]?.eventName, "ChampionKill");
+});
+
+const FIRST_BLOOD_EVENTS = [
+  { eventId: 2, eventName: "ChampionKill", eventTime: 83.1, killerName: "A" },
+  { eventId: 3, eventName: "FirstBlood", eventTime: 83.1, recipient: "A" },
+];
+
+test("duel: first blood mid-game sends the live report once and stops the heartbeat", async () => {
+  const t = makeTransport();
+  const a = makeAdapter({ phase: "InProgress", liveEvents: FIRST_BLOOD_EVENTS });
+  const s = makeScheduler();
+  const c = makeController(t, a, s);
+  c.setFirstBloodDecides(true); // aram_1v1 — decided at first blood (§3.6.4)
+  c.start();
+  await runTickAsync(s);
+  // Reported from the LIVE capture — no eog block was ever read.
+  assert.ok(a.calls.includes("captureLiveClientReport"));
+  assert.ok(!a.calls.includes("captureEndOfGame"));
+  assert.equal(t.reports.length, 1);
+  assert.equal(t.reports[0]?.report.source, "liveClientData");
+  assert.equal(t.reports[0]?.report.lcuGameId, "g-live-1");
+  // The freshest kill-stream capture rides the report for corroboration.
+  assert.equal(t.reports[0]?.report.liveClientEvents?.events.length, 2);
+  // The match is decided: the heartbeat loop stops, so nothing double-reports.
+  assert.equal(s.isCancelled(), true);
+});
+
+test("duel: no first blood yet -> keeps polling, no report", async () => {
+  const t = makeTransport();
+  const a = makeAdapter({ phase: "InProgress" }); // default capture: a kill, no FirstBlood
+  const s = makeScheduler();
+  const c = makeController(t, a, s);
+  c.setFirstBloodDecides(true);
+  c.start();
+  await runTickAsync(s);
+  await runTickAsync(s);
+  assert.equal(t.reports.length, 0);
+  assert.equal(s.isCancelled(), false);
+});
+
+test("5v5: first blood mid-game does NOT report — the eog path still decides", async () => {
+  const t = makeTransport();
+  const a = makeAdapter({
+    phases: ["InProgress", "EndOfGame"],
+    liveEvents: FIRST_BLOOD_EVENTS,
+  });
+  const s = makeScheduler();
+  makeController(t, a, s).start(); // firstBloodDecides defaults to false
+  await runTickAsync(s); // InProgress + FirstBlood in the stream -> no report
+  assert.equal(t.reports.length, 0);
+  await runTickAsync(s); // EndOfGame -> the single eog report, as before
+  assert.equal(t.reports.length, 1);
+  assert.equal(t.reports[0]?.report.source, "eogStatsBlock");
+});
+
+test("duel: a failed live report clears the guard and retries next tick", async () => {
+  const t = makeTransport();
+  const a = makeAdapter({
+    phase: "InProgress",
+    liveEvents: FIRST_BLOOD_EVENTS,
+    liveReportFailures: 1,
+  });
+  const s = makeScheduler();
+  const c = makeController(t, a, s);
+  c.setFirstBloodDecides(true);
+  c.start();
+  await runTickAsync(s); // capture fails (gameflow session unreadable) -> no report
+  assert.equal(t.reports.length, 0);
+  assert.equal(s.isCancelled(), false); // heartbeat survives so the retry can fire
+  await runTickAsync(s); // retry succeeds
+  assert.equal(t.reports.length, 1);
+  assert.equal(a.calls.filter((x) => x === "captureLiveClientReport").length, 2);
 });
 
 // Flush the microtask queue so fire-and-forget command handlers settle.

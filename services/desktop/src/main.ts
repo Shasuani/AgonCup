@@ -459,10 +459,15 @@ export class DesktopRuntime {
    * doing it here rather than at construction: the poll repeats, so a lease that
    * moves is picked up without tearing anything down.
    */
-  onMatchAssigned(matchId: string, guildId?: string, isHost = false): void {
+  onMatchAssigned(matchId: string, guildId?: string, isHost = false, gameMode?: string): void {
+    // `aram_1v1` is the one mode decided at first blood (GameMode.decides_on_
+    // first_blood); everything else — including an older backend that sends no
+    // mode — keeps the eog-only reporting path.
+    const firstBloodDecides = gameMode === "aram_1v1";
     const live = this.#matches.get(matchId);
     if (live !== undefined) {
       live.controller.setAssignedHost(isHost);
+      live.controller.setFirstBloodDecides(firstBloodDecides);
       return;
     }
     const transport = new WsBackendTransport(
@@ -487,6 +492,7 @@ export class DesktopRuntime {
       config: { matchId, heartbeatMs: this.#config.heartbeatMs ?? DEFAULT_HEARTBEAT_MS },
     });
     controller.setAssignedHost(isHost);
+    controller.setFirstBloodDecides(firstBloodDecides);
     this.#matches.set(matchId, { controller, transport });
     controller.start();
     transport.connect();
@@ -759,7 +765,7 @@ async function bootstrap(): Promise<void> {
         return;
       }
       for (const match of result.matches) {
-        runtime?.onMatchAssigned(match.matchId, match.guildId, match.isHost);
+        runtime?.onMatchAssigned(match.matchId, match.guildId, match.isHost, match.gameMode);
       }
       // The backend stops listing a match once it completes. Tear those
       // controllers down — without this every finished match kept its

@@ -269,9 +269,10 @@ async def adjudicate_match(
         # Not enough of either side has checked in yet to represent both teams.
         return AdjudicationOutcome.INSUFFICIENT
 
-    # The tournament's mode drives quorum (6/10 for 5v5, 2/2 for a 1v1 duel); its
-    # best_of drives how many game wins decide the match (a series spans several
-    # LCU games, each adjudicated on its own).
+    # The tournament's mode drives quorum (owner rule: ONE report decides a 1v1
+    # duel; a 5v5 needs two agreeing reports, one from each team); its best_of
+    # drives how many game wins decide the match (a series spans several LCU
+    # games, each adjudicated on its own).
     meta = (
         await session.execute(
             select(Tournament.game_mode, Tournament.best_of).where(
@@ -344,6 +345,7 @@ async def adjudicate_match(
             roster_by_team,
             quorum_threshold=game_mode.quorum_threshold,
             total_participants=game_mode.total_participants,
+            require_both_teams=game_mode.requires_both_teams,
             used_game_ids=used_elsewhere,
         )
         if verdict.outcome == AdjudicationOutcome.ACCEPT and verdict.winner_team_id is not None:

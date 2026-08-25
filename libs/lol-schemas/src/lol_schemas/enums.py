@@ -87,8 +87,23 @@ class GameMode(StrEnum):
 
     @property
     def quorum_threshold(self) -> int:
-        """Agreeing-report floor to auto-decide a winner (2/2 for 1v1, 6/10 for 5v5)."""
-        return 2 if self is GameMode.ARAM_1V1 else 6
+        """Agreeing-report floor to auto-decide a game.
+
+        Owner rule (2026-08-25): ONE report decides a 1v1 duel; a 5v5 needs TWO
+        agreeing reports, one from each team (see :attr:`requires_both_teams`).
+        Reports are forgeable — the low floor trades corroboration for autonomy,
+        with admin override as the backstop (PLAN.md §3.6.6).
+        """
+        return 1 if self is GameMode.ARAM_1V1 else 2
+
+    @property
+    def requires_both_teams(self) -> bool:
+        """Whether the agreeing reports must include BOTH rosters.
+
+        True for the 5v5 (one report from each side); False for the 1v1 duel,
+        where a single duelist's report is enough to decide the game.
+        """
+        return self is not GameMode.ARAM_1V1
 
     @property
     def decides_on_first_blood(self) -> bool:

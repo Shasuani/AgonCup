@@ -278,7 +278,7 @@ async def authorize_subscription(
 # ---------------------------------------------------------------------------
 async def route_inbound(
     session: AsyncSession, *, subscription: Subscription, frame: dict[str, Any]
-) -> None:
+) -> uuid.UUID | None:
     """Route one decoded client->server frame to orchestration ingestion.
 
     The frame ``type`` selects the ingestion function (PLAN.md §3.6.1); each reuses
@@ -286,6 +286,15 @@ async def route_inbound(
     do NOT reimplement it here. A frame that does not match a known client->server
     type, or that an ingestion function rejects (stale epoch / illegal transition),
     is logged and dropped without crashing the socket.
+
+    Returns the match id whose corroboration must be re-run AFTER this frame's
+    transaction commits (a result report), or ``None``. Adjudication is deferred
+    out of the per-frame transaction on purpose: with a needs-two-teams quorum
+    (5v5), ten clients report near-simultaneously on separate connections, each
+    in its OWN transaction. Adjudicating inline meant each pass saw only its own
+    still-uncommitted report under READ COMMITTED, so no pass ever reached quorum
+    and honest, agreeing matches stalled to the timeout DISPUTE sweep. Running it
+    after commit, serialized per match, lets the pass see every committed report.
     """
     kind = frame.get("type")
     if kind == "heartbeat":
@@ -294,8 +303,10 @@ async def route_inbound(
         await _route_ack(session, subscription=subscription, frame=frame)
     elif kind == "report":
         await _route_report(session, subscription=subscription, frame=frame)
+        return subscription.match_id
     else:
         logger.warning("realtime.inbound.unknown_type", type=kind)
+    return None
 
 
 async def _route_heartbeat(
@@ -364,14 +375,38 @@ async def _route_report(
     except (KeyError, ValueError, service.OrchestrationError) as exc:
         logger.warning("realtime.inbound.report_dropped", error=str(exc))
     await _persist_result_report(session, subscription=subscription, body=body)
-    # Re-run corroboration over the match's reports: once a >=6/10 quorum agrees,
-    # the winner is recorded and the bracket advances automatically (PLAN.md §3.6.6).
-    # Never let an adjudication error break the report relay — it is best-effort and
-    # idempotent (the next report re-runs it).
+    # Adjudication is intentionally NOT run here — it happens after this
+    # transaction commits (see :func:`_adjudicate_after_commit`), so the pass can
+    # see every concurrently-committed report and reach a two-team quorum.
+
+
+async def _adjudicate_after_commit(
+    session_factory: SessionFactory, *, subscription: Subscription
+) -> None:
+    """Re-run corroboration for a match in a FRESH, tenant-scoped transaction.
+
+    Called only after the report's own transaction has committed, so this pass
+    sees that report — and every other report committed so far. A per-match
+    Postgres advisory lock (``pg_advisory_xact_lock``) serializes concurrent
+    passes for the same match: the last reporter to acquire the lock adjudicates
+    against a snapshot containing all prior reports, so a clean two-team quorum
+    (5v5) resolves the moment both sides are in, and two passes never
+    double-advance the bracket. Best-effort: any error is logged, never fatal to
+    the socket (the next report, or the worker sweep, re-runs it).
+    """
     try:
-        await corroboration.adjudicate_match(
-            session, match_id=subscription.match_id, guild_id=subscription.guild_id
-        )
+        async with session_factory() as session, session.begin():
+            await _set_tenant(session, subscription.guild_id)
+            # Serialize adjudication for this match across connections. hashtext
+            # yields an int4 (auto-cast to the bigint the lock takes); a cross-match
+            # hash collision only means rare, harmless extra serialization.
+            await session.execute(
+                text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
+                {"k": str(subscription.match_id)},
+            )
+            await corroboration.adjudicate_match(
+                session, match_id=subscription.match_id, guild_id=subscription.guild_id
+            )
     except Exception as exc:  # noqa: BLE001 - ingest must survive any adjudication bug
         logger.warning("realtime.inbound.corroboration_failed", error=str(exc))
 
@@ -706,7 +741,14 @@ async def _inbound_loop(
         async with session_factory() as session, session.begin():
             subscription_session = session
             await _set_tenant(subscription_session, subscription.guild_id)
-            await route_inbound(subscription_session, subscription=subscription, frame=frame)
+            adjudicate_match_id = await route_inbound(
+                subscription_session, subscription=subscription, frame=frame
+            )
+        # The per-frame transaction has now COMMITTED. A report defers its
+        # corroboration to here so the pass sees every committed report (not just
+        # this one) and a two-team quorum can actually form (see route_inbound).
+        if adjudicate_match_id is not None:
+            await _adjudicate_after_commit(session_factory, subscription=subscription)
 
 
 async def _set_tenant(session: AsyncSession, guild_id: uuid.UUID) -> None:

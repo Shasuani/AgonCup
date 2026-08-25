@@ -572,6 +572,64 @@ def test_1v1_conflicting_claims_dispute() -> None:
     assert result.outcome == AdjudicationOutcome.DISPUTE
 
 
+# --------------------------------------------------------------------------- #
+# Product rule (GameMode, owner decision 2026-08-25): ONE report decides a 1v1  #
+# duel; a 5v5 needs TWO agreeing reports, one from each team.                  #
+# --------------------------------------------------------------------------- #
+def test_1v1_single_report_accepts_when_both_teams_not_required() -> None:
+    # The duel's rule: the first duelist to report decides the game.
+    result = adjudicate_result(
+        [rep("a1", TEAM_A)],
+        _DUEL_ROSTER,
+        quorum_threshold=1,
+        total_participants=2,
+        require_both_teams=False,
+    )
+    assert result.outcome == AdjudicationOutcome.ACCEPT
+    assert result.winner_team_id == TEAM_A
+    assert result.reports_counted == 1
+    assert result.both_teams_represented is False  # audit field still tells the truth
+
+
+def test_1v1_single_report_from_the_loser_side_also_decides() -> None:
+    # Which duelist reports does not matter — only what the report says.
+    result = adjudicate_result(
+        [rep("b1", TEAM_A)],
+        _DUEL_ROSTER,
+        quorum_threshold=1,
+        total_participants=2,
+        require_both_teams=False,
+    )
+    assert result.outcome == AdjudicationOutcome.ACCEPT
+    assert result.winner_team_id == TEAM_A
+
+
+def test_5v5_one_report_per_team_accepts_with_threshold_2() -> None:
+    # One reporter from each roster agreeing is the whole 5v5 quorum.
+    reports = [rep("a1", TEAM_A), rep("b1", TEAM_A)]
+    result = adjudicate_result(reports, ROSTER, quorum_threshold=2, total_participants=10)
+    assert result.outcome == AdjudicationOutcome.ACCEPT
+    assert result.winner_team_id == TEAM_A
+    assert result.both_teams_represented is True
+
+
+def test_5v5_two_reports_from_the_same_team_wait_for_the_other_side() -> None:
+    # Two teammates agreeing is one-sided: still benign (reports outstanding),
+    # but it must NOT decide the game — the other roster has to weigh in.
+    reports = [rep("a1", TEAM_A), rep("a2", TEAM_A)]
+    result = adjudicate_result(reports, ROSTER, quorum_threshold=2, total_participants=10)
+    assert result.outcome == AdjudicationOutcome.INSUFFICIENT
+    assert FLAG_ONE_SIDED_QUORUM in result.anomaly_flags
+
+
+def test_5v5_threshold_2_lone_dissenter_does_not_block() -> None:
+    # A(a1, b1) vs B(b2): the cross-team pair decides; the dissent is audited LOW.
+    reports = [rep("a1", TEAM_A), rep("b1", TEAM_A), rep("b2", TEAM_B)]
+    result = adjudicate_result(reports, ROSTER, quorum_threshold=2, total_participants=10)
+    assert result.outcome == AdjudicationOutcome.ACCEPT
+    assert result.winner_team_id == TEAM_A
+
+
 # ---------------------------------------------------------------------------
 # derive_first_blood_team (GameMode.decides_on_first_blood — §3.6.4)
 # ---------------------------------------------------------------------------

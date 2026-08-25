@@ -242,9 +242,8 @@ async def test_conflicting_reports_dispute_no_record() -> None:
 
 
 @pytest.mark.asyncio
-async def test_1v1_duel_both_agree_auto_records_with_2_of_2_quorum() -> None:
-    # A 1v1 has only 2 reports, so the 6/10 default can never pass; the ARAM_1V1
-    # mode threshold (2/2) must let both-agree resolve. Both players report A won.
+async def test_1v1_duel_both_agree_auto_records() -> None:
+    # Both players report A won -> decided (one would already have been enough).
     reports = [_report("pa0", ["pa0"], ["pb0"]), _report("pb0", ["pa0"], ["pb0"])]
     session, match_id, ta, _tb = _build(
         reports=reports, game_mode=GameMode.ARAM_1V1, players_per_team=1
@@ -264,10 +263,12 @@ async def test_1v1_duel_both_agree_auto_records_with_2_of_2_quorum() -> None:
 
 
 @pytest.mark.asyncio
-async def test_1v1_single_report_is_insufficient() -> None:
-    # Only one of the two duelists has reported -> wait for the other (2/2 not met).
+async def test_1v1_single_report_auto_records() -> None:
+    # Owner rule (2026-08-25): ONE report decides a 1v1 duel — the opponent need
+    # not be running the desktop client at all (GameMode.ARAM_1V1: threshold 1,
+    # both teams not required). The first duelist to report ends the match.
     reports = [_report("pa0", ["pa0"], ["pb0"])]
-    session, match_id, _ta, _tb = _build(
+    session, match_id, ta, _tb = _build(
         reports=reports, game_mode=GameMode.ARAM_1V1, players_per_team=1
     )
     spy = _RecordSpy()
@@ -279,8 +280,9 @@ async def test_1v1_single_report_is_insufficient() -> None:
         record_winner=spy,
     )
 
-    assert outcome == AdjudicationOutcome.INSUFFICIENT
-    assert spy.calls == []
+    assert outcome == AdjudicationOutcome.ACCEPT
+    assert len(spy.calls) == 1
+    assert spy.calls[0]["winner_team_id"] == ta
 
 
 # ---------------------------------------------------------------------------

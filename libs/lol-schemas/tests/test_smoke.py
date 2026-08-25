@@ -181,3 +181,13 @@ def test_extra_fields_forbidden() -> None:
             created_at=_now(),
             unexpected="nope",
         )
+
+
+def test_game_mode_quorum_rule() -> None:
+    """Owner rule (2026-08-25): 1 report decides a 1v1; a 5v5 needs 1 per team."""
+    from lol_schemas.enums import GameMode
+
+    assert GameMode.ARAM_1V1.quorum_threshold == 1
+    assert GameMode.ARAM_1V1.requires_both_teams is False
+    assert GameMode.SUMMONERS_RIFT_5V5.quorum_threshold == 2
+    assert GameMode.SUMMONERS_RIFT_5V5.requires_both_teams is True

@@ -119,6 +119,15 @@ def test_tournament_created() -> None:
     assert "Single elimination" in blob
 
 
+def test_tournament_created_without_format() -> None:
+    """``fmt`` omitted → no Format field: every tournament is a knockout bracket
+    (owner decision), so a constant "single_elimination" label is pure noise."""
+    embed = tournament_created(name="Summer Cup", mode="aram_1v1", best_of=1)
+    field_names = [f["name"] for f in embed.get("fields", [])]
+    assert "Format" not in field_names
+    assert "Mode" in field_names
+
+
 def test_tournament_open() -> None:
     embed = tournament_open(name="Summer Cup", slots="3 / 16")
     assert embed["color"] == int(EmbedColor.SUCCESS)

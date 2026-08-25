@@ -216,18 +216,22 @@ def team_joined(*, team_name: str, member_name: str, member_count: int) -> dict[
 def tournament_created(
     *,
     name: str,
-    fmt: str,
+    fmt: str | None = None,
     tournament_id: str | None = None,
     mode: str | None = None,
     best_of: int | None = None,
 ) -> dict[str, Any]:
     """Tournament drafted/created. ``fmt`` is the bracket format display string.
 
+    ``fmt`` is optional: every tournament is a knockout bracket now (owner
+    decision — the single/double question is asked nowhere), so callers omit it
+    and the embed shows no Format field rather than a constant.
+
     Surfaces the ``tournament_id`` (needed for ``/tournament join``) plus the game
     mode + series length when the caller has them, so the admin gets everything to
     run it in one message.
     """
-    fields = [_field("Format", fmt, inline=True)]
+    fields = [_field("Format", fmt, inline=True)] if fmt else []
     if mode:
         pretty = "1v1 ARAM" if mode == "aram_1v1" else "5v5 Summoner's Rift"
         fields.append(_field("Mode", pretty, inline=True))

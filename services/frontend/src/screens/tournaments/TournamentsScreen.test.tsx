@@ -144,7 +144,6 @@ describe("CreateTournamentForm submit", () => {
     await userEvent.type(screen.getByLabelText(/Name/), "Duel Night");
     await userEvent.selectOptions(screen.getByLabelText(/Game mode/), "aram_1v1");
     await userEvent.selectOptions(screen.getByLabelText(/Series/), "3");
-    await userEvent.selectOptions(screen.getByLabelText(/Format/), "double_elimination");
     await userEvent.click(screen.getByRole("button", { name: "Create tournament" }));
 
     await waitFor(() => expect(tournaments.create).toHaveBeenCalledTimes(1));
@@ -153,9 +152,19 @@ describe("CreateTournamentForm submit", () => {
         name: "Duel Night",
         game_mode: "aram_1v1",
         best_of: 3,
-        format: "double_elimination",
+        format: "single_elimination",
       }),
     );
+  });
+
+  it("asks no bracket-format question — every tournament is a knockout", async () => {
+    // Owner decision (2026-08-25): the single/double-elimination choice is asked
+    // nowhere (web or Discord); the form always submits single_elimination.
+    const { client } = mockClient();
+    renderScreen(client);
+    await openCreateForm();
+
+    expect(screen.queryByLabelText(/Format/)).not.toBeInTheDocument();
   });
 
   it("relabels the bracket size for a solo mode", async () => {

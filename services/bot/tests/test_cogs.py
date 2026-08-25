@@ -93,7 +93,6 @@ def _fill_basics(
     *,
     name: str = "Summer Cup",
     size: str = "8",
-    fmt: str = "single_elimination",
     mode: str = "summoners_rift_5v5",
     series: str = "1",
 ) -> ScheduleView:
@@ -102,7 +101,6 @@ def _fill_basics(
     modal: BasicsModal = interaction.response.send_modal.await_args.args[0]
     modal.name_input._value = name
     modal.size_select._values = [size]
-    modal.format_select._values = [fmt]
     modal.mode_select._values = [mode]
     modal.series_select._values = [series]
     asyncio.run(modal.on_submit(interaction))
@@ -154,8 +152,12 @@ def test_tournament_create_shows_join_code() -> None:
 def test_tournament_create_asks_everything_in_a_form() -> None:
     """The command takes no options — every setting is asked for in form 1.
 
-    As optional slash parameters the four core settings sat behind the "+"
+    As optional slash parameters the core settings sat behind the "+"
     affordance, and an admin who never opened it silently got 16 teams / 5v5 / Bo1.
+
+    Bracket format is deliberately absent: every tournament is a knockout
+    bracket (owner decision, 2026-08-25) — the single/double-elimination
+    question is asked nowhere.
     """
     assert TournamentAdminCog.create.parameters == []
 
@@ -165,39 +167,33 @@ def test_tournament_create_asks_everything_in_a_form() -> None:
     assert [label.text for label in labels] == [
         "Tournament name",
         "Bracket size",
-        "Format",
         "Game mode",
         "Series length",
     ]
     assert all(label.component.required for label in labels)
-    # Discord's hard cap on a modal — a sixth setting belongs in the schedule form.
+    # Discord's hard cap on a modal is 5 — further settings belong in the schedule form.
     assert len(labels) <= 5
     # The bracket-size dropdown mirrors the backend's MAX_TEAMS_HARD_CAP.
     assert [o.value for o in modal.size_select.options] == [str(n) for n in range(2, 17)]
-    assert [o.value for o in modal.format_select.options] == [
-        "single_elimination",
-        "double_elimination",
-    ]
     assert [o.value for o in modal.mode_select.options] == ["summoners_rift_5v5", "aram_1v1"]
     assert [o.value for o in modal.series_select.options] == ["1", "3", "5"]
 
 
-def test_tournament_create_sends_the_chosen_format() -> None:
-    """The picked bracket format reaches the backend.
+def test_tournament_create_always_sends_the_knockout_format() -> None:
+    """The backend always receives the fixed knockout format.
 
-    It used to not exist in this form at all, so every Discord-created tournament
-    was single-elimination regardless of what the admin wanted — the one create
-    option the web console had and the bot did not.
+    The form asks no single/double-elimination question (owner decision): every
+    tournament is a plain knockout bracket, so the cog pins ``single_elimination``.
     """
     backend = AsyncMock()
     backend.create_tournament.return_value = {"id": "t1", "name": "Summer Cup"}
     cog = TournamentAdminCog(backend)
     interaction = _make_interaction()
 
-    view = _fill_basics(cog, interaction, fmt="double_elimination")
+    view = _fill_basics(cog, interaction)
     asyncio.run(view.skip.callback(interaction))
 
-    assert backend.create_tournament.await_args.kwargs["format"] == "double_elimination"
+    assert backend.create_tournament.await_args.kwargs["format"] == "single_elimination"
 
 
 def test_basics_form_hands_off_to_the_optional_schedule_form() -> None:
@@ -210,14 +206,12 @@ def test_basics_form_hands_off_to_the_optional_schedule_form() -> None:
         interaction,
         name="  Summer Cup  ",
         size="16",
-        fmt="double_elimination",
         series="3",
     )
 
     assert view._basics == TournamentBasics(
         name="Summer Cup",  # trimmed
         max_teams=16,
-        format="double_elimination",
         game_mode="summoners_rift_5v5",
         best_of=3,
     )
@@ -251,7 +245,6 @@ def test_schedule_modal_fields_are_optional_and_labelled() -> None:
         basics=TournamentBasics(
             name="Cup",
             max_teams=8,
-            format="single_elimination",
             game_mode="aram_1v1",
             best_of=1,
         ),

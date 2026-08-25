@@ -31,10 +31,12 @@ _MODE_OPTIONS = [
     discord.SelectOption(label="5v5 — Summoner's Rift", value="summoners_rift_5v5"),
     discord.SelectOption(label="1v1 — ARAM duel", value="aram_1v1"),
 ]
-_FORMAT_OPTIONS = [
-    discord.SelectOption(label="Single elimination", value="single_elimination"),
-    discord.SelectOption(label="Double elimination", value="double_elimination"),
-]
+# Owner decision (2026-08-25): the single/double-elimination question is not asked
+# anywhere (bot or web) — every tournament is a plain knockout bracket: lose and
+# you are out, until one team is left. Matches themselves are decided in-game
+# (5v5 at the nexus, 1v1 ARAM at first blood). The backend still accepts
+# ``double_elimination`` over the API should it ever be wanted back.
+_KNOCKOUT_FORMAT = "single_elimination"
 _SERIES_OPTIONS = [
     discord.SelectOption(label="Best of 1 (single game)", value="1"),
     discord.SelectOption(label="Best of 3", value="3"),
@@ -66,34 +68,31 @@ def _parse_utc(value: str | None) -> str | None:
 
 @dataclass(frozen=True, slots=True)
 class TournamentBasics:
-    """The five required settings, carried from the first form to the second."""
+    """The four required settings, carried from the first form to the second."""
 
     name: str
     max_teams: int
-    format: str
     game_mode: str
     best_of: int
 
 
 class BasicsModal(discord.ui.Modal, title="New tournament — settings"):
-    """Form 1: the five REQUIRED settings.
+    """Form 1: the four REQUIRED settings.
 
     Why a modal rather than slash options: as slash options the admin answers them
     one prompt at a time in the command bar, with no way to review or correct an
-    earlier answer before sending. A modal shows all five at once, and the four
-    dropdowns (``required=True``) make size/format/mode/series unmissable and
-    untypoable.
+    earlier answer before sending. A modal shows all four at once, and the three
+    dropdowns (``required=True``) make size/mode/series unmissable and untypoable.
 
     These are exactly the settings the web console's create form asks for, so a
-    tournament made here and one made there are the same object — bracket format
-    included, which this form used to omit entirely (every Discord-created
-    tournament was silently single-elimination).
+    tournament made here and one made there are the same object. Bracket format is
+    deliberately NOT asked, here or on the web: every tournament is a knockout
+    bracket (see ``_KNOCKOUT_FORMAT``).
 
-    Discord caps a modal at 5 components — which this now sits exactly on, and is
-    why the two optional scheduling fields live in a second form
-    (:class:`ScheduleModal`) reached from :class:`ScheduleView`: a modal cannot be
-    opened directly from a modal submit. Any further setting needs that second
-    form, not a sixth row here.
+    Discord caps a modal at 5 components — this sits at 4, and the two optional
+    scheduling fields still live in a second form (:class:`ScheduleModal`) reached
+    from :class:`ScheduleView`: a modal cannot be opened directly from a modal
+    submit.
     """
 
     def __init__(self, *, cog: TournamentAdminCog) -> None:
@@ -106,9 +105,6 @@ class BasicsModal(discord.ui.Modal, title="New tournament — settings"):
         )
         self.size_select: discord.ui.Select[BasicsModal] = discord.ui.Select(
             options=_SIZE_OPTIONS, required=True
-        )
-        self.format_select: discord.ui.Select[BasicsModal] = discord.ui.Select(
-            options=_FORMAT_OPTIONS, required=True
         )
         self.mode_select: discord.ui.Select[BasicsModal] = discord.ui.Select(
             options=_MODE_OPTIONS, required=True
@@ -124,13 +120,6 @@ class BasicsModal(discord.ui.Modal, title="New tournament — settings"):
                 component=self.size_select,
             )
         )
-        self.add_item(
-            discord.ui.Label(
-                text="Format",
-                description="Single elimination: one loss is out. Double: a losers bracket.",
-                component=self.format_select,
-            )
-        )
         self.add_item(discord.ui.Label(text="Game mode", component=self.mode_select))
         self.add_item(
             discord.ui.Label(
@@ -144,7 +133,6 @@ class BasicsModal(discord.ui.Modal, title="New tournament — settings"):
         basics = TournamentBasics(
             name=self.name_input.value.strip(),
             max_teams=int(self.size_select.values[0]),
-            format=self.format_select.values[0],
             game_mode=self.mode_select.values[0],
             best_of=int(self.series_select.values[0]),
         )
@@ -152,7 +140,7 @@ class BasicsModal(discord.ui.Modal, title="New tournament — settings"):
             embed=info_embed(
                 "Step 2 — scheduling (optional)",
                 f"**{basics.name}** · {basics.max_teams} teams · "
-                f"`{basics.format}` · `{basics.game_mode}` · Bo{basics.best_of}\n\n"
+                f"`{basics.game_mode}` · Bo{basics.best_of}\n\n"
                 "Add registration/start times, or skip and set them later.",
             ),
             view=ScheduleView(cog=self._cog, basics=basics),
@@ -280,7 +268,7 @@ class TournamentAdminCog(commands.Cog):
                 context_of(interaction),
                 name=basics.name,
                 max_teams=basics.max_teams,
-                format=basics.format,
+                format=_KNOCKOUT_FORMAT,
                 game_mode=basics.game_mode,
                 best_of=basics.best_of,
                 registration_opens_at=registration_opens_at,
@@ -292,7 +280,6 @@ class TournamentAdminCog(commands.Cog):
         embed = embed_from(
             tournament_created(
                 name=t["name"],
-                fmt=str(t.get("format", "single_elim")),
                 tournament_id=str(t.get("id", "")),
                 mode=t.get("game_mode"),
                 best_of=t.get("best_of"),

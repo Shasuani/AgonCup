@@ -17,6 +17,21 @@ export interface ChampSelectMember {
 /** The live champ-select board; null while the client is not in champ select. */
 export interface ChampSelectBoard { timerPhase?: string; members: ChampSelectMember[] }
 
+/** First blood on the live-game banner (decides a 1v1 ARAM duel). */
+export interface LiveGameFirstBlood {
+  scorer: string;
+  /** Whether the scorer is THIS player; null when the local name is unknown. */
+  isYou: boolean | null;
+  atSeconds: number;
+}
+/** The running (or just-finished) game; null while there is nothing to show. */
+export interface LiveGame {
+  status: 'in_game' | 'ended';
+  firstBlood: LiveGameFirstBlood | null;
+  /** The LOCAL player's outcome from the GameEnd event; null until known. */
+  result: 'win' | 'loss' | null;
+}
+
 export interface BridgeUser { userId: string; discordUserId: string; displayName: string }
 export type SessionStatus = 'signed-in' | 'needs-pairing' | 'unavailable';
 export interface SessionState { signedIn: boolean; user: BridgeUser | null; status?: SessionStatus }
@@ -35,9 +50,11 @@ export interface MyMatch {
   /** Null when nobody's client is hosting — the player creates it themselves. */
   hostName: string | null;
   isHost: boolean;
+  /** GameMode value ('summoners_rift_5v5' / 'aram_1v1') — mode line + win rule. */
+  gameMode: string;
 }
 
-export interface Tournament { id: string; name: string; status: string; format: string; gameMode: string; bestOf: number; maxTeams: number; isSharedToCentral: boolean; registrationOpensAt: string | null; startAt: string | null }
+export interface Tournament { id: string; name: string; status: string; format: string; gameMode: string; bestOf: number; maxTeams: number; isSharedToCentral: boolean; region: string | null; registrationOpensAt: string | null; startAt: string | null }
 export interface MyTeam { teamId: string; name: string; role: string; status: string }
 export interface TeamMember { teamId: string; userId: string; role: string; displayName: string }
 export interface JoinRequest { teamId: string; teamName: string; userId: string; displayName: string }
@@ -87,6 +104,8 @@ export interface LolBridge {
   readSummoner(): Promise<ReadSummoner>;
   onLcuStatus(cb: (s: LcuStatus) => void): () => void;
   onChampSelect?(cb: (board: ChampSelectBoard | null) => void): () => void;
+  onLiveGame?(cb: (view: LiveGame | null) => void): () => void;
+  getLiveGame?(): Promise<LiveGame | null>;
   onAuthLost(cb: () => void): () => void;
   onSessionRestored(cb: () => void): () => void;
 }
@@ -148,6 +167,22 @@ export function useChampSelect(): ChampSelectBoard | null {
     return b.onChampSelect(setBoard);
   }, []);
   return board;
+}
+
+/** The live-game winner banner: pull once (the banner outlives the game, so the
+ *  last push may predate this mount), then follow pushes. Null = nothing to show
+ *  (or an old build without the channel). */
+export function useLiveGame(): LiveGame | null {
+  const [view, setView] = useState<LiveGame | null>(null);
+  useEffect(() => {
+    const b = lol();
+    if (!b || typeof b.onLiveGame !== 'function') return;
+    if (typeof b.getLiveGame === 'function') {
+      b.getLiveGame().then(setView, () => undefined);
+    }
+    return b.onLiveGame(setView);
+  }, []);
+  return view;
 }
 
 /** Narrow a bridge Res<T> to its detail string on failure. */

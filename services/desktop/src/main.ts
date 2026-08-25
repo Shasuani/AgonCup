@@ -84,6 +84,7 @@ import { SecureStore, type PersistedSession } from "./secureStore.js";
 import { SettingsStore } from "./settingsStore.js";
 import { LcuStatusPoller, type LcuStatus } from "./lcu/statusPoller.js";
 import { ChampSelectPoller, type ChampSelectView } from "./lcu/champSelectPoller.js";
+import { LiveGamePoller, type LiveGameView } from "./lcu/liveGamePoller.js";
 
 /** Default heartbeat cadence while pre-game/in-game (PLAN.md §3.6.1 ~2-3s). */
 const DEFAULT_HEARTBEAT_MS = 2_500;
@@ -1139,6 +1140,31 @@ async function bootstrap(): Promise<void> {
     },
   });
 
+  // --- live-game winner poller -> renderer banner ---------------------------- //
+  // Documented `:2999` reads only. First blood DECIDES a 1v1 ARAM duel
+  // (GameMode.decides_on_first_blood), and the GameEnd event carries this
+  // player's win/loss — so the screen can say who won the moment it is known,
+  // while the RECORDED result still comes from corroboration server-side.
+  const liveGamePoller = new LiveGamePoller({
+    readPhase: () => adapter.getGameflowPhase(),
+    readEvents: () => adapter.captureLiveClientEvents(),
+    readLocalGameName: async () => {
+      const r = await readCurrentSummoner();
+      return r.ok && r.gameName !== "" ? r.gameName : null;
+    },
+    onUpdate: (view: LiveGameView | null) => {
+      sendToRenderer("lol:live-game", view);
+      log("live_game", {
+        status: view?.status ?? null,
+        firstBloodBy: view?.firstBlood?.scorer ?? null,
+        result: view?.result ?? null,
+      });
+    },
+  });
+  // Pull complement for a renderer that mounts after the last change (the
+  // banner outlives the game, so pushes may be long past by then).
+  ipcMain.handle("lol:live-game-get", () => liveGamePoller.lastView);
+
   const createWindow = (): import("electron").BrowserWindow => {
     const win = new BrowserWindow({
       width: 1280,
@@ -1223,6 +1249,7 @@ async function bootstrap(): Promise<void> {
   // Status poller runs regardless of sign-in (the badge is always visible).
   poller.start();
   champSelectPoller.start();
+  liveGamePoller.start();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow();
@@ -1231,6 +1258,7 @@ async function bootstrap(): Promise<void> {
   app.on("window-all-closed", () => {
     poller.stop();
     champSelectPoller.stop();
+    liveGamePoller.stop();
     if (process.platform !== "darwin") app.quit();
   });
 }

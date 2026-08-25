@@ -41,11 +41,13 @@ from uuid import UUID
 from lol_schemas import ResultReportDTO
 from lol_schemas.enums import ResultSource
 
-# The both-teams-represented quorum floor (PLAN.md §3.6.6 mitigation 1): a result
-# auto-accepts only when at least this many distinct identity-bound reports agree
-# on the same agreed_game_id and winning team AND >=1 agreeing report comes from
-# each registered roster. Modest floor (not 8/10) to tolerate ~4 honest-missing
-# reports (capture race) without defeating autonomy.
+# The library-default both-teams-represented quorum floor (PLAN.md §3.6.6
+# mitigation 1): a result auto-accepts only when at least this many distinct
+# identity-bound reports agree on the same agreed_game_id and winning team AND
+# >=1 agreeing report comes from each registered roster. The PRODUCT thresholds
+# live on ``lol_schemas.GameMode`` (``quorum_threshold`` / ``requires_both_teams``
+# — one report for a 1v1 duel, one per team for a 5v5) and are passed in by the
+# caller; these defaults keep the core's generic contract stable.
 QUORUM_THRESHOLD = 6
 TOTAL_PARTICIPANTS = 10
 
@@ -297,6 +299,7 @@ def adjudicate_result(
     *,
     quorum_threshold: int = QUORUM_THRESHOLD,
     total_participants: int = TOTAL_PARTICIPANTS,
+    require_both_teams: bool = True,
     used_game_ids: frozenset[str] = frozenset(),
     valid_nonces: Mapping[str, str] | None = None,
     killstream_by_game: Mapping[str, KillStreamSummary] | None = None,
@@ -331,10 +334,15 @@ def adjudicate_result(
         roster_by_team: registered PUUIDs per team id (exactly two for a 1v1);
             the both-teams-represented authority. Sourced from registration/
             check-in, NEVER from the reports themselves.
-        quorum_threshold: agreeing-report floor (default 6; a 1v1 duel passes 2).
+        quorum_threshold: agreeing-report floor (default 6; the product passes
+            ``GameMode.quorum_threshold`` — 1 for a 1v1 duel, 2 for a 5v5).
         total_participants: expected reporters for the mode (default 10; a 1v1
             passes 2 so a both-reports-in stalemate resolves instead of hanging
             forever on the ``reachable`` capture-race branch).
+        require_both_teams: whether the agreeing cluster must contain a reporter
+            from EACH roster (default True — PLAN.md §3.6.6 mitigation 1). The
+            1v1 duel passes False: a single duelist's report decides, so the
+            one-sided-quorum branch never applies there.
         used_game_ids: game ids already consumed by a prior match (reuse → high
             anomaly). Default empty (off).
         valid_nonces: ``reporter_puuid -> expected single-use nonce``; a report
@@ -409,8 +417,12 @@ def adjudicate_result(
     flags.update(winner_flags)
     best = candidates[0] if candidates else None
 
-    # Asymmetric winner claim: >=2 distinct winners each with real support (>=2).
-    strong = [c for c in candidates if c.agree_count >= 2]
+    # Asymmetric winner claim: >=2 distinct winners each with real support. "Real"
+    # is relative to the floor: with a one-report quorum (the 1v1 duel) a single
+    # opposing report carries as much weight as the leader, so two lone
+    # contradicting claims are a dispute — never a coin-flip on candidate order.
+    strong_floor = 1 if quorum_threshold <= 1 else 2
+    strong = [c for c in candidates if c.agree_count >= strong_floor]
     if len(strong) >= 2:
         flags.add(_Flag(FLAG_ASYMMETRIC_WINNER_CLAIM, _Severity.HIGH))
     elif best is not None and any(c.agree_count == 1 for c in candidates[1:]):
@@ -422,7 +434,7 @@ def adjudicate_result(
         # Load-bearing escalation: HIGH only if removing the cloned reports drops
         # the leading candidate below quorum or breaks both-teams; else MEDIUM audit.
         load_bearing = _is_load_bearing(
-            best, bi_puuids, puuid_to_team, roster_team_ids, quorum_threshold
+            best, bi_puuids, puuid_to_team, roster_team_ids, quorum_threshold, require_both_teams
         )
         flags.add(
             _Flag(FLAG_BYTE_IDENTICAL_PAYLOAD, _Severity.HIGH if load_bearing else _Severity.LOW)
@@ -444,6 +456,7 @@ def adjudicate_result(
         flags=flags,
         quorum_threshold=quorum_threshold,
         total_participants=total_participants,
+        require_both_teams=require_both_teams,
         dominant_game_id=dominant_game_id,
         distinct_reporters_seen=distinct_reporters_seen,
     )
@@ -632,13 +645,14 @@ def _is_load_bearing(
     puuid_to_team: Mapping[str, UUID],
     roster_team_ids: frozenset[UUID],
     quorum_threshold: int,
+    require_both_teams: bool,
 ) -> bool:
     """True if removing the cloned reports would drop the leader below quorum."""
     if best is None:
         return False
     remaining = best.reporter_puuids - suspect
     teams = frozenset(puuid_to_team[p] for p in remaining if p in puuid_to_team)
-    both = teams == roster_team_ids
+    both = teams == roster_team_ids or not require_both_teams
     return best.agree_count >= quorum_threshold and (len(remaining) < quorum_threshold or not both)
 
 
@@ -668,6 +682,7 @@ def _verdict(
     flags: set[_Flag],
     quorum_threshold: int,
     total_participants: int,
+    require_both_teams: bool,
     dominant_game_id: str | None,
     distinct_reporters_seen: int,
 ) -> AdjudicationResult:
@@ -678,21 +693,25 @@ def _verdict(
 
     agree = best.agree_count if best is not None else 0
     both_teams = best.teams_represented == roster_team_ids if best is not None else False
+    # A mode that does not require both rosters (the 1v1 duel) treats a one-sided
+    # cluster as sufficient; the audit field below still records the truth.
+    sides_ok = both_teams or not require_both_teams
     winner = best.winner if best is not None else None
-    quorum_met = best is not None and agree >= quorum_threshold and both_teams
+    quorum_met = best is not None and agree >= quorum_threshold and sides_ok
     # Still-outstanding reports mean the picture can change → a shortfall is benign.
     reachable = distinct_reporters_seen < total_participants
 
-    # 1. A clean both-teams quorum auto-resolves — unless something escalated it.
+    # 1. A clean quorum auto-resolves — unless something escalated it.
     if quorum_met and not high and not block:
+        sides = "both teams" if both_teams else "one side (mode does not require both)"
         return AdjudicationResult(
             outcome=AdjudicationOutcome.ACCEPT,
             winner_team_id=winner,
             agreed_game_id=dominant_game_id,
             reports_counted=agree,
-            both_teams_represented=True,
+            both_teams_represented=both_teams,
             anomaly_flags=codes,
-            detail=f"accept: quorum {agree}/{total_participants} for {winner}, both teams",
+            detail=f"accept: quorum {agree}/{total_participants} for {winner}, {sides}",
         )
 
     # 2. Any high-severity anomaly freezes advancement → admin queue.
@@ -717,8 +736,9 @@ def _verdict(
             detail=f"dispute: quorum reached but blocked ({', '.join(sorted(block))})",
         )
 
-    # 4. A >=quorum one-sided cluster: benign while reachable, suspicious when all in.
-    if best is not None and agree >= quorum_threshold and not both_teams:
+    # 4. A >=quorum one-sided cluster (where the mode requires both sides): benign
+    #    while reachable, suspicious when all in.
+    if best is not None and agree >= quorum_threshold and not sides_ok:
         flag = sorted(codes + [FLAG_ONE_SIDED_QUORUM])
         if reachable:
             return AdjudicationResult(

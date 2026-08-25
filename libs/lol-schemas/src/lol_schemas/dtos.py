@@ -350,8 +350,9 @@ class QuorumDetail(_Base):
 class MatchResultDTO(_Base):
     """The adjudicated result for a match (PLAN.md §2 ``MatchResult``; UNIQUE(match_id)).
 
-    Becomes ``PROVISIONAL`` on quorum (>=6/10 agreeing, both teams represented, no
-    high-severity anomaly); otherwise ``DISPUTED`` -> admin override.
+    Becomes ``PROVISIONAL`` on quorum (``GameMode.quorum_threshold`` agreeing
+    reports, both teams represented where the mode requires it, no high-severity
+    anomaly); otherwise ``DISPUTED`` -> admin override.
     """
 
     id: UUID | None = None

@@ -45,6 +45,10 @@ class CreateTournamentRequest(BaseModel):
     game_mode: GameMode = GameMode.SUMMONERS_RIFT_5V5
     best_of: int = Field(default=1, description="Series length: 1, 3, or 5.")
     max_teams: int = Field(default=16, ge=2, le=16)
+    # Riot platform the tournament is played on ("euw1"/"eun1"/...). Entrants then
+    # need a verified account on it (an LCU invite is per-server). Omit = no
+    # restriction. KR is rejected (out of scope).
+    region: str | None = Field(default=None, min_length=2, max_length=8)
     ruleset: dict[str, Any] = Field(default_factory=dict)
     # Scheduling (UTC, both optional). When registration_opens_at is in the future
     # the tournament is created DRAFT (registration closed) and the scheduler opens
@@ -61,6 +65,8 @@ class TournamentResponse(BaseModel):
     game_mode: str
     best_of: int
     max_teams: int
+    #: Platform the tournament is played on ("euw1"/"eun1"/...); None = unrestricted.
+    region: str | None = None
     is_shared_to_central: bool
     registration_opens_at: str | None = None
     start_at: str | None = None
@@ -169,12 +175,30 @@ def _to_response(t: Tournament) -> TournamentResponse:
         game_mode=_enum_value(t.game_mode),
         best_of=t.best_of,
         max_teams=t.max_teams,
+        region=t.region,
         is_shared_to_central=t.is_shared_to_central,
         registration_opens_at=(
             t.registration_opens_at.isoformat() if t.registration_opens_at else None
         ),
         start_at=t.start_at.isoformat() if t.start_at else None,
     )
+
+
+def _region_detail(exc: service.RegionAccountRequiredError) -> str:
+    """Human wording for the region gate — names the platform AND the players.
+
+    The captain redeeming a code for five people needs to know *which* teammates
+    block the join, not just that somebody does; a solo player just reads their
+    own name. Rendered verbatim by the desktop client, so it must stand alone.
+    """
+    label = exc.region_label
+    who = ", ".join(exc.missing_names)
+    if len(exc.missing_names) <= 1:
+        return (
+            f"this tournament is {label}-only — {who or 'you'} has no verified "
+            f"{label} account (verify one first)"
+        )
+    return f"this tournament is {label}-only — no verified {label} account: {who}"
 
 
 def _reg_response(reg: Registration) -> RegistrationResponse:
@@ -204,6 +228,7 @@ async def create_tournament(
             game_mode=body.game_mode,
             best_of=body.best_of,
             max_teams=body.max_teams,
+            region=body.region,
             ruleset=body.ruleset,
             registration_opens_at=body.registration_opens_at,
             start_at=body.start_at,
@@ -336,6 +361,8 @@ async def join_by_code(
         ) from exc
     except service.TournamentFullError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="tournament is full") from exc
+    except service.RegionAccountRequiredError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=_region_detail(exc)) from exc
     return _to_response(tournament)
 
 
@@ -461,6 +488,8 @@ async def register_team(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="tournament not found") from exc
     except service.TournamentFullError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except service.RegionAccountRequiredError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=_region_detail(exc)) from exc
     except (service.RegistrationClosedError, service.InvalidStateError) as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return _reg_response(reg)
@@ -525,6 +554,8 @@ async def check_in(
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, detail="you captain multiple teams — specify team_id"
         ) from exc
+    except service.RegionAccountRequiredError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=_region_detail(exc)) from exc
     except service.InvalidStateError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return _reg_response(reg)

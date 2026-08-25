@@ -216,6 +216,7 @@ async def publish_lobby_credentials(
     lobby_password: str,
     tournament_name: str,
     opponent_name: str | None = None,
+    mode_text: str | None = None,
     automated: bool = True,
 ) -> NotificationEnvelope:
     """Emit ``lobby_credentials`` (PLAN.md §3.3 manual fallback).
@@ -232,6 +233,7 @@ async def publish_lobby_credentials(
             lobby_password=lobby_password,
             tournament_name=tournament_name,
             opponent_name=opponent_name,
+            mode_text=mode_text,
             automated=automated,
         ),
     )
@@ -263,6 +265,7 @@ async def publish_match_ready(
     host_name: str,
     lobby_name: str | None = None,
     lobby_password: str | None = None,
+    mode_text: str | None = None,
 ) -> NotificationEnvelope:
     """Emit ``match_ready`` (PLAN.md §3.2/§3.3). Returns the published envelope.
 
@@ -276,6 +279,7 @@ async def publish_match_ready(
             host_name=host_name,
             lobby_name=lobby_name,
             lobby_password=lobby_password,
+            mode_text=mode_text,
         ),
     )
     await publisher.publish(envelope)

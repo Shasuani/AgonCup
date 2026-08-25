@@ -902,17 +902,37 @@ async def test_initialize_lobby_tells_the_humans_the_lobby_exists(monkeypatch) -
 
     public = next(e for e in sent if e.kind.value == "match_ready")
     assert public.payload.lobby_password is None, "a server-wide embed is not the place"
+    assert public.payload.mode_text == "5v5 — Summoner's Rift", "the embed says WHAT is played"
 
     dm = next(e for e in sent if e.kind.value == "lobby_credentials")
     assert dm.payload.discord_user_id, "a DM needs a snowflake to address"
     assert dm.payload.tournament_name == "Summer Cup"
     assert dm.payload.lobby_password == "ABC123"
+    # Name + password say where to meet; the DM must also say what to set up and
+    # against whom — the host is on "Ours", so the other side is the opponent.
+    assert dm.payload.mode_text == "5v5 — Summoner's Rift"
+    assert dm.payload.opponent_name == "Theirs"
     # It is the designated host who is DMed — the same player everyone else's
     # client is told to wait for.
     host_user = next(cs.user_id for cs in session.store[ClientSession] if cs.puuid == succession[0])
     assert dm.payload.discord_user_id == str(
         next(u.discord_user_id for u in session.store[User] if u.id == host_user)
     )
+
+
+def test_mode_text_names_the_shape_and_the_win_rule() -> None:
+    """The display line must tell a human the mode, the map and — for the 1v1
+    duel — that the game ends at first blood, or they set up (and play) the
+    wrong game. The exact 5v5 string is pinned because the DM/embed tests
+    assert on it; the 1v1 assertions are structural so wording can evolve."""
+    from lol_schemas.enums import GameMode
+
+    from app.orchestration.service import _mode_text
+
+    assert _mode_text(GameMode.SUMMONERS_RIFT_5V5) == "5v5 — Summoner's Rift"
+    duel = _mode_text(GameMode.ARAM_1V1)
+    assert "1v1" in duel and "ARAM" in duel
+    assert "first blood" in duel, "the win rule is the part a duelist cannot guess"
 
 
 @pytest.mark.asyncio

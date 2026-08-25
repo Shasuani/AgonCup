@@ -18,6 +18,10 @@ export interface Tournament {
   readonly gameMode: string;
   readonly bestOf: number;
   readonly maxTeams: number;
+  /** Riot platform it is played on ("euw1"/"eun1"/...); null = unrestricted.
+   *  Joining needs a verified account on it — shown in the join preview so the
+   *  player learns the requirement BEFORE redeeming, not from the error. */
+  readonly region: string | null;
   readonly isSharedToCentral: boolean;
   /** ISO UTC scheduling times (null when unscheduled). */
   readonly registrationOpensAt: string | null;
@@ -70,6 +74,7 @@ function asTournament(raw: unknown): Tournament {
     gameMode: typeof rec["game_mode"] === "string" ? rec["game_mode"] : "",
     bestOf: typeof rec["best_of"] === "number" ? rec["best_of"] : 1,
     maxTeams: typeof rec["max_teams"] === "number" ? rec["max_teams"] : 0,
+    region: typeof rec["region"] === "string" && rec["region"] !== "" ? rec["region"] : null,
     isSharedToCentral: rec["is_shared_to_central"] === true,
     registrationOpensAt:
       typeof rec["registration_opens_at"] === "string" ? rec["registration_opens_at"] : null,
@@ -534,6 +539,10 @@ export interface MyMatch {
   /** Null on the manual-fallback path — nobody's client is hosting. */
   readonly hostName: string | null;
   readonly isHost: boolean;
+  /** `GameMode` value ("summoners_rift_5v5" / "aram_1v1") — drives the screen's
+   * mode line and which win rule the live panel watches for. Defaults to 5v5
+   * against an older backend that does not send it. */
+  readonly gameMode: string;
 }
 
 export type ListMyMatchesResult =
@@ -555,6 +564,7 @@ function asMyMatch(raw: unknown): MyMatch {
     lobbyPassword: nullable("lobby_password"),
     hostName: nullable("host_name"),
     isHost: r["is_host"] === true,
+    gameMode: nullable("game_mode") ?? "summoners_rift_5v5",
   };
 }
 

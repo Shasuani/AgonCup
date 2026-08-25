@@ -348,6 +348,13 @@ class Tournament(GuildScoped, Base):
     # Series length: a match is won by the first team to (best_of // 2 + 1) games.
     # 1 = single game (default); 3 = best-of-three; 5 = best-of-five.
     best_of: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    # Riot platform the tournament is played on (PlatformRoute value, e.g. "euw1"
+    # / "eun1") — same vocabulary as RiotAccount.region. Chosen at creation; the
+    # join/lock-in gates require entrants to hold a verified account on it (an LCU
+    # invite is per-server, so a cross-region player physically cannot be pulled
+    # into the lobby). NULL = legacy/no restriction. KR is rejected by the service
+    # (Korea is out of scope — docs/compliance-checklist.md).
+    region: Mapped[str | None] = mapped_column(Text, nullable=True)
     max_teams: Mapped[int] = mapped_column(Integer, nullable=False, server_default="16")
     # Scheduling (PLAN.md §3.2). ``registration_opens_at`` gates enrolment (join is
     # rejected before it) and, once reached, the scheduler flips DRAFT→OPEN and

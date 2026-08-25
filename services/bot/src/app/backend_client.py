@@ -219,6 +219,7 @@ class BackendClient:
         format: str = "single_elimination",
         game_mode: str = "summoners_rift_5v5",
         best_of: int = 1,
+        region: str | None = None,
         registration_opens_at: str | None = None,
         start_at: str | None = None,
     ) -> dict[str, Any]:
@@ -226,6 +227,10 @@ class BackendClient:
 
         ``format`` is the bracket shape (single/double elimination) — the same set
         the web admin console offers, so both surfaces create the same tournaments.
+
+        ``region`` is the Riot platform the tournament is played on
+        (``euw1``/``eun1``/...); entrants must hold a verified account there.
+        ``None`` = unrestricted (the pre-region behaviour).
 
         ``registration_opens_at`` / ``start_at`` are ISO-8601 UTC strings for a
         scheduled tournament (PLAN.md §3.2); omit both for an immediately-open one.
@@ -238,6 +243,8 @@ class BackendClient:
             "game_mode": game_mode,
             "best_of": best_of,
         }
+        if region is not None:
+            payload["region"] = region
         if registration_opens_at is not None:
             payload["registration_opens_at"] = registration_opens_at
         if start_at is not None:

@@ -16,6 +16,7 @@ const TOURNAMENT: TournamentResponse = {
   game_mode: "summoners_rift_5v5",
   best_of: 1,
   max_teams: 8,
+  region: null,
   is_shared_to_central: false,
   registration_opens_at: null,
   start_at: null,

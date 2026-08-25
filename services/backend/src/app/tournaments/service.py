@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from lol_core.bracket import generate_single_elimination
+from lol_riot.routing import PlatformRoute
 from lol_schemas.enums import (
     GameMode,
     MatchStatus,
@@ -33,6 +34,7 @@ from lol_schemas.enums import (
 from sqlalchemy import String, cast, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.accounts.service import region_label_for
 from app.joincodes import generate_join_code, normalize_join_code
 from app.models import (
     ClientSession,
@@ -112,6 +114,27 @@ class TournamentNotFinishedError(TournamentError):
     """A player tried to clear a tournament that is still live off their list."""
 
 
+class RegionAccountRequiredError(TournamentError):
+    """Enrolment/lock-in into a region-locked tournament without a verified
+    account on that platform.
+
+    An LCU lobby invite is addressed by a per-server ``summonerId``, so a player
+    with no account on the tournament's platform physically cannot be pulled into
+    the lobby — the mismatch is bounced here, at enrolment, instead of stranding
+    a team at match time. ``region_label`` is the human platform name ("EUNE");
+    ``missing_names`` the display names lacking an account (the caller alone on
+    solo paths, possibly several teammates on the captain's join).
+    """
+
+    def __init__(self, *, region_label: str, missing_names: Sequence[str]) -> None:
+        self.region_label = region_label
+        self.missing_names = list(missing_names)
+        super().__init__(
+            f"this tournament is {region_label}-only — no verified {region_label} "
+            f"account: {', '.join(missing_names) or 'you'}"
+        )
+
+
 def _utcnow() -> datetime:
     """Current UTC time (tz-aware). Isolated so tests can monkeypatch it."""
     return datetime.now(tz=UTC)
@@ -172,6 +195,68 @@ class StartResult:
     byes: int
 
 
+def parse_tournament_region(region: str | None) -> str | None:
+    """Validate a tournament region → canonical :class:`PlatformRoute` value.
+
+    ``None`` passes through (a region-less tournament restricts nobody). Anything
+    else must be a known Riot platform route (``euw1``/``eun1``/...), matched
+    case-insensitively; KR is rejected outright — Korea is out of scope for the
+    platform (docs/compliance-checklist.md), so a tournament can never be created
+    there.
+    """
+    if region is None:
+        return None
+    try:
+        platform = PlatformRoute(region.strip().lower())
+    except ValueError as exc:
+        raise InvalidStateError(f"unknown region: {region!r}") from exc
+    if platform is PlatformRoute.KR:
+        raise InvalidStateError("region kr is not supported")
+    return platform.value
+
+
+async def _require_region_accounts(
+    session: AsyncSession, *, tournament: Tournament, user_ids: Sequence[uuid.UUID]
+) -> None:
+    """The region gate: every user must hold a verified account on the platform.
+
+    No-op for a region-less tournament. Otherwise each of ``user_ids`` needs at
+    least one **verified** Riot account whose ``region`` equals the tournament's
+    (a user may hold several accounts — one per server — and any matching one
+    passes). Violators raise :class:`RegionAccountRequiredError` carrying their
+    display names, so a captain learns *which* teammates block the join.
+    """
+    if tournament.region is None or not user_ids:
+        return
+    have = {
+        uid
+        for (uid,) in (
+            await session.execute(
+                select(RiotAccount.user_id).where(
+                    RiotAccount.user_id.in_(list(user_ids)),
+                    RiotAccount.verified.is_(True),
+                    RiotAccount.region == tournament.region,
+                )
+            )
+        ).all()
+    }
+    missing = [uid for uid in user_ids if uid not in have]
+    if not missing:
+        return
+    names = [
+        name
+        for (name,) in (
+            await session.execute(
+                select(User.display_name).where(User.id.in_(missing)).order_by(User.display_name)
+            )
+        ).all()
+    ]
+    raise RegionAccountRequiredError(
+        region_label=region_label_for(PlatformRoute(tournament.region)),
+        missing_names=names or [str(uid) for uid in missing],
+    )
+
+
 async def create_tournament(
     session: AsyncSession,
     *,
@@ -180,6 +265,7 @@ async def create_tournament(
     game_mode: GameMode = GameMode.SUMMONERS_RIFT_5V5,
     best_of: int = 1,
     max_teams: int = MAX_TEAMS_HARD_CAP,
+    region: str | None = None,
     ruleset: dict[str, Any] | None = None,
     registration_opens_at: datetime | None = None,
     start_at: datetime | None = None,
@@ -190,6 +276,10 @@ async def create_tournament(
     → ``registration_opens_at`` gates enrolment until then, and the scheduler flips
     DRAFT→OPEN + announces at that time (PLAN.md §3.2). Times are UTC and must satisfy
     ``registration_opens_at`` ≤ ``start_at`` (and both in the future).
+
+    ``region`` pins the tournament to one Riot platform (``euw1``/``eun1``/...):
+    enrolment and lock-in then require a verified account on it (see
+    :func:`_require_region_accounts`). ``None`` = no restriction.
     """
     if not 2 <= max_teams <= MAX_TEAMS_HARD_CAP:
         raise InvalidStateError(f"max_teams must be in [2, {MAX_TEAMS_HARD_CAP}]")
@@ -213,6 +303,7 @@ async def create_tournament(
         format=format,
         game_mode=game_mode,
         best_of=best_of,
+        region=parse_tournament_region(region),
         max_teams=max_teams,
         status=TournamentStatus.DRAFT,
         registration_opens_at=registration_opens_at,
@@ -369,9 +460,18 @@ async def join_by_code(
         raise RegistrationClosedError("started")
 
     if tournament.game_mode.team_size == 1:
+        # Region gate (region-locked tournaments): the joining player themselves.
+        await _require_region_accounts(session, tournament=tournament, user_ids=[user_id])
         return tournament, await _enrol_solo(session, tournament=tournament, user_id=user_id)
 
     team = await _resolve_captain_team(session, user_id=user_id, team_id=team_id)
+    # Region gate: the WHOLE active roster, not just the redeeming captain — a
+    # teammate on the wrong server would otherwise surface only at match time,
+    # when the lobby cannot invite them. The error names the blocking players.
+    roster = await _active_member_ids(session, team_id=team.id)
+    if user_id not in roster:
+        roster.append(user_id)
+    await _require_region_accounts(session, tournament=tournament, user_ids=roster)
     return tournament, await _register_team_idempotent(session, tournament=tournament, team=team)
 
 
@@ -762,6 +862,14 @@ async def register_team(
     if team is None:
         raise InvalidStateError("team not found in this guild")
 
+    # Region gate — same rule as the join-code path: a region-locked tournament
+    # only admits rosters whose every active member can actually be invited there.
+    await _require_region_accounts(
+        session,
+        tournament=tournament,
+        user_ids=await _active_member_ids(session, team_id=team_id),
+    )
+
     count = (
         await session.execute(
             select(func.count())
@@ -883,6 +991,10 @@ async def check_in(
     captain locked their team in with ``{"team_id": ..., "host_opt_in": true}``.
     """
     reg = await _registration_for(session, tournament_id=tournament_id, team_id=team_id)
+    # Deliberately NOT region-gated: this is the admin's escape hatch for a stuck
+    # bracket, and blocking it would leave no override at all. The region still
+    # steers which account each member's presence records (below).
+    tournament = await get_tournament(session, tournament_id=tournament_id)
     now = _utcnow()
     for participant in await _participants_for_team(
         session, tournament_id=tournament_id, team_id=team_id
@@ -893,14 +1005,22 @@ async def check_in(
             session,
             user_id=participant.user_id,
             host_opt_in=host_opt_in if participant.user_id == acting_user_id else None,
+            region=tournament.region,
         )
     reg.status = RegistrationStatus.CHECKED_IN
     await session.flush()
+    # This flip may have been the last one an unscheduled tournament was waiting
+    # on — the admin unblocking a no-show is exactly the moment it can begin.
+    await maybe_autostart_tournament(session, tournament_id=tournament_id)
     return reg
 
 
 async def record_client_presence(
-    session: AsyncSession, *, user_id: uuid.UUID, host_opt_in: bool | None = None
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    host_opt_in: bool | None = None,
+    region: str | None = None,
 ) -> ClientSession | None:
     """Write the player's standing :class:`ClientSession` at lock-in (PLAN.md §3.6.1).
 
@@ -925,17 +1045,25 @@ async def record_client_presence(
     Returns ``None`` for a player with no Riot account: an invite is addressed by
     PUUID, so there is nothing to write and nothing the lobby could do with them.
     Lock-in itself still succeeds — they are simply a manual-join player.
+
+    ``region`` (the tournament's platform, when it has one) steers WHICH of the
+    player's accounts is recorded: a user may hold one account per server, and
+    the PUUID written here is who the lobby invites — an invite only works
+    same-server, so the account on the tournament's platform is preferred over
+    any other. ``None`` keeps the old verified-first pick.
     """
-    account = (
-        (
-            await session.execute(
-                select(RiotAccount)
-                .where(RiotAccount.user_id == user_id)
-                .order_by(RiotAccount.verified.desc(), RiotAccount.id)
-            )
-        )
+    accounts = list(
+        (await session.execute(select(RiotAccount).where(RiotAccount.user_id == user_id)))
         .scalars()
-        .first()
+        .all()
+    )
+    # Pick in Python, not ORDER BY: region-match first, then verified, then the
+    # stable id tie-break the old query used. A user rarely has more than two
+    # rows, and the explicit key is testable offline.
+    account = min(
+        accounts,
+        key=lambda a: (a.region != region if region is not None else False, not a.verified, a.id),
+        default=None,
     )
     if account is None:
         return None
@@ -1069,6 +1197,10 @@ async def check_in_self(
     # (see `repair_missing_registration`) would otherwise show the player as in the
     # tournament while refusing every lock-in they attempt.
     tournament = await get_tournament(session, tournament_id=tournament_id)
+    # Region gate: a player who slipped onto the roster after registration (or
+    # whose account was unlinked since) cannot lock in without a verified account
+    # on the tournament's platform — the lobby could never invite them anyway.
+    await _require_region_accounts(session, tournament=tournament, user_ids=[user_id])
     reg = await repair_missing_registration(session, tournament=tournament, team_id=team_id)
 
     participant = (
@@ -1092,8 +1224,11 @@ async def check_in_self(
     participant.team_id = team_id
     # Lock-in is the only moment a player tells us their client is here, so it is
     # where the orchestrator's roster record is written (see
-    # :func:`record_client_presence`).
-    await record_client_presence(session, user_id=user_id, host_opt_in=host_opt_in)
+    # :func:`record_client_presence`). The tournament's region steers which of the
+    # player's accounts gets invited.
+    await record_client_presence(
+        session, user_id=user_id, host_opt_in=host_opt_in, region=tournament.region
+    )
     await session.flush()
 
     locked = {
@@ -1105,6 +1240,10 @@ async def check_in_self(
     if roster and all(uid in locked for uid in roster):
         reg.status = RegistrationStatus.CHECKED_IN
     await session.flush()
+    if reg.status == RegistrationStatus.CHECKED_IN:
+        # The team just became (or already was) ready — if that completed an
+        # unscheduled tournament's full, all-locked-in field, it starts itself.
+        await maybe_autostart_tournament(session, tournament_id=tournament_id)
     return reg
 
 
@@ -1363,3 +1502,68 @@ async def start_tournament(session: AsyncSession, *, tournament_id: uuid.UUID) -
         rounds=rounds,
         byes=byes,
     )
+
+
+async def maybe_autostart_tournament(
+    session: AsyncSession, *, tournament_id: uuid.UUID
+) -> StartResult | None:
+    """Start an **unscheduled** tournament the moment its last entrant locks in.
+
+    PLAN.md §3.2 gives a scheduled tournament a kickoff clock; an unscheduled one
+    (``start_at IS NULL``) has neither a clock nor a reason to wait on an admin.
+    The moment the field is **full** (``max_teams`` registrations) and **every**
+    one of them is CHECKED_IN — i.e. every rostered player pressed lock-in — the
+    bracket can only ever be drawn from exactly these teams, so it is drawn now.
+
+    Called from the two lock-in flip sites (:func:`check_in_self` and the admin
+    :func:`check_in` override) so every entry point — desktop, SPA, bot bridge —
+    behaves the same. Joining never triggers it (a fresh registration lands
+    PENDING and un-fills nothing). Deliberately conservative:
+
+    * A **scheduled** tournament is untouched: its kickoff (and the admin)
+      governs, exactly as before.
+    * A partially-filled field never auto-starts, even fully locked in — another
+      team may be mid-join; the admin can still start early by hand.
+    * The tournament row is read ``FOR UPDATE`` so two players locking in at the
+      same instant serialize; the race's loser re-reads RUNNING and no-ops, so a
+      double bracket is impossible.
+
+    Returns the :class:`StartResult` when it started the tournament, else None.
+    """
+    tournament = (
+        await session.execute(
+            select(Tournament).where(Tournament.id == tournament_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    if tournament is None or tournament.start_at is not None:
+        return None
+    if tournament.status not in (
+        TournamentStatus.DRAFT,
+        TournamentStatus.OPEN,
+        TournamentStatus.CHECK_IN,
+    ):
+        return None
+
+    regs = (
+        (
+            await session.execute(
+                select(Registration).where(Registration.tournament_id == tournament_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    # < 2 guards the max_teams=1 corner: a bracket needs two sides regardless.
+    if len(regs) < max(tournament.max_teams, 2):
+        return None
+    if any(r.status != RegistrationStatus.CHECKED_IN for r in regs):
+        return None
+
+    result = await start_tournament(session, tournament_id=tournament_id)
+    # The other half of starting: hand the round-one matches to their players.
+    # Same composition as the manual start endpoints (SPA + bot); imported lazily
+    # for the same reason orchestration lazy-imports readiness — a module cycle.
+    from app.orchestration.service import open_started_tournament  # noqa: PLC0415
+
+    await open_started_tournament(session, tournament_id=tournament_id)
+    return result

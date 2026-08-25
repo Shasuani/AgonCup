@@ -119,6 +119,15 @@ def test_tournament_created() -> None:
     assert "Single elimination" in blob
 
 
+def test_tournament_created_without_format() -> None:
+    """``fmt`` omitted → no Format field: every tournament is a knockout bracket
+    (owner decision), so a constant "single_elimination" label is pure noise."""
+    embed = tournament_created(name="Summer Cup", mode="aram_1v1", best_of=1)
+    field_names = [f["name"] for f in embed.get("fields", [])]
+    assert "Format" not in field_names
+    assert "Mode" in field_names
+
+
 def test_tournament_open() -> None:
     embed = tournament_open(name="Summer Cup", slots="3 / 16")
     assert embed["color"] == int(EmbedColor.SUCCESS)
@@ -265,3 +274,49 @@ def test_lobby_credentials_promises_an_invite_only_when_a_client_will_host() -> 
     # Either way the credentials themselves are what the reader acts on.
     for blob in (automated, manual):
         assert "LoL-abc12345" in blob and "ABC123" in blob
+
+
+def test_lobby_credentials_carries_the_game_shape() -> None:
+    """The DM must say WHAT to set up, not just where to meet.
+
+    The mode line rides both surfaces on purpose: a "Game" field for skimming,
+    and the acting sentence itself — a creator who reads only the instruction
+    still learns the map, the team size and (for the duel) the win rule.
+    """
+    mode = "1v1 ARAM — Howling Abyss, first blood wins"
+    embed = lobby_credentials(
+        lobby_name="LoL-abc12345",
+        lobby_password="ABC123",
+        tournament_name="Summer Cup",
+        opponent_name="Bob",
+        mode_text=mode,
+        automated=False,
+    )
+    blob = _field_values(embed)
+    assert mode in blob
+    assert "Bob" in blob
+    description = str(embed["description"])
+    assert f"({mode})" in description, "the instruction sentence names the game itself"
+    assert "against **Bob**" in description
+
+
+def test_lobby_credentials_reads_clean_without_the_game_shape() -> None:
+    """Old envelopes carry no mode_text; the embed must not render artifacts."""
+    embed = lobby_credentials(
+        lobby_name="LoL-abc12345",
+        lobby_password="ABC123",
+        tournament_name="Summer Cup",
+    )
+    blob = _field_values(embed)
+    assert "()" not in blob and "None" not in blob
+    assert not any(f["name"] == "Game" for f in embed["fields"])  # type: ignore[index]
+
+
+def test_match_ready_carries_the_game_shape() -> None:
+    embed = match_ready(
+        match_label="QF1",
+        host_name="Zeus",
+        is_host=False,
+        mode_text="5v5 — Summoner's Rift",
+    )
+    assert "5v5 — Summoner's Rift" in _field_values(embed)

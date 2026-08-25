@@ -7,10 +7,25 @@ const STATUS_ACCENT: Record<string, string> = {
   running: t.teal, check_in: t.gold, open: t.gold, draft: t.textDim, completed: t.textDim, cancelled: t.red,
 };
 
+// Short server labels players actually say ("EUNE", not "eun1"). Unmapped codes
+// fall back to the upper-cased route so a new platform still shows something.
+const REGION_SHORT: Record<string, string> = {
+  eun1: 'EUNE', euw1: 'EUW', na1: 'NA', br1: 'BR', la1: 'LAN', la2: 'LAS',
+  oc1: 'OCE', tr1: 'TR', ru: 'RU', jp1: 'JP',
+};
+
+export function regionShort(region: string | null): string | null {
+  if (region === null) return null;
+  return REGION_SHORT[region.toLowerCase()] ?? region.toUpperCase();
+}
+
 function meta(tr: Tournament): string {
   const fmt = tr.format === 'double_elimination' ? 'Double Elimination' : 'Single Elimination';
   const mode = tr.gameMode === 'aram_1v1' ? '1v1 ARAM' : "Summoner's Rift 5v5";
-  return `${fmt} · ${tr.maxTeams} teams · Bo${tr.bestOf} · ${mode}`;
+  const region = regionShort(tr.region);
+  // The region is part of what the tournament IS — a player on the wrong server
+  // cannot play it — so it sits in the one summary line every view shows.
+  return `${fmt} · ${tr.maxTeams} teams · Bo${tr.bestOf} · ${mode}${region ? ` · ${region}` : ''}`;
 }
 
 export default function TournamentsScreen() {

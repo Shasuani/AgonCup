@@ -111,6 +111,7 @@ def lobby_credentials(
     lobby_password: str,
     tournament_name: str,
     opponent_name: str | None = None,
+    mode_text: str | None = None,
     automated: bool = True,
 ) -> dict[str, Any]:
     """The custom-lobby name + password for a match, DMed to the people who need it.
@@ -132,20 +133,31 @@ def lobby_credentials(
         _field("Lobby name", f"`{lobby_name}`", inline=True),
         _field("Password", f"`{lobby_password}`", inline=True),
     ]
+    # The game's shape (mode, map, win rule) leads the field list: the name and
+    # password say where to meet, this says WHAT to set up — without it the
+    # creator is guessing map, team size and, for a 1v1, when the game ends.
+    if mode_text:
+        fields.append(_field("Game", mode_text))
     if opponent_name:
         fields.append(_field("Opponent", opponent_name))
+    # Weave the shape into the instruction itself too — a field table is easy to
+    # skim past, and the sentence is what the creator acts on.
+    game_phrase = f" ({mode_text})" if mode_text else ""
+    versus = f" against **{opponent_name}**" if opponent_name else ""
     if automated:
         description = (
-            f"**{tournament_name}** — your client will create this lobby and invite "
-            "everyone. If that does not happen, make a custom game with the name and "
-            "password below and the others can join it directly."
+            f"**{tournament_name}** — your client will create this lobby"
+            f"{game_phrase} and invite everyone. If that does not happen, "
+            "make a custom game with the name and password below and the others "
+            "can join it directly."
         )
     else:
         description = (
-            f"**{tournament_name}** — **you are opening this match.** Create a "
-            "**custom game** with the name and password below. Leave the "
-            "LeagueOfLeagues client running: as soon as the lobby exists it invites "
-            "the other players for you, and their clients accept automatically."
+            f"**{tournament_name}** — **you are opening this match**{versus}. "
+            f"Create a **custom game**{game_phrase} with the name and password "
+            "below. Leave the LeagueOfLeagues client running: as soon as the lobby "
+            "exists it invites the other players for you, and their clients accept "
+            "automatically."
         )
     return build_embed(
         "Your match lobby",
@@ -216,23 +228,34 @@ def team_joined(*, team_name: str, member_name: str, member_count: int) -> dict[
 def tournament_created(
     *,
     name: str,
-    fmt: str,
+    fmt: str | None = None,
     tournament_id: str | None = None,
     mode: str | None = None,
     best_of: int | None = None,
+    region: str | None = None,
 ) -> dict[str, Any]:
     """Tournament drafted/created. ``fmt`` is the bracket format display string.
+
+    ``region`` is the display label of the platform the tournament is played on
+    ("EUNE"/"EUW"/...): entrants need a verified account there, so the admin
+    should see it on the confirmation. Omitted = unrestricted, no field shown.
+
+    ``fmt`` is optional: every tournament is a knockout bracket now (owner
+    decision — the single/double question is asked nowhere), so callers omit it
+    and the embed shows no Format field rather than a constant.
 
     Surfaces the ``tournament_id`` (needed for ``/tournament join``) plus the game
     mode + series length when the caller has them, so the admin gets everything to
     run it in one message.
     """
-    fields = [_field("Format", fmt, inline=True)]
+    fields = [_field("Format", fmt, inline=True)] if fmt else []
     if mode:
         pretty = "1v1 ARAM" if mode == "aram_1v1" else "5v5 Summoner's Rift"
         fields.append(_field("Mode", pretty, inline=True))
     if best_of:
         fields.append(_field("Series", f"Best of {best_of}", inline=True))
+    if region:
+        fields.append(_field("Region", region, inline=True))
     if tournament_id:
         # Show the short 8-char id — commands also accept the name or this short id.
         fields.append(
@@ -290,6 +313,7 @@ def match_ready(
     is_host: bool,
     lobby_name: str | None = None,
     lobby_password: str | None = None,
+    mode_text: str | None = None,
 ) -> dict[str, Any]:
     """Your lobby is forming — host/join details (PLAN.md §3.3 lobby fallback).
 
@@ -306,6 +330,8 @@ def match_ready(
         )
 
     fields: list[EmbedField] = [_field("Host", host_name, inline=True)]
+    if mode_text:
+        fields.append(_field("Game", mode_text, inline=True))
     if lobby_name:
         fields.append(_field("Lobby name", lobby_name, inline=True))
     if lobby_password:

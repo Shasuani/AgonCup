@@ -122,6 +122,8 @@ export interface TournamentBridge {
   bestOf: number;
   maxTeams: number;
   isSharedToCentral: boolean;
+  /** Server the tournament is played on (null = not set). */
+  region: string | null;
   registrationOpensAt: string | null;
   startAt: string | null;
 }
@@ -291,6 +293,22 @@ export interface ChampSelectBridge {
   members: ChampSelectMemberBridge[];
 }
 
+/** First blood on the live-game banner (decides a 1v1 ARAM duel). */
+export interface LiveGameFirstBloodBridge {
+  scorer: string;
+  /** Whether the scorer is THIS player; null when the local name is unknown. */
+  isYou: boolean | null;
+  atSeconds: number;
+}
+
+/** The running (or just-finished) game (`null` = nothing to show). */
+export interface LiveGameBridge {
+  status: "in_game" | "ended";
+  firstBlood: LiveGameFirstBloodBridge | null;
+  /** The LOCAL player's outcome from the GameEnd event; null until known. */
+  result: "win" | "loss" | null;
+}
+
 /** Whether this session may drive the League client (per-session write opt-in). */
 export type AutomationBridgeResult = { ok: true; enabled: boolean };
 
@@ -357,6 +375,10 @@ export interface LolBridge {
   onLcuStatus(callback: (status: LcuStatusBridge) => void): () => void;
   /** Subscribe to live champ-select board updates (`null` = not in select). */
   onChampSelect(callback: (board: ChampSelectBridge | null) => void): () => void;
+  /** Subscribe to live-game winner-banner updates (`null` = nothing to show). */
+  onLiveGame(callback: (view: LiveGameBridge | null) => void): () => void;
+  /** The current live-game view, for a screen that mounts after the last push. */
+  getLiveGame(): Promise<LiveGameBridge | null>;
   /** Subscribe to "session expired" events. Returns an unsubscribe function. */
   onAuthLost(callback: () => void): () => void;
   /** Subscribe to "a background retry got the session back" events, so a screen
@@ -431,6 +453,12 @@ const bridge: LolBridge = {
     ipcRenderer.on("lol:champ-select", listener);
     return () => ipcRenderer.removeListener("lol:champ-select", listener);
   },
+  onLiveGame: (callback) => {
+    const listener = (_event: unknown, view: LiveGameBridge | null): void => callback(view);
+    ipcRenderer.on("lol:live-game", listener);
+    return () => ipcRenderer.removeListener("lol:live-game", listener);
+  },
+  getLiveGame: () => ipcRenderer.invoke("lol:live-game-get") as Promise<LiveGameBridge | null>,
   onAuthLost: (callback) => {
     const listener = (): void => callback();
     ipcRenderer.on("lol:auth-lost", listener);

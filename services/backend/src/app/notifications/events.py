@@ -121,6 +121,14 @@ class LobbyCredentialsPayload(_Strict):
     opponent_name: str | None = Field(
         default=None, description="Resolved display name of the opposing team, if known."
     )
+    mode_text: str | None = Field(
+        default=None,
+        description=(
+            "Pre-formatted game-shape display line (mode, map, team size, win rule) "
+            "so the creator sets the custom game up exactly right, e.g. "
+            "'1v1 ARAM — Howling Abyss, first blood wins'."
+        ),
+    )
     automated: bool = Field(
         default=True,
         description=(
@@ -156,6 +164,10 @@ class MatchReadyPayload(_Strict):
     )
     lobby_password: str | None = Field(
         default=None, description="Manual-fallback lobby password (PLAN.md §3.3), if issued."
+    )
+    mode_text: str | None = Field(
+        default=None,
+        description="Pre-formatted game-shape display line (mode, map, win rule), if known.",
     )
 
 

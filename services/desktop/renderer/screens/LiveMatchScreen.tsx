@@ -2,8 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { theme as t } from '../theme';
 import { Kicker } from '../ui';
 import {
-  lol, useAsync, useChampSelect, errText,
-  type MyMatch, type ChampSelectBoard, type ChampSelectMember,
+  lol, useAsync, useChampSelect, useLiveGame, errText,
+  type MyMatch, type ChampSelectBoard, type ChampSelectMember, type LiveGame,
 } from '../bridge';
 
 // The live lobby, as the backend knows it. This screen used to show only which
@@ -119,6 +119,97 @@ function AutomationToggle() {
   );
 }
 
+/** True for the 1v1 ARAM duel — the mode a single first blood decides. */
+function isDuel(gameMode: string): boolean {
+  return gameMode === 'aram_1v1';
+}
+
+/** One line naming the game's shape — same story the Discord DM now tells. */
+function modeText(gameMode: string): string {
+  return isDuel(gameMode)
+    ? '1v1 ARAM · Howling Abyss · first blood wins'
+    : "5v5 · Summoner's Rift";
+}
+
+/** Short form for the create-this settings row next to name + password. */
+function modeShort(gameMode: string): string {
+  return isDuel(gameMode) ? '1v1 ARAM' : '5v5 Rift';
+}
+
+function fmtGameClock(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds));
+  const m = Math.floor(total / 60);
+  const ss = String(total % 60).padStart(2, '0');
+  return `${m}:${ss}`;
+}
+
+/**
+ * The winner banner, straight off this machine's own game (`:2999`).
+ *
+ * A duel is DECIDED at first blood, so the banner goes up the moment the kill
+ * lands — not minutes later when someone closes the game. A 5v5 is decided at
+ * the nexus, so it waits for the end and then reads the local win/loss verdict.
+ * Display-only: the recorded result still comes from everyone's reports
+ * (corroboration), which is what "recorded automatically" below refers to.
+ */
+function LiveGamePanel({ view, duel }: { view: LiveGame; duel: boolean }) {
+  const fb = view.firstBlood;
+  const ended = view.status === 'ended';
+
+  let kicker: string; let title: string; let sub: string | null = null;
+  let decided = false;
+
+  if (duel) {
+    if (fb !== null) {
+      decided = true;
+      kicker = 'Duel decided · first blood';
+      title = `${fb.scorer} wins the duel`;
+      sub = fb.isYou === true
+        ? `That's you — victory! First blood at ${fmtGameClock(fb.atSeconds)}.`
+        : fb.isYou === false
+          ? `Your opponent drew first blood at ${fmtGameClock(fb.atSeconds)} — defeat.`
+          : `First blood at ${fmtGameClock(fb.atSeconds)}.`;
+    } else if (ended) {
+      kicker = 'Duel over';
+      title = 'Game over';
+      sub = 'No first blood was seen from this client — waiting for the recorded result.';
+    } else {
+      kicker = 'Duel live';
+      title = 'First blood decides it';
+      sub = 'The winner appears here the moment the kill lands.';
+    }
+  } else if (ended) {
+    decided = view.result !== null;
+    kicker = 'Game over';
+    title = view.result === 'win' ? 'Victory' : view.result === 'loss' ? 'Defeat' : 'Game over';
+    sub = view.result === null
+      ? 'Waiting for the recorded result.'
+      : view.result === 'win' ? 'Your team won.' : 'The enemy team won.';
+  } else {
+    kicker = 'Game in progress';
+    title = 'Playing to the nexus';
+    sub = fb !== null
+      ? `First blood: ${fb.scorer} at ${fmtGameClock(fb.atSeconds)}. The winner appears here when the game ends.`
+      : 'The winner appears here when the game ends.';
+  }
+
+  return (
+    <div style={{ border: `1px solid ${decided ? t.goldBright : t.gold}`, background: t.panel, padding: '18px 22px', marginBottom: 18 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 16 }}>
+        <div style={{ fontSize: 11, color: t.textDim, letterSpacing: '.08em', textTransform: 'uppercase' }}>{kicker}</div>
+        <Dot colour={decided ? t.goldBright : t.gold} />
+      </div>
+      <div style={{ fontFamily: t.display, fontSize: decided ? 26 : 20, color: t.goldBright, marginTop: 6 }}>{title}</div>
+      {sub !== null && <div style={{ fontSize: 13, color: t.text, marginTop: 6, lineHeight: 1.5 }}>{sub}</div>}
+      {decided && (
+        <div style={{ fontSize: 12, color: t.textDim, marginTop: 10 }}>
+          The result is recorded automatically from everyone's reports — nothing to submit.
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** How the RE champ-select timer phase reads to a player. */
 const SELECT_PHASE_TEXT: Record<string, string> = {
   PLANNING: 'Declaring intent',
@@ -193,7 +284,9 @@ function MatchCard({ m }: { m: MyMatch }) {
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 16 }}>
         <div>
           <div style={{ fontFamily: t.display, fontSize: 22, color: t.goldBright }}>{m.tournamentName}</div>
-          <div style={{ fontSize: 13, color: t.textDim, marginTop: 4 }}>{m.roundLabel}</div>
+          <div style={{ fontSize: 13, color: t.textDim, marginTop: 4 }}>
+            {m.roundLabel} &middot; {modeText(m.gameMode)}
+          </div>
         </div>
         <Dot colour={exists ? t.gold : t.red} />
       </div>
@@ -222,9 +315,9 @@ function MatchCard({ m }: { m: MyMatch }) {
         <div style={{ marginTop: 18, paddingTop: 16, borderTop: `1px dashed ${t.line}` }}>
           {m.isHost && byHand && (
             <div style={{ fontSize: 13, color: t.text, marginBottom: 14, lineHeight: 1.5 }}>
-              Make a <strong>custom game</strong> with these exact details. As soon
-              as it exists this app invites the other players for you — leave it
-              running.
+              Make a <strong>custom game</strong> — {modeText(m.gameMode)} — with
+              these exact details. As soon as it exists this app invites the other
+              players for you — leave it running.
             </div>
           )}
           {nobody && (
@@ -242,7 +335,14 @@ function MatchCard({ m }: { m: MyMatch }) {
           <div style={{ display: 'flex', gap: 40 }}>
             <Credential label="Lobby name" value={m.lobbyName} />
             <Credential label="Password" value={m.lobbyPassword} />
+            <Credential label="Game" value={modeShort(m.gameMode)} />
           </div>
+          {isDuel(m.gameMode) && (
+            <div style={{ fontSize: 12, color: t.textDim, marginTop: 12, lineHeight: 1.5 }}>
+              {'◆'} This is a duel: the game is decided by <strong>first blood</strong> —
+              one kill and it&apos;s over.
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -252,6 +352,7 @@ function MatchCard({ m }: { m: MyMatch }) {
 export default function LiveMatchScreen() {
   const b = lol();
   const board = useChampSelect();
+  const live = useLiveGame();
   const { data, loading, error } = useAsync(async () => {
     const r = await b!.listMyMatches();
     if (!r.ok) throw new Error(errText(r));
@@ -259,6 +360,11 @@ export default function LiveMatchScreen() {
   }, [], 10_000);
 
   const matches = data ?? [];
+  // The banner is for THIS tournament's game, not whatever the player queues up
+  // on their own: it only mounts while one of their matches is at a phase where
+  // a game can actually be running (champ select / in game / results pending).
+  const playing = matches.find((m) =>
+    m.lobbyState === 'starting' || m.lobbyState === 'in_game' || m.lobbyState === 'result_pending');
 
   return (
     <div>
@@ -266,6 +372,10 @@ export default function LiveMatchScreen() {
       <h1 style={{ fontFamily: t.display, fontWeight: 700, fontSize: 32, color: t.goldBright, margin: '10px 0 0' }}>Live match</h1>
 
       <div style={{ marginTop: 24 }}><AutomationToggle /></div>
+
+      {live !== null && playing !== undefined && (
+        <LiveGamePanel view={live} duel={isDuel(playing.gameMode)} />
+      )}
 
       {board !== null && <ChampSelectPanel board={board} />}
 

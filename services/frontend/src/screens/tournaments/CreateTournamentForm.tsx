@@ -2,10 +2,17 @@
 // notifies the caller on success so the list can refresh. Uses the shared
 // FormField/TextInput/Button + useAsyncAction for in-flight + error state.
 //
-// The form deliberately exposes EVERY option the backend accepts. It used to ask
-// for name/format/max_teams only, which silently created 5v5 Bo1 tournaments —
-// the game mode is the single most consequential choice here (it decides whether
-// players enrol individually or as teams) and it could not be set at all.
+// The form deliberately exposes every option the backend accepts EXCEPT the
+// bracket format. It used to ask for name/format/max_teams only, which silently
+// created 5v5 Bo1 tournaments — the game mode is the single most consequential
+// choice here (it decides whether players enrol individually or as teams) and it
+// could not be set at all.
+//
+// Bracket format is fixed (owner decision, 2026-08-25): the single/double-
+// elimination question is asked nowhere (web or Discord) — every tournament is a
+// plain knockout bracket. Matches are decided in-game (5v5 at the nexus, 1v1
+// ARAM at first blood). The backend still accepts double_elimination over the
+// API should it ever be wanted back.
 //
 // Creating is also where the join code is minted, and the create response is the
 // ONLY place the API returns it, so the result is shown inline rather than
@@ -16,16 +23,14 @@ import type {
   CreatedTournamentResponse,
   CreateTournamentRequest,
   GameMode,
-  TournamentFormat,
 } from "@lol/clients-ts";
 import { Button, ErrorBanner, FormField, TextInput } from "../../components";
 import { useApi } from "../../api/ApiProvider";
 import { useAsyncAction } from "../../api/useAsync";
+import { REGION_LABELS } from "../../lib/labels";
 
-const FORMATS: ReadonlyArray<{ value: TournamentFormat; label: string }> = [
-  { value: "single_elimination", label: "Single elimination" },
-  { value: "double_elimination", label: "Double elimination" },
-];
+/** Every tournament is a knockout bracket — see the header comment. */
+const KNOCKOUT_FORMAT = "single_elimination" as const;
 
 const MODES: ReadonlyArray<{ value: GameMode; label: string; hint: string }> = [
   {
@@ -46,6 +51,30 @@ const SERIES: ReadonlyArray<{ value: number; label: string }> = [
   { value: 5, label: "Best of 5" },
 ];
 
+// Riot platforms a tournament can be pinned to. Entrants must hold a VERIFIED
+// account on the chosen server (an LCU lobby invite is per-server — an EUW
+// client cannot invite an EUNE player), so the join code bounces anyone who
+// doesn't. EUNE/EUW lead the list (where our guilds live); KR is deliberately
+// absent — Korea is out of scope (compliance) and the backend rejects it.
+const REGIONS: ReadonlyArray<{ value: string; label: string }> = [
+  "eun1",
+  "euw1",
+  "na1",
+  "br1",
+  "la1",
+  "la2",
+  "oc1",
+  "tr1",
+  "ru",
+  "jp1",
+].map((value) => ({
+  value,
+  label: `${value.toUpperCase()} — ${REGION_LABELS[value] ?? value}`,
+}));
+
+/** Pre-selected server — EUNE, where our guilds live. */
+const DEFAULT_REGION = "eun1";
+
 /** `datetime-local` gives "2026-08-01T18:00" (no zone). The API wants UTC ISO,
  *  and the field is labelled UTC, so stamp the zone rather than convert. */
 function toUtcIso(local: string): string | undefined {
@@ -62,9 +91,9 @@ export interface CreateTournamentFormProps {
 export function CreateTournamentForm({ onCreated }: CreateTournamentFormProps): JSX.Element {
   const api = useApi();
   const [name, setName] = useState("");
-  const [format, setFormat] = useState<TournamentFormat>("single_elimination");
   const [gameMode, setGameMode] = useState<GameMode>("summoners_rift_5v5");
   const [bestOf, setBestOf] = useState(1);
+  const [region, setRegion] = useState(DEFAULT_REGION);
   const [maxTeams, setMaxTeams] = useState("8");
   const [opensAt, setOpensAt] = useState("");
   const [startsAt, setStartsAt] = useState("");
@@ -90,18 +119,19 @@ export function CreateTournamentForm({ onCreated }: CreateTournamentFormProps): 
     const startIso = toUtcIso(startsAt);
     const result = await create.run({
       name: trimmedName,
-      format,
+      format: KNOCKOUT_FORMAT,
       game_mode: gameMode,
       best_of: bestOf,
       max_teams: parsedMax,
+      region,
       ...(opensIso ? { registration_opens_at: opensIso } : {}),
       ...(startIso ? { start_at: startIso } : {}),
     });
     setCreated(result);
     setName("");
-    setFormat("single_elimination");
     setGameMode("summoners_rift_5v5");
     setBestOf(1);
+    setRegion(DEFAULT_REGION);
     setMaxTeams("8");
     setOpensAt("");
     setStartsAt("");
@@ -141,23 +171,6 @@ export function CreateTournamentForm({ onCreated }: CreateTournamentFormProps): 
           )}
         </FormField>
 
-        <FormField label="Format" required>
-          {({ inputId, describedBy }) => (
-            <select
-              id={inputId}
-              aria-describedby={describedBy}
-              value={format}
-              onChange={(e) => setFormat(e.target.value as TournamentFormat)}
-            >
-              {FORMATS.map((f) => (
-                <option key={f.value} value={f.value}>
-                  {f.label}
-                </option>
-              ))}
-            </select>
-          )}
-        </FormField>
-
         <FormField label="Series" required hint="Games needed to win a match.">
           {({ inputId, describedBy }) => (
             <select
@@ -169,6 +182,27 @@ export function CreateTournamentForm({ onCreated }: CreateTournamentFormProps): 
               {SERIES.map((s) => (
                 <option key={s.value} value={s.value}>
                   {s.label}
+                </option>
+              ))}
+            </select>
+          )}
+        </FormField>
+
+        <FormField
+          label="Region"
+          required
+          hint="The server it is played on — entrants need a verified account there."
+        >
+          {({ inputId, describedBy }) => (
+            <select
+              id={inputId}
+              aria-describedby={describedBy}
+              value={region}
+              onChange={(e) => setRegion(e.target.value)}
+            >
+              {REGIONS.map((r) => (
+                <option key={r.value} value={r.value}>
+                  {r.label}
                 </option>
               ))}
             </select>

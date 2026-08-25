@@ -105,6 +105,9 @@ export interface CreateTournamentRequest {
   best_of?: number;
   /** 2..16, defaults to 16 server-side. */
   max_teams?: number;
+  /** Riot platform the tournament is played on ('euw1'/'eun1'/...). Entrants
+   *  need a verified account there. Omit = no restriction; 'kr' is rejected. */
+  region?: string;
   ruleset?: Record<string, unknown>;
   /** ISO-8601 UTC. Enrolment is rejected before this instant. */
   registration_opens_at?: string;
@@ -120,6 +123,8 @@ export interface TournamentResponse {
   game_mode: string;
   best_of: number;
   max_teams: number;
+  /** Platform the tournament is played on ('euw1'/'eun1'/...); null = unrestricted. */
+  region: string | null;
   is_shared_to_central: boolean;
   registration_opens_at: string | null;
   start_at: string | null;

@@ -326,6 +326,13 @@ export interface LiveClientKillEvent {
    * winner vote.
    */
   readonly recipient?: string;
+  /**
+   * `Result` — carried by the `GameEnd` event only: `"Win"` / `"Lose"` from the
+   * LOCAL player's perspective (Documented API, same origin). Display-only
+   * downstream (the desktop's live winner banner); corroboration still derives
+   * truth from cross-report agreement, never from one client's verdict.
+   */
+  readonly result?: string;
 }
 
 /** Captured live-client kill stream for one game (corroboration signal). */
@@ -1429,6 +1436,7 @@ export class LcuAdapterImpl implements LcuAdapter {
         const killerName = asOptString<string>(ev['KillerName']);
         const victimName = asOptString<string>(ev['VictimName']);
         const recipient = asOptString<string>(ev['Recipient']);
+        const result = asOptString<string>(ev['Result']);
         return {
           eventId: asNumber(ev['EventID']),
           eventName: typeof ev['EventName'] === 'string' ? ev['EventName'] : '',
@@ -1437,6 +1445,7 @@ export class LcuAdapterImpl implements LcuAdapter {
           ...(victimName !== undefined ? { victimName } : {}),
           ...(assisters.length > 0 ? { assisters } : {}),
           ...(recipient !== undefined ? { recipient } : {}),
+          ...(result !== undefined ? { result } : {}),
         };
       },
     );

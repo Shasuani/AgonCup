@@ -696,6 +696,7 @@ async def initialize_lobby(
         host_puuid=host,
         guild_id=guild_id,
         candidates=candidates,
+        game_mode=game_mode,
         automated=True,
     )
 
@@ -876,6 +877,48 @@ async def republish_lobby_commands(
     )
 
 
+def _mode_text(game_mode: GameMode) -> str:
+    """One display line describing the custom game's shape (PLAN.md §3.6.2).
+
+    This is what tells a human WHICH game to set up or expect — the name and
+    password alone say where to meet, not what is being played. The strings are
+    presentation (they ride the notification plane's whitelisted display-string
+    contract), so they are formatted here in the emitting service, not in
+    ``lol_schemas``. The 1v1 line carries the win rule because a duelist who does
+    not know the game ends at first blood plays a different game entirely.
+    """
+    if game_mode is GameMode.ARAM_1V1:
+        return "1v1 ARAM — Howling Abyss, first blood wins"
+    return "5v5 — Summoner's Rift"
+
+
+async def _opponent_team_name(
+    session: AsyncSession, *, match: Match, host_team_id: uuid.UUID | None
+) -> str | None:
+    """Display name of the side the credential recipient plays AGAINST.
+
+    The DM names the opponent so the creator can tell THIS lobby's invite
+    acceptances from strangers (and, in 1v1, simply knows who they are up
+    against — the solo team's name is the player's). ``None`` — and an omitted
+    embed field — when the recipient's own side is unknown or the bracket slot
+    is not filled, rather than guessing.
+    """
+    if host_team_id is None:
+        return None
+    if host_team_id == match.team_a:
+        other = match.team_b
+    elif host_team_id == match.team_b:
+        other = match.team_a
+    else:
+        return None
+    if other is None:
+        return None
+    # Whole-entity select on purpose: same shape as _invite_candidates, and the
+    # one the offline fake sessions can model (they return rows, not projections).
+    row = (await session.execute(select(Team).where(Team.id == other))).scalar_one_or_none()
+    return row.name if row is not None else None
+
+
 async def _announce_lobby(
     session: AsyncSession,
     *,
@@ -885,6 +928,7 @@ async def _announce_lobby(
     host_puuid: str | None,
     guild_id: uuid.UUID,
     candidates: Sequence[InviteCandidate],
+    game_mode: GameMode,
     automated: bool,
 ) -> None:
     """Tell the humans the lobby exists, and how to reach it by hand.
@@ -930,6 +974,7 @@ async def _announce_lobby(
         names = await _display_names(session, user_ids=[c.user_id for c in candidates])
         host = next((c for c in candidates if c.puuid == host_puuid), None) if host_puuid else None
         tournament_name = await _tournament_name_for_match(session, match=match)
+        mode_text = _mode_text(game_mode)
         notifier = RedisNotificationPublisher(get_redis())
 
         await publish_match_ready(
@@ -937,6 +982,7 @@ async def _announce_lobby(
             origin_guild_id=str(guild_id),
             match_label=_match_label(match),
             host_name=names.get(host.user_id, "the host") if host else "nobody yet",
+            mode_text=mode_text,
         )
 
         if host is None:
@@ -953,7 +999,10 @@ async def _announce_lobby(
             lobby_name=lobby_name,
             lobby_password=lobby_password,
             tournament_name=tournament_name,
-            opponent_name=None,
+            opponent_name=await _opponent_team_name(
+                session, match=match, host_team_id=host.team_id
+            ),
+            mode_text=mode_text,
             automated=automated,
         )
         logger.info(
@@ -1047,6 +1096,7 @@ async def hand_lobby_to_a_leader(
         sessions = await _checked_in_sessions(session, match_id)
         candidates = await _invite_candidates(session, match=match, sessions=sessions)
         creator = pick_lobby_creator(candidates, match=match)
+        game_mode = await _game_mode_for_match_id(session, match_id)
 
         lobby = MatchLobby(
             guild_id=guild_id,
@@ -1068,6 +1118,7 @@ async def hand_lobby_to_a_leader(
                 guild_id=guild_id,
                 lobby=lobby,
                 candidates=candidates,
+                game_mode=game_mode,
                 publisher=publisher,
             )
         await _announce_lobby(
@@ -1078,6 +1129,7 @@ async def hand_lobby_to_a_leader(
             host_puuid=creator.puuid if creator is not None else None,
             guild_id=guild_id,
             candidates=candidates,
+            game_mode=game_mode,
             automated=False,
         )
     except Exception:  # noqa: BLE001 — advisory: a missing DM must not fail a match.
@@ -1091,6 +1143,7 @@ async def _arm_manual_lobby_clients(
     guild_id: uuid.UUID,
     lobby: MatchLobby,
     candidates: Sequence[InviteCandidate],
+    game_mode: GameMode,
     publisher: CommandPublisher,
 ) -> None:
     """Publish the invite + auto-accept commands behind a hand-made lobby.
@@ -1109,7 +1162,7 @@ async def _arm_manual_lobby_clients(
             guild_id=guild_id,
             lobby=lobby,
             candidates=candidates,
-            game_mode=await _game_mode_for_match_id(session, match_id),
+            game_mode=game_mode,
             publisher=publisher,
             include_create=False,
         )
@@ -1333,6 +1386,10 @@ class MyMatch:
     host_name: str | None
     #: True when THIS caller's client is the designated host.
     is_host: bool
+    #: The tournament's game shape (``GameMode`` value) — what tells the client
+    #: screen to say "1v1 ARAM, first blood wins" vs "5v5 Summoner's Rift", and
+    #: the live-game panel which win rule to watch for.
+    game_mode: str
 
 
 async def list_my_matches(session: AsyncSession, *, user_id: uuid.UUID) -> list[MyMatch]:
@@ -1401,6 +1458,7 @@ async def list_my_matches(session: AsyncSession, *, user_id: uuid.UUID) -> list[
                 lobby_password=lobby.lobby_password if lobby is not None else None,
                 host_name=host_name,
                 is_host=lobby is not None and lobby.host_puuid == row.puuid,
+                game_mode=(await _game_mode_for_match_id(session, match.id)).value,
             )
         )
     return out

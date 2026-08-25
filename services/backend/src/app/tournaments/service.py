@@ -896,6 +896,9 @@ async def check_in(
         )
     reg.status = RegistrationStatus.CHECKED_IN
     await session.flush()
+    # This flip may have been the last one an unscheduled tournament was waiting
+    # on — the admin unblocking a no-show is exactly the moment it can begin.
+    await maybe_autostart_tournament(session, tournament_id=tournament_id)
     return reg
 
 
@@ -1105,6 +1108,10 @@ async def check_in_self(
     if roster and all(uid in locked for uid in roster):
         reg.status = RegistrationStatus.CHECKED_IN
     await session.flush()
+    if reg.status == RegistrationStatus.CHECKED_IN:
+        # The team just became (or already was) ready — if that completed an
+        # unscheduled tournament's full, all-locked-in field, it starts itself.
+        await maybe_autostart_tournament(session, tournament_id=tournament_id)
     return reg
 
 
@@ -1363,3 +1370,68 @@ async def start_tournament(session: AsyncSession, *, tournament_id: uuid.UUID) -
         rounds=rounds,
         byes=byes,
     )
+
+
+async def maybe_autostart_tournament(
+    session: AsyncSession, *, tournament_id: uuid.UUID
+) -> StartResult | None:
+    """Start an **unscheduled** tournament the moment its last entrant locks in.
+
+    PLAN.md §3.2 gives a scheduled tournament a kickoff clock; an unscheduled one
+    (``start_at IS NULL``) has neither a clock nor a reason to wait on an admin.
+    The moment the field is **full** (``max_teams`` registrations) and **every**
+    one of them is CHECKED_IN — i.e. every rostered player pressed lock-in — the
+    bracket can only ever be drawn from exactly these teams, so it is drawn now.
+
+    Called from the two lock-in flip sites (:func:`check_in_self` and the admin
+    :func:`check_in` override) so every entry point — desktop, SPA, bot bridge —
+    behaves the same. Joining never triggers it (a fresh registration lands
+    PENDING and un-fills nothing). Deliberately conservative:
+
+    * A **scheduled** tournament is untouched: its kickoff (and the admin)
+      governs, exactly as before.
+    * A partially-filled field never auto-starts, even fully locked in — another
+      team may be mid-join; the admin can still start early by hand.
+    * The tournament row is read ``FOR UPDATE`` so two players locking in at the
+      same instant serialize; the race's loser re-reads RUNNING and no-ops, so a
+      double bracket is impossible.
+
+    Returns the :class:`StartResult` when it started the tournament, else None.
+    """
+    tournament = (
+        await session.execute(
+            select(Tournament).where(Tournament.id == tournament_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    if tournament is None or tournament.start_at is not None:
+        return None
+    if tournament.status not in (
+        TournamentStatus.DRAFT,
+        TournamentStatus.OPEN,
+        TournamentStatus.CHECK_IN,
+    ):
+        return None
+
+    regs = (
+        (
+            await session.execute(
+                select(Registration).where(Registration.tournament_id == tournament_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    # < 2 guards the max_teams=1 corner: a bracket needs two sides regardless.
+    if len(regs) < max(tournament.max_teams, 2):
+        return None
+    if any(r.status != RegistrationStatus.CHECKED_IN for r in regs):
+        return None
+
+    result = await start_tournament(session, tournament_id=tournament_id)
+    # The other half of starting: hand the round-one matches to their players.
+    # Same composition as the manual start endpoints (SPA + bot); imported lazily
+    # for the same reason orchestration lazy-imports readiness — a module cycle.
+    from app.orchestration.service import open_started_tournament  # noqa: PLC0415
+
+    await open_started_tournament(session, tournament_id=tournament_id)
+    return result

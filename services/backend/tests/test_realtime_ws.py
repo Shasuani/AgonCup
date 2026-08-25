@@ -671,7 +671,10 @@ async def test_inbound_report_persists_result_report_row() -> None:
     assert row.match_id == match_id
     assert row.guild_id == _GUILD  # tenant-stamped from the authorized subscription.
     assert row.lcu_game_id == "game-123"
-    assert row.reporter_puuid == "puuid-A"
+    # Reporter identity is stamped SERVER-SIDE from the subscription's own
+    # ClientSession.puuid — never trusted from the payload (identity-bound
+    # counting, §3.6.6). The payload claimed "puuid-A"; the roster row wins.
+    assert row.reporter_puuid == "puuid-1"
     assert row.source == ResultSource.EOG_STATS_BLOCK
     assert row.claimed_winner_team is None  # winner->team mapping is the adjudicator's job.
     # KDA is flattened by PUUID; the player line without a PUUID is dropped.
@@ -706,6 +709,96 @@ async def test_inbound_report_persist_is_idempotent_first_write_wins() -> None:
 
     # Unique on (lcu_game_id, reporter_puuid, source) -> exactly one row, not two.
     assert len(store[ResultReport]) == 1
+
+
+def _live_client_report(*, lcu_game_id: str = "game-777") -> dict[str, Any]:
+    """The MID-GAME first-blood duel report (source liveClientData, §3.6.4).
+
+    Exactly as the desktop sends it: `teams` is empty (no eog block exists — the
+    game is still running) and `reporterPuuid` is blank (the client does not know
+    its canonical PUUID; the hub stamps it from the subscription).
+    """
+    return {
+        "source": "liveClientData",
+        "lcuGameId": lcu_game_id,
+        "reporterPuuid": "",
+        "teams": [],
+        "liveClientEvents": {
+            "source": "liveClientData",
+            "events": [
+                {"eventId": 2, "eventName": "ChampionKill", "eventTime": 83.1, "killerName": "A"},
+                {"eventId": 3, "eventName": "FirstBlood", "eventTime": 83.1, "recipient": "A"},
+            ],
+            "schemaVersion": "0.0.0-phase0",
+        },
+        "schemaVersion": "0.0.0-phase0",
+        "capturedAtMs": 1234567890,
+    }
+
+
+@pytest.mark.asyncio
+async def test_inbound_first_blood_report_persists_live_client_row() -> None:
+    """A duel's mid-game report lands as a LIVE_CLIENT_DATA row + ends the lobby.
+
+    First blood decides the 1v1 (GameMode.decides_on_first_blood): the desktop
+    reports the moment the deciding kill shows in the kill stream, while the
+    game client is still running. The hub must (a) advance the lobby exactly
+    like an eog report, (b) persist under ResultSource.LIVE_CLIENT_DATA, and
+    (c) stamp the reporter from the subscription since the payload carries none.
+    """
+    match_id = uuid.uuid4()
+    lobby = _lobby(match_id, host_epoch=0, state=LobbyPhase.IN_GAME)
+    store = _store(_participant(match_id), lobby)
+    ws = FakeWebSocket(
+        token=_token(),
+        inbound=[
+            json.dumps({"type": "subscribe", "matchId": str(match_id)}),
+            json.dumps(
+                {"type": "report", "report": {"hostEpoch": 0, "report": _live_client_report()}}
+            ),
+        ],
+    )
+    await hub.serve(
+        ws, session_factory=_session_factory(store), pubsub_factory=lambda: FakePubSub()
+    )
+
+    assert lobby.state == LobbyPhase.RESULT_PENDING
+    assert len(store[ResultReport]) == 1
+    row = store[ResultReport][0]
+    assert row.source == ResultSource.LIVE_CLIENT_DATA
+    assert row.lcu_game_id == "game-777"
+    assert row.reporter_puuid == "puuid-1"  # server-stamped; payload was blank.
+    assert row.reported_kda == {}  # no scoreboard exists mid-game.
+    names = [e["eventName"] for e in row.kill_stream["events"]]
+    assert "FirstBlood" in names
+
+
+@pytest.mark.asyncio
+async def test_inbound_eog_report_with_blank_reporter_still_persists() -> None:
+    """Regression: the real desktop sends `reporterPuuid: ""` in its eog report.
+
+    Before the server-side stamp, a blank payload reporter was dropped as
+    `missing_join_keys` — so NO real desktop report ever persisted and the
+    corroboration quorum starved. The subscription's ClientSession.puuid now
+    supplies the identity instead.
+    """
+    match_id = uuid.uuid4()
+    lobby = _lobby(match_id, host_epoch=0, state=LobbyPhase.IN_GAME)
+    store = _store(_participant(match_id), lobby)
+    body = _eog_report(reporter="")
+    ws = FakeWebSocket(
+        token=_token(),
+        inbound=[
+            json.dumps({"type": "subscribe", "matchId": str(match_id)}),
+            json.dumps({"type": "report", "report": {"hostEpoch": 0, "report": body}}),
+        ],
+    )
+    await hub.serve(
+        ws, session_factory=_session_factory(store), pubsub_factory=lambda: FakePubSub()
+    )
+
+    assert len(store[ResultReport]) == 1
+    assert store[ResultReport][0].reporter_puuid == "puuid-1"
 
 
 @pytest.mark.asyncio

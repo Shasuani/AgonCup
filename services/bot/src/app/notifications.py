@@ -104,6 +104,8 @@ def _build_embed(kind: str, payload: dict[str, Any]) -> dict[str, Any] | None:
             lobby_password=payload.get("lobby_password", "?"),
             tournament_name=payload.get("tournament_name", "your tournament"),
             opponent_name=payload.get("opponent_name"),
+            # The game's shape (mode / map / win rule) — absent on old envelopes.
+            mode_text=payload.get("mode_text"),
             # Absent on envelopes published before the flag existed; those all
             # came from the automated path, so True is the correct old meaning.
             automated=payload.get("automated", True) is not False,
@@ -119,6 +121,7 @@ def _build_embed(kind: str, payload: dict[str, Any]) -> dict[str, Any] | None:
             is_host=False,
             lobby_name=payload.get("lobby_name"),
             lobby_password=payload.get("lobby_password"),
+            mode_text=payload.get("mode_text"),
         )
     if kind == "result_recorded":
         return match_result(

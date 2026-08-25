@@ -66,6 +66,9 @@ class MyMatchResponse(BaseModel):
     lobby_password: str | None = None
     host_name: str | None = None
     is_host: bool = False
+    #: ``GameMode`` value ("summoners_rift_5v5" / "aram_1v1") — drives the client
+    #: screen's mode line and the live first-blood/winner panel.
+    game_mode: str = "summoners_rift_5v5"
 
 
 @router.get(
@@ -101,6 +104,7 @@ async def list_my_matches(
             lobby_password=m.lobby_password,
             host_name=m.host_name,
             is_host=m.is_host,
+            game_mode=m.game_mode,
         )
         for m in rows
     ]

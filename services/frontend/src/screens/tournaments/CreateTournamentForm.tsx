@@ -27,6 +27,7 @@ import type {
 import { Button, ErrorBanner, FormField, TextInput } from "../../components";
 import { useApi } from "../../api/ApiProvider";
 import { useAsyncAction } from "../../api/useAsync";
+import { REGION_LABELS } from "../../lib/labels";
 
 /** Every tournament is a knockout bracket — see the header comment. */
 const KNOCKOUT_FORMAT = "single_elimination" as const;
@@ -50,6 +51,30 @@ const SERIES: ReadonlyArray<{ value: number; label: string }> = [
   { value: 5, label: "Best of 5" },
 ];
 
+// Riot platforms a tournament can be pinned to. Entrants must hold a VERIFIED
+// account on the chosen server (an LCU lobby invite is per-server — an EUW
+// client cannot invite an EUNE player), so the join code bounces anyone who
+// doesn't. EUNE/EUW lead the list (where our guilds live); KR is deliberately
+// absent — Korea is out of scope (compliance) and the backend rejects it.
+const REGIONS: ReadonlyArray<{ value: string; label: string }> = [
+  "eun1",
+  "euw1",
+  "na1",
+  "br1",
+  "la1",
+  "la2",
+  "oc1",
+  "tr1",
+  "ru",
+  "jp1",
+].map((value) => ({
+  value,
+  label: `${value.toUpperCase()} — ${REGION_LABELS[value] ?? value}`,
+}));
+
+/** Pre-selected server — EUNE, where our guilds live. */
+const DEFAULT_REGION = "eun1";
+
 /** `datetime-local` gives "2026-08-01T18:00" (no zone). The API wants UTC ISO,
  *  and the field is labelled UTC, so stamp the zone rather than convert. */
 function toUtcIso(local: string): string | undefined {
@@ -68,6 +93,7 @@ export function CreateTournamentForm({ onCreated }: CreateTournamentFormProps): 
   const [name, setName] = useState("");
   const [gameMode, setGameMode] = useState<GameMode>("summoners_rift_5v5");
   const [bestOf, setBestOf] = useState(1);
+  const [region, setRegion] = useState(DEFAULT_REGION);
   const [maxTeams, setMaxTeams] = useState("8");
   const [opensAt, setOpensAt] = useState("");
   const [startsAt, setStartsAt] = useState("");
@@ -97,6 +123,7 @@ export function CreateTournamentForm({ onCreated }: CreateTournamentFormProps): 
       game_mode: gameMode,
       best_of: bestOf,
       max_teams: parsedMax,
+      region,
       ...(opensIso ? { registration_opens_at: opensIso } : {}),
       ...(startIso ? { start_at: startIso } : {}),
     });
@@ -104,6 +131,7 @@ export function CreateTournamentForm({ onCreated }: CreateTournamentFormProps): 
     setName("");
     setGameMode("summoners_rift_5v5");
     setBestOf(1);
+    setRegion(DEFAULT_REGION);
     setMaxTeams("8");
     setOpensAt("");
     setStartsAt("");
@@ -154,6 +182,27 @@ export function CreateTournamentForm({ onCreated }: CreateTournamentFormProps): 
               {SERIES.map((s) => (
                 <option key={s.value} value={s.value}>
                   {s.label}
+                </option>
+              ))}
+            </select>
+          )}
+        </FormField>
+
+        <FormField
+          label="Region"
+          required
+          hint="The server it is played on — entrants need a verified account there."
+        >
+          {({ inputId, describedBy }) => (
+            <select
+              id={inputId}
+              aria-describedby={describedBy}
+              value={region}
+              onChange={(e) => setRegion(e.target.value)}
+            >
+              {REGIONS.map((r) => (
+                <option key={r.value} value={r.value}>
+                  {r.label}
                 </option>
               ))}
             </select>

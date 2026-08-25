@@ -46,6 +46,25 @@ _SIZE_OPTIONS = [
     discord.SelectOption(label=f"{n} teams", value=str(n))
     for n in range(_MIN_TEAMS, _MAX_TEAMS + 1)
 ]
+# Riot platform the tournament is played on. Entrants must hold a VERIFIED account
+# on it (an LCU lobby invite is per-server — an EUW client cannot invite an EUNE
+# player), so the join code bounces anyone who doesn't. EUNE/EUW lead the list
+# (where our guilds live); KR is deliberately absent (out of scope — compliance).
+_REGION_LABELS: dict[str, str] = {
+    "eun1": "EUNE",
+    "euw1": "EUW",
+    "na1": "NA",
+    "br1": "BR",
+    "la1": "LAN",
+    "la2": "LAS",
+    "oc1": "OCE",
+    "tr1": "TR",
+    "ru": "RU",
+    "jp1": "JP",
+}
+_REGION_OPTIONS = [
+    discord.SelectOption(label=label, value=value) for value, label in _REGION_LABELS.items()
+]
 
 
 def _parse_utc(value: str | None) -> str | None:
@@ -68,31 +87,34 @@ def _parse_utc(value: str | None) -> str | None:
 
 @dataclass(frozen=True, slots=True)
 class TournamentBasics:
-    """The four required settings, carried from the first form to the second."""
+    """The five required settings, carried from the first form to the second."""
 
     name: str
     max_teams: int
     game_mode: str
     best_of: int
+    region: str
 
 
 class BasicsModal(discord.ui.Modal, title="New tournament — settings"):
-    """Form 1: the four REQUIRED settings.
+    """Form 1: the five REQUIRED settings.
 
     Why a modal rather than slash options: as slash options the admin answers them
     one prompt at a time in the command bar, with no way to review or correct an
-    earlier answer before sending. A modal shows all four at once, and the three
-    dropdowns (``required=True``) make size/mode/series unmissable and untypoable.
+    earlier answer before sending. A modal shows all five at once, and the four
+    dropdowns (``required=True``) make size/mode/series/region unmissable and
+    untypoable.
 
     These are exactly the settings the web console's create form asks for, so a
     tournament made here and one made there are the same object. Bracket format is
     deliberately NOT asked, here or on the web: every tournament is a knockout
     bracket (see ``_KNOCKOUT_FORMAT``).
 
-    Discord caps a modal at 5 components — this sits at 4, and the two optional
-    scheduling fields still live in a second form (:class:`ScheduleModal`) reached
-    from :class:`ScheduleView`: a modal cannot be opened directly from a modal
-    submit.
+    Discord caps a modal at 5 components — this now sits exactly AT the cap, so
+    the next required setting must displace one of these into a follow-up view.
+    The two optional scheduling fields still live in a second form
+    (:class:`ScheduleModal`) reached from :class:`ScheduleView`: a modal cannot be
+    opened directly from a modal submit.
     """
 
     def __init__(self, *, cog: TournamentAdminCog) -> None:
@@ -112,6 +134,9 @@ class BasicsModal(discord.ui.Modal, title="New tournament — settings"):
         self.series_select: discord.ui.Select[BasicsModal] = discord.ui.Select(
             options=_SERIES_OPTIONS, required=True
         )
+        self.region_select: discord.ui.Select[BasicsModal] = discord.ui.Select(
+            options=_REGION_OPTIONS, required=True
+        )
         self.add_item(discord.ui.Label(text="Tournament name", component=self.name_input))
         self.add_item(
             discord.ui.Label(
@@ -128,6 +153,13 @@ class BasicsModal(discord.ui.Modal, title="New tournament — settings"):
                 component=self.series_select,
             )
         )
+        self.add_item(
+            discord.ui.Label(
+                text="Region",
+                description="The server it is played on — players need a verified account there.",
+                component=self.region_select,
+            )
+        )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         basics = TournamentBasics(
@@ -135,12 +167,14 @@ class BasicsModal(discord.ui.Modal, title="New tournament — settings"):
             max_teams=int(self.size_select.values[0]),
             game_mode=self.mode_select.values[0],
             best_of=int(self.series_select.values[0]),
+            region=self.region_select.values[0],
         )
         await interaction.response.send_message(
             embed=info_embed(
                 "Step 2 — scheduling (optional)",
                 f"**{basics.name}** · {basics.max_teams} teams · "
-                f"`{basics.game_mode}` · Bo{basics.best_of}\n\n"
+                f"`{basics.game_mode}` · Bo{basics.best_of} · "
+                f"{_REGION_LABELS.get(basics.region, basics.region.upper())}\n\n"
                 "Add registration/start times, or skip and set them later.",
             ),
             view=ScheduleView(cog=self._cog, basics=basics),
@@ -271,18 +305,25 @@ class TournamentAdminCog(commands.Cog):
                 format=_KNOCKOUT_FORMAT,
                 game_mode=basics.game_mode,
                 best_of=basics.best_of,
+                region=basics.region,
                 registration_opens_at=registration_opens_at,
                 start_at=start_at,
             )
         except BackendError as exc:
             await interaction.followup.send(embed=error_embed(exc), ephemeral=True)
             return
+        region_value = t.get("region")
         embed = embed_from(
             tournament_created(
                 name=t["name"],
                 tournament_id=str(t.get("id", "")),
                 mode=t.get("game_mode"),
                 best_of=t.get("best_of"),
+                region=(
+                    _REGION_LABELS.get(region_value, str(region_value).upper())
+                    if region_value
+                    else None
+                ),
             )
         )
         join_code = t.get("join_code")

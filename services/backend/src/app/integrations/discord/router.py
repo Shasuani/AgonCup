@@ -196,6 +196,10 @@ class TournamentCreateRequest(BaseModel):
     format: TournamentFormat = TournamentFormat.SINGLE_ELIMINATION
     game_mode: GameMode = GameMode.SUMMONERS_RIFT_5V5
     best_of: int = Field(default=1, description="Series length: 1, 3, or 5.")
+    # Riot platform the tournament is played on ("euw1"/"eun1"/...). Defaulted so
+    # an older bot build (which sent no region) keeps creating unrestricted
+    # tournaments; KR is rejected by the service (out of scope).
+    region: str | None = None
     registration_opens_at: datetime | None = None
     start_at: datetime | None = None
 
@@ -235,6 +239,8 @@ class TournamentResponse(BaseModel):
     game_mode: str
     best_of: int
     max_teams: int
+    #: Platform the tournament is played on ("euw1"/"eun1"/...); None = unrestricted.
+    region: str | None = None
     is_shared_to_central: bool
     # The shareable join code the admin hands to players (they redeem it in the
     # desktop client). Surfaced only to the service-token bot, never to users.
@@ -261,6 +267,7 @@ def _tournament_response(t: Tournament) -> TournamentResponse:
         game_mode=_enum_value(t.game_mode),
         best_of=t.best_of,
         max_teams=t.max_teams,
+        region=t.region,
         is_shared_to_central=t.is_shared_to_central,
         join_code=t.join_code,
     )
@@ -566,6 +573,7 @@ async def create_tournament(body: TournamentCreateRequest) -> TournamentResponse
                 format=body.format,
                 game_mode=body.game_mode,
                 best_of=body.best_of,
+                region=body.region,
                 registration_opens_at=body.registration_opens_at,
                 start_at=body.start_at,
             )
@@ -609,6 +617,10 @@ async def join_tournament(body: TournamentJoinRequest) -> RegistrationResponse:
         except teams_service.TeamNotFoundError as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="team not found") from exc
         except tournaments_service.TournamentFullError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        except tournaments_service.RegionAccountRequiredError as exc:
+            # Region-locked tournament: somebody on the roster has no verified
+            # account on its platform. str(exc) already names them + the region.
             raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
         except (
             tournaments_service.RegistrationClosedError,

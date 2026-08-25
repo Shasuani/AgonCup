@@ -276,6 +276,7 @@ async def create_tournament(
     format: TournamentFormat = TournamentFormat.SINGLE_ELIMINATION,
     game_mode: GameMode = GameMode.SUMMONERS_RIFT_5V5,
     best_of: int = 1,
+    region: str | None = None,
     registration_opens_at: datetime | None = None,
     start_at: datetime | None = None,
 ) -> Tournament:
@@ -288,6 +289,7 @@ async def create_tournament(
         format=format,
         game_mode=game_mode,
         best_of=best_of,
+        region=region,
         registration_opens_at=registration_opens_at,
         start_at=start_at,
     )

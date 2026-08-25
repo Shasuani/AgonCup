@@ -95,6 +95,7 @@ def _fill_basics(
     size: str = "8",
     mode: str = "summoners_rift_5v5",
     series: str = "1",
+    region: str = "eun1",
 ) -> ScheduleView:
     """Run the slash command, fill form 1 and submit it; return the step-2 view."""
     asyncio.run(cog.create.callback(cog, interaction))
@@ -103,6 +104,7 @@ def _fill_basics(
     modal.size_select._values = [size]
     modal.mode_select._values = [mode]
     modal.series_select._values = [series]
+    modal.region_select._values = [region]
     asyncio.run(modal.on_submit(interaction))
     view = interaction.response.send_message.await_args.kwargs["view"]
     assert isinstance(view, ScheduleView)
@@ -143,6 +145,7 @@ def test_tournament_create_shows_join_code() -> None:
     assert kwargs["format"] == "single_elimination"
     assert kwargs["game_mode"] == "summoners_rift_5v5"
     assert kwargs["best_of"] == 1
+    assert kwargs["region"] == "eun1"
     embed = _sent_embed(interaction)
     blob = " ".join((f.name or "") + (f.value or "") for f in embed.fields)
     assert "ABCD2345" in blob
@@ -169,6 +172,7 @@ def test_tournament_create_asks_everything_in_a_form() -> None:
         "Bracket size",
         "Game mode",
         "Series length",
+        "Region",
     ]
     assert all(label.component.required for label in labels)
     # Discord's hard cap on a modal is 5 — further settings belong in the schedule form.
@@ -177,6 +181,11 @@ def test_tournament_create_asks_everything_in_a_form() -> None:
     assert [o.value for o in modal.size_select.options] == [str(n) for n in range(2, 17)]
     assert [o.value for o in modal.mode_select.options] == ["summoners_rift_5v5", "aram_1v1"]
     assert [o.value for o in modal.series_select.options] == ["1", "3", "5"]
+    # Region is REQUIRED (every tournament lives on one server — LCU invites are
+    # per-server) and KR is unpickable: Korea is out of scope (compliance).
+    region_values = [o.value for o in modal.region_select.options]
+    assert "eun1" in region_values and "euw1" in region_values
+    assert "kr" not in region_values
 
 
 def test_tournament_create_always_sends_the_knockout_format() -> None:
@@ -214,6 +223,7 @@ def test_basics_form_hands_off_to_the_optional_schedule_form() -> None:
         max_teams=16,
         game_mode="summoners_rift_5v5",
         best_of=3,
+        region="eun1",
     )
     assert [b.label for b in view.children] == ["Add dates…", "Skip — create now"]
 
@@ -247,6 +257,7 @@ def test_schedule_modal_fields_are_optional_and_labelled() -> None:
             max_teams=8,
             game_mode="aram_1v1",
             best_of=1,
+            region="eun1",
         ),
     )
     fields = [modal.registration_opens, modal.starts]

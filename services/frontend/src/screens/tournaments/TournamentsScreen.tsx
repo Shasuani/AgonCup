@@ -23,6 +23,7 @@ import {
   TOURNAMENT_STATUS_LABELS,
   entrantsText,
   label as labelFor,
+  regionName,
   seriesShort,
 } from "../../lib/labels";
 import { RoleGate } from "../../auth/RequireRole";
@@ -178,6 +179,14 @@ function TournamentsBody(): JSX.Element {
     },
     { id: "format", header: "Format", cell: (t) => labelFor(FORMAT_LABELS_SHORT, t.format) },
     { id: "best_of", header: "Series", cell: (t) => seriesShort(t.best_of) },
+    {
+      id: "region",
+      header: "Region",
+      // Raw code as the visible text (matches the accounts roster), full server
+      // name as the tooltip. "—" = created before regions / unrestricted.
+      cell: (t) =>
+        t.region ? <span title={regionName(t.region)}>{t.region.toUpperCase()}</span> : "—",
+    },
     {
       id: "max_teams",
       header: "Size",

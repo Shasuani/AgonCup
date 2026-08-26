@@ -713,6 +713,8 @@ const LCU_PATHS = {
   currentSummoner: '/lol-summoner/v1/current-summoner',
   /** `RE` — current custom-lobby handle (idempotency probe before create). */
   lobby: '/lol-lobby/v2/lobby',
+  /** `RE` — queue catalogue; resolves the custom queue id a create must name. */
+  queues: '/lol-game-queues/v1/queues',
   /** `RE` — batched invitations endpoint (§3.6.3). */
   invitations: '/lol-lobby/v2/lobby/invitations',
   /** `RE` — invites addressed to THIS client, polled for auto-accept (§3.6.3). */
@@ -739,6 +741,59 @@ export class LcuResponseError extends Error {
 
 /** A presence probe that always reports present (real wiring injects a real one). */
 const ALWAYS_PRESENT: PresenceProbe = { isPresent: () => true };
+
+/**
+ * `RE` — fallback custom queue ids per game mode (League client 16.16, EUN1).
+ *
+ * Patch ~16.x made `POST /lol-lobby/v2/lobby` REQUIRE a top-level `queueId`
+ * naming one of the `/lol-game-queues/v1/queues` "Custom" entries; the old
+ * `isCustom` + `customGameLobby`-only payload now dies with `INVALID_LOBBY`
+ * ("couldn't find controller for queue type: -1" in the client log). Blind-pick
+ * customs sort lowest in each family: 3100 = SR Blind Pick Custom, 3200 =
+ * Howling Abyss Blind Custom. Used only when the live catalogue read fails.
+ */
+const CUSTOM_QUEUE_FALLBACK: Record<'CLASSIC' | 'ARAM', number> = {
+  CLASSIC: 3100,
+  ARAM: 3200,
+};
+
+/**
+ * Pick the custom queue id for a lobby configuration from the LIVE queue
+ * catalogue (`GET /lol-game-queues/v1/queues`).
+ *
+ * Matches on the structural fields only — `category === 'Custom'`, availability,
+ * `gameMode`, `mapId` — never on `description`, which is localized per client
+ * locale and therefore useless as an anchor. Of the matching family (blind /
+ * draft / all-random / tournament-draft) the LOWEST id is the blind-pick queue
+ * on every observed platform, which matches the spec's `mutators.id: 1` (blind)
+ * — the only mutator the backend ever sends today. Returns `undefined` when the
+ * catalogue holds no match (caller falls back to {@link CUSTOM_QUEUE_FALLBACK}).
+ */
+export function resolveCustomQueueId(
+  queues: unknown,
+  config: CustomGameConfiguration,
+): number | undefined {
+  if (!Array.isArray(queues)) {
+    return undefined;
+  }
+  const candidates: number[] = [];
+  for (const raw of queues) {
+    const q = asRecord(raw);
+    if (
+      q['category'] === 'Custom' &&
+      q['queueAvailability'] === 'Available' &&
+      q['gameMode'] === config.gameMode &&
+      q['mapId'] === config.mapId &&
+      typeof q['id'] === 'number'
+    ) {
+      candidates.push(q['id']);
+    }
+  }
+  if (candidates.length === 0) {
+    return undefined;
+  }
+  return Math.min(...candidates);
+}
 
 /**
  * How often an armed guest re-reads its own received invitations.
@@ -970,8 +1025,15 @@ export class LcuAdapterImpl implements LcuAdapter {
         };
       }
 
+      // `RE` — the current client (16.x) refuses a create without a top-level
+      // `queueId` naming a Custom catalogue queue ("couldn't find controller
+      // for queue type: -1"). Resolve it from the live catalogue — a READ, so
+      // ungated — and fall back to the pinned ids if the read/shape drifts.
+      const queueId = await this.#resolveCustomQueueId(spec.configuration);
+
       // `RE` — create payload per §3.6.2 (verbatim, backend-owned spec).
       const payload = {
+        queueId,
         isCustom: true,
         customGameLobby: {
           configuration: {
@@ -1002,6 +1064,28 @@ export class LcuAdapterImpl implements LcuAdapter {
       }
       return { lobbyId, lobbyName: spec.lobbyName, hostEpoch: spec.hostEpoch };
     });
+  }
+
+  /**
+   * Resolve the custom queue id for this configuration from the live catalogue,
+   * falling back to {@link CUSTOM_QUEUE_FALLBACK} when the read fails or the
+   * catalogue holds no structural match (see {@link resolveCustomQueueId}).
+   * READ-ONLY — never gated, never throws.
+   */
+  async #resolveCustomQueueId(config: CustomGameConfiguration): Promise<number> {
+    try {
+      const res = await this.#lcuRequest('GET', LCU_PATHS.queues);
+      if (res.status >= 200 && res.status < 300) {
+        const resolved = resolveCustomQueueId(res.json, config);
+        if (resolved !== undefined) {
+          return resolved;
+        }
+      }
+    } catch {
+      // League unreadable mid-create: the POST below will surface the real
+      // failure; the pinned id at least gives it a valid payload to fail with.
+    }
+    return CUSTOM_QUEUE_FALLBACK[config.gameMode];
   }
 
   // -- getCurrentLobby ------------------------------------------------------

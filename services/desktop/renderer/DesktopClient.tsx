@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { theme as t, keyframesCss } from './theme';
+import { theme as t, keyframesCss, chromeStyle, dragRegion, noDrag, isMac, TRAFFIC_LIGHT_INSET, TITLE_BAR_HEIGHT } from './theme';
 import { lol, useAsync, useLcuStatus, type BridgeUser, type LcuStatus } from './bridge';
 import HomeScreen from './screens/HomeScreen';
 import LiveMatchScreen from './screens/LiveMatchScreen';
@@ -46,20 +46,19 @@ export default function DesktopClient({ user, onSignOut }: { user: BridgeUser | 
       <style>{keyframesCss}</style>
 
       {/* Title bar */}
-      <div style={{ height: 44, flexShrink: 0, background: 'linear-gradient(180deg,#0a1626,#06101c)', borderBottom: `1px solid ${t.line}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 18px' }}>
+      <div style={{ ...chromeStyle, ...dragRegion, height: TITLE_BAR_HEIGHT, flexShrink: 0, background: 'linear-gradient(180deg,#0a1626,#06101c)', borderBottom: `1px solid ${t.line}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: `0 18px 0 ${isMac ? TRAFFIC_LIGHT_INSET : 18}px` }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <span style={{ color: t.gold, fontSize: 14 }}>{'◆'}</span>
           <span style={{ fontFamily: t.display, fontWeight: 600, fontSize: 15, letterSpacing: '.14em', color: t.goldBright }}>LEAGUE<span style={{ color: t.gold }}>OF</span>LEAGUES</span>
-          <span style={{ fontSize: 11, letterSpacing: '.16em', color: t.textDim, textTransform: 'uppercase', borderLeft: `1px solid ${t.line}`, paddingLeft: 12 }}>Desktop Client · v3</span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+        <div style={{ ...noDrag, display: 'flex', alignItems: 'center', gap: 16 }}>
           <LcuBadge status={lcu} />
         </div>
       </div>
 
       <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
         {/* Sidebar */}
-        <div style={{ width: 250, flexShrink: 0, background: 'linear-gradient(180deg,#0a1626,#070f1a)', borderRight: `1px solid ${t.line}`, display: 'flex', flexDirection: 'column', padding: '22px 0' }}>
+        <div style={{ ...chromeStyle, width: 250, flexShrink: 0, background: 'linear-gradient(180deg,#0a1626,#070f1a)', borderRight: `1px solid ${t.line}`, display: 'flex', flexDirection: 'column', padding: '22px 0' }}>
           <div style={{ padding: '0 22px 22px' }}>
             <div style={{ fontSize: 11, letterSpacing: '.22em', textTransform: 'uppercase', color: t.textDim }}>Signed in via Discord</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 14 }}>

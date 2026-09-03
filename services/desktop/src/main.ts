@@ -1179,6 +1179,13 @@ async function bootstrap(): Promise<void> {
       minHeight: 720,
       title: "LeagueOfLeagues — Desktop",
       backgroundColor: "#010a13",
+      // macOS: drop the native grey title bar and let the traffic lights sit
+      // inside the renderer's own 44px title bar (which is the drag region —
+      // see `dragRegion` in renderer/theme.ts). y = (44 - 12) / 2 centres the
+      // 12px buttons vertically. Windows/Linux keep their native frame.
+      ...(process.platform === "darwin"
+        ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: { x: 18, y: 16 } }
+        : {}),
       webPreferences: {
         contextIsolation: true,
         nodeIntegration: false,

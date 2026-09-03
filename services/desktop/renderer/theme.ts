@@ -1,4 +1,5 @@
 // LeagueOfLeagues — hextech theme tokens (desktop renderer).
+import type { CSSProperties } from 'react';
 // Fonts are loaded from bundled/system fallbacks only — the Electron CSP
 // (default-src 'self') blocks CDN font fetches, so Cinzel/Barlow degrade to
 // the serif/sans fallbacks below. Inline styles are allowed (style-src 'unsafe-inline').
@@ -22,6 +23,23 @@ export const theme = {
   body: "'Barlow', 'Helvetica Neue', Helvetica, Arial, sans-serif",
   mono: "ui-monospace, 'SF Mono', Menlo, monospace",
 } as const;
+
+/** True under the macOS build, where the native title bar is hidden
+ *  (`titleBarStyle: 'hiddenInset'` in main.ts) and the traffic lights sit
+ *  inside our own title bar — the bar needs a left inset for them. */
+export const isMac = typeof navigator !== 'undefined' && navigator.userAgent.includes('Macintosh');
+/** Width reserved on the left of the title bar for the macOS traffic lights. */
+export const TRAFFIC_LIGHT_INSET = 94;
+/** Height of the in-app title bar (also the drag strip on the pair screen). */
+export const TITLE_BAR_HEIGHT = 44;
+
+/** Chrome (title bar, sidebar) is not selectable text — dragging the window
+ *  must never leave a text-selection highlight behind. */
+export const chromeStyle = { userSelect: 'none', WebkitUserSelect: 'none' } as CSSProperties;
+/** Marks an element as a window drag handle (frameless macOS title bar). */
+export const dragRegion = { WebkitAppRegion: 'drag' } as CSSProperties;
+/** Opt an interactive child out of the drag region so it stays clickable. */
+export const noDrag = { WebkitAppRegion: 'no-drag' } as CSSProperties;
 
 export const keyframesCss = `
 @keyframes llBlink { 0%,100%{opacity:1;} 50%{opacity:.35;} }

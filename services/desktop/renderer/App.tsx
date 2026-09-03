@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { theme as t } from './theme';
+import { theme as t, chromeStyle, dragRegion, TITLE_BAR_HEIGHT } from './theme';
 import { lol, type BridgeUser } from './bridge';
 import { Spinner } from './ui';
 import PairScreen from './PairScreen';
@@ -40,16 +40,32 @@ export default function App() {
     return () => { offAuthLost(); offRestored(); };
   }, []);
 
+  let screen: React.ReactNode;
   if (state === 'loading') {
-    return (
+    screen = (
       <div style={{ width: '100vw', height: '100vh', background: t.bg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <Spinner size={28} />
       </div>
     );
-  }
-  if (state === 'offline') return <OfflineScreen name={user?.displayName ?? null} />;
-  if (state === 'signed-out') return <PairScreen onPaired={() => void loadSession()} />;
-  return <DesktopClient user={user} onSignOut={() => setState('signed-out')} />;
+  } else if (state === 'offline') screen = <OfflineScreen name={user?.displayName ?? null} />;
+  else if (state === 'signed-out') screen = <PairScreen onPaired={() => void loadSession()} />;
+  else screen = <DesktopClient user={user} onSignOut={() => setState('signed-out')} />;
+
+  return (
+    <>
+      <DragStrip />
+      {screen}
+    </>
+  );
+}
+
+/** The native title bar is hidden on macOS (`hiddenInset`), so the top band of
+ * EVERY screen must be a window drag handle — otherwise the boot / offline /
+ * pair screens leave the window stuck in place. Chromium builds drag regions
+ * from layout rects, so this transparent fixed strip works even when a screen
+ * paints over it; interactive controls in that band opt out with `noDrag`. */
+function DragStrip() {
+  return <div aria-hidden style={{ ...chromeStyle, ...dragRegion, position: 'fixed', top: 0, left: 0, right: 0, height: TITLE_BAR_HEIGHT, zIndex: 0 }} />;
 }
 
 /** Shown while we hold a session the backend cannot confirm yet. Deliberately

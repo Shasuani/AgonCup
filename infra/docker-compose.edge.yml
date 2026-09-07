@@ -29,6 +29,10 @@ services:
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./sites:/etc/caddy/sites:ro
+      # Desktop client installers + electron-updater feed, served at
+      # https://<domain>/downloads/ (see the site block in .gitlab-ci.yml).
+      # Filled by infra/publish-desktop.sh — plain files, no container restart.
+      - ./downloads:/srv/downloads:ro
       # Certificates + OCSP staples. LOSING THIS VOLUME MEANS RE-ISSUING CERTS,
       # and Let's Encrypt rate-limits that (5 duplicate certs per week).
       - ./data/caddy:/data

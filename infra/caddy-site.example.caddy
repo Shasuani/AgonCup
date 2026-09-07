@@ -26,6 +26,15 @@ lol.example.com {
 		reverse_proxy lol-prod-backend:8000
 	}
 
+	# Desktop installers + electron-updater feed (latest*.yml): plain files from
+	# <DEPLOY_PATH>/edge/downloads, mounted read-only into Caddy and filled by
+	# infra/publish-desktop.sh. The SPA's download buttons and the installed
+	# clients' update checks both read from here.
+	handle_path /downloads/* {
+		root * /srv/downloads
+		file_server
+	}
+
 	# Everything else is the admin SPA. Its nginx does the SPA fallback, so deep
 	# links and refreshes resolve to index.html.
 	handle {

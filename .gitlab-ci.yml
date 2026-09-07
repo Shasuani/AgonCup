@@ -432,6 +432,15 @@ security:images:
           reverse_proxy lol-$STACK-backend:8000
         }
 
+        # Desktop installers + the electron-updater feed (latest*.yml), served
+        # straight off the edge host from <DEPLOY_PATH>/edge/downloads (mounted
+        # read-only into Caddy). infra/publish-desktop.sh puts the files there;
+        # no image rebuild or redeploy is needed to ship a client version.
+        handle_path /downloads/* {
+          root * /srv/downloads
+          file_server
+        }
+
         # Everything else: the admin SPA (nginx does the SPA fallback).
         handle {
           reverse_proxy lol-$STACK-frontend:80
@@ -447,7 +456,7 @@ security:images:
       EOF
 
     # --- ship it -------------------------------------------------------------
-    - ssh -p "$SSH_PORT" "$SSH_TARGET" "mkdir -p '$APP_DIR/data/postgres' '$APP_DIR/data/redis' '$APP_DIR/backups' '$EDGE_DIR/sites' '$EDGE_DIR/data/caddy' '$EDGE_DIR/config/caddy'"
+    - ssh -p "$SSH_PORT" "$SSH_TARGET" "mkdir -p '$APP_DIR/data/postgres' '$APP_DIR/data/redis' '$APP_DIR/backups' '$EDGE_DIR/sites' '$EDGE_DIR/data/caddy' '$EDGE_DIR/config/caddy' '$EDGE_DIR/downloads'"
     - scp -P "$SSH_PORT" /tmp/app.env "$SSH_TARGET:$APP_DIR/.env"
     - scp -P "$SSH_PORT" /tmp/overrides.env "$SSH_TARGET:$APP_DIR/.overrides.env"
     - scp -P "$SSH_PORT" /tmp/registry.env "$SSH_TARGET:$APP_DIR/.registry.env"

@@ -103,6 +103,39 @@ docker compose -f infra/docker-compose.yml config
 This parses and renders the fully-resolved config (no containers started). Use it
 in review to confirm the YAML and keys are valid.
 
+## Desktop client downloads + auto-update (`publish-desktop.sh`)
+
+The installers are **not** part of any image or pipeline. They are plain files
+in `<DEPLOY_PATH>/edge/downloads` on the server, which the edge Caddy serves at
+`https://lol.gameras.gr/downloads/` (site block in `.gitlab-ci.yml`, mounted
+read-only by `docker-compose.edge.yml`). The SPA's two download buttons and the
+installed clients' update checks both read from there.
+
+Ship a version, from a Mac (Node 22, SSH access as the deploy user):
+
+```bash
+# 1. bump "version" in services/desktop/package.json
+# 2. build both installers and upload them
+infra/publish-desktop.sh            # add --no-build to re-upload an existing release/
+```
+
+That produces one universal `.dmg` (Intel + Apple Silicon), one Windows `.exe`,
+and the electron-updater feed files (`latest.yml`, `latest-mac.yml`), uploads
+them, and points the stable names the site links at
+(`LeagueOfLeagues.dmg`, `LeagueOfLeagues-Setup.exe`) at the new build.
+
+What installed clients do (`services/desktop/src/updater.ts`):
+
+| OS | On a new version in the feed |
+|----|------------------------------|
+| Windows | Downloads it in the background, asks to restart; "Later" installs on quit. |
+| macOS | Shows a prompt that opens the `.dmg` — the build is unsigned, and macOS will not self-update an unsigned app. |
+
+Until the client is signed (Apple Developer ID + notarization, the beta-gate
+item in `docs/compliance-checklist.md`), first-time Mac installs also need
+System Settings → Privacy & Security → **Open Anyway**; Windows shows a
+SmartScreen "More info → Run anyway" once.
+
 ## CI (`.github/workflows/ci.yml`)
 
 | Job | What it does |

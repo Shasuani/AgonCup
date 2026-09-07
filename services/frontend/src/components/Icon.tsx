@@ -32,7 +32,8 @@ export type IconName =
   | "bell"
   | "plus"
   | "check"
-  | "alert";
+  | "alert"
+  | "download";
 
 export interface IconProps
   extends Omit<SVGProps<SVGSVGElement>, "name" | "children"> {
@@ -183,6 +184,14 @@ const PATHS: Record<IconName, () => JSX.Element> = {
       <path d="M12 4 2.5 20.5h19L12 4Z" />
       <path d="M12 10v4" />
       <path d="M12 17.5h.01" />
+    </>
+  ),
+  // Arrow into a tray.
+  download: () => (
+    <>
+      <path d="M12 4v11" />
+      <path d="m7.5 10.5 4.5 4.5 4.5-4.5" />
+      <path d="M4 16.5v2A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5v-2" />
     </>
   ),
 };

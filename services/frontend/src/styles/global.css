@@ -394,12 +394,16 @@ nav[aria-label="Primary"] a.active {
 /* -------------------------------------------------------------------------
    Buttons
    ------------------------------------------------------------------------- */
-button[data-variant] {
+/* <a data-variant> is a link that must look like a button — the installer
+   downloads, which are real navigations, not actions. Same rules, no
+   underline; :not(:disabled) is simply always true for an anchor. */
+:is(button, a)[data-variant] {
   position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
+  text-decoration: none;
   /* Was ~30px tall with 13px text — small flat controls are the single
      clearest "cheap" tell. Now a proper 36px control that matches inputs. */
   min-height: var(--control-h);
@@ -418,7 +422,7 @@ button[data-variant] {
   white-space: nowrap;
 }
 
-button[data-variant="primary"] {
+:is(button, a)[data-variant="primary"] {
   /* A gradient + a colored shadow, so the primary action reads as raised and
      lit rather than as a flat swatch. */
   background: linear-gradient(180deg, var(--primary-hover), var(--primary));
@@ -429,7 +433,7 @@ button[data-variant="primary"] {
     0 4px 14px rgba(109, 92, 246, 0.28);
 }
 
-button[data-variant="primary"]:hover:not(:disabled) {
+:is(button, a)[data-variant="primary"]:hover:not(:disabled) {
   background: linear-gradient(180deg, #8b7bfa, var(--primary-hover));
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.2),
@@ -437,61 +441,61 @@ button[data-variant="primary"]:hover:not(:disabled) {
     0 6px 20px rgba(109, 92, 246, 0.38);
 }
 
-button[data-variant="primary"]:active:not(:disabled) {
+:is(button, a)[data-variant="primary"]:active:not(:disabled) {
   transform: translateY(1px);
   box-shadow:
     inset 0 1px 2px rgba(0, 0, 0, 0.28),
     0 1px 2px rgba(0, 0, 0, 0.4);
 }
 
-button[data-variant="secondary"] {
+:is(button, a)[data-variant="secondary"] {
   background: var(--elevate), var(--surface-alt);
   color: var(--text);
   border-color: var(--border);
   box-shadow: inset 0 1px 0 var(--hairline), var(--shadow-xs);
 }
 
-button[data-variant="secondary"]:hover:not(:disabled) {
+:is(button, a)[data-variant="secondary"]:hover:not(:disabled) {
   border-color: var(--border-strong);
   background: var(--elevate), #1f222c;
 }
 
-button[data-variant="secondary"]:active:not(:disabled) {
+:is(button, a)[data-variant="secondary"]:active:not(:disabled) {
   transform: translateY(1px);
 }
 
-button[data-variant="danger"] {
+:is(button, a)[data-variant="danger"] {
   background: rgba(248, 113, 113, 0.06);
   color: var(--danger);
   border-color: rgba(248, 113, 113, 0.42);
 }
 
-button[data-variant="danger"]:hover:not(:disabled) {
+:is(button, a)[data-variant="danger"]:hover:not(:disabled) {
   background: rgba(248, 113, 113, 0.14);
   border-color: rgba(248, 113, 113, 0.65);
 }
 
-button[data-variant="danger"]:active:not(:disabled) {
+:is(button, a)[data-variant="danger"]:active:not(:disabled) {
   transform: translateY(1px);
 }
 
-button[data-variant]:focus-visible {
+:is(button, a)[data-variant]:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
   box-shadow: var(--shadow-focus);
 }
 
-button[data-variant]:disabled {
+:is(button, a)[data-variant]:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
 /* Busy state: keep box size, hide label, show centered ring. */
-button[data-variant][aria-busy="true"] {
+:is(button, a)[data-variant][aria-busy="true"] {
   color: transparent;
 }
 
-button[data-variant][aria-busy="true"]::after {
+:is(button, a)[data-variant][aria-busy="true"]::after {
   content: "";
   position: absolute;
   width: 16px;
@@ -502,17 +506,17 @@ button[data-variant][aria-busy="true"]::after {
   animation: lol-spin 0.7s linear infinite;
 }
 
-button[data-variant="primary"][aria-busy="true"]::after {
+:is(button, a)[data-variant="primary"][aria-busy="true"]::after {
   border-color: rgba(255, 255, 255, 0.4);
   border-top-color: var(--on-primary);
 }
 
-button[data-variant="secondary"][aria-busy="true"]::after {
+:is(button, a)[data-variant="secondary"][aria-busy="true"]::after {
   border-color: var(--border);
   border-top-color: var(--primary);
 }
 
-button[data-variant="danger"][aria-busy="true"]::after {
+:is(button, a)[data-variant="danger"][aria-busy="true"]::after {
   border-color: rgba(248, 113, 113, 0.3);
   border-top-color: var(--danger);
 }
@@ -1255,7 +1259,7 @@ p[role="alert"][data-field-error]::before {
   margin-bottom: var(--space-3);
 }
 
-[data-login] [data-dev-login] button[data-variant] {
+[data-login] [data-dev-login] :is(button, a)[data-variant] {
   width: 100%;
 }
 
@@ -1264,6 +1268,57 @@ p[role="alert"][data-field-error]::before {
   color: var(--danger);
   font-size: 0.8125rem;
   font-weight: 500;
+}
+
+/* -------------------------------------------------------------------------
+   Desktop client downloads (<DownloadClient>)
+   ------------------------------------------------------------------------- */
+/* Two anchor-buttons side by side; the visitor's own OS is the primary one.
+   Below the sign-in card it is ruled off like the dev block; on the dashboard
+   it is a panel of its own. */
+[data-download-client] h2 {
+  margin: 0 0 var(--space-2);
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+[data-download-client-copy] {
+  margin: 0 0 var(--space-4);
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+[data-download-client-buttons] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+[data-download-client-buttons] a[data-variant] {
+  flex: 1 1 180px;
+}
+
+[data-download-client-note] {
+  margin: var(--space-3) 0 0;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+[data-login] [data-download-client] {
+  margin-top: var(--space-5);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border);
+  text-align: left;
+}
+
+[data-dashboard-downloads] {
+  margin-top: var(--space-6);
+  padding: var(--space-5);
+  background: var(--elevate), var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: inset 0 1px 0 var(--hairline), var(--shadow-sm);
 }
 
 /* -------------------------------------------------------------------------
@@ -1923,7 +1978,7 @@ dd {
   }
 
   /* Busy button ring: static 3/4 ring, no spin. */
-  button[data-variant][aria-busy="true"]::after {
+  :is(button, a)[data-variant][aria-busy="true"]::after {
     animation: none !important;
     border-top-color: currentColor;
   }

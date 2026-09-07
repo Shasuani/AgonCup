@@ -5,6 +5,14 @@
 # does NOT collide with the TypeScript `dist/` (tsc rootDir output) and matches
 # the CI artifact glob (services/desktop/release/**).
 #
+# AUTO-UPDATE: `publish` below is what makes electron-builder write latest.yml
+# (Windows) and latest-mac.yml (macOS) next to the installers, and bake an
+# app-update.yml into the app so electron-updater knows the feed. The feed is a
+# plain directory on the site — https://lol.gameras.gr/downloads/ — filled by
+# infra/publish-desktop.sh. Nothing is ever uploaded BY electron-builder (the
+# `dist` scripts pass --publish never); the generic provider is read-only.
+# See src/updater.ts for what each platform does with the feed.
+#
 # SIGNING is driven entirely by CI env / secrets — there is NOTHING secret in
 # this file:
 #   - macOS:   electron-builder reads CSC_LINK (base64 .p12) + CSC_KEY_PASSWORD
@@ -37,13 +45,27 @@ files:
 electronLanguages:
   - en-US
 
+# The update feed (read-only generic provider; see the header). The URL must
+# match the /downloads/ route the edge Caddy serves — .gitlab-ci.yml site block.
+publish:
+  - provider: generic
+    url: https://lol.gameras.gr/downloads
+
 mac:
   category: public.app-category.utilities
+  # ONE universal .dmg (Intel + Apple Silicon) instead of one per arch: the
+  # website gets a single "Download for Mac" button and no player has to know
+  # which chip they have. The zip is what latest-mac.yml describes (Squirrel.Mac
+  # updates from a zip, never a dmg); it is NOT uploaded while the build is
+  # unsigned — src/updater.ts only checks the feed on macOS.
   target:
     - target: dmg
       arch:
-        - x64
-        - arm64
+        - universal
+    - target: zip
+      arch:
+        - universal
+  artifactName: ${productName}-${version}-${arch}.${ext}
   # Hardened runtime is required for notarization; entitlements live under build/.
   hardenedRuntime: true
   gatekeeperAssess: false
@@ -59,6 +81,9 @@ win:
     - target: nsis
       arch:
         - x64
+  # No spaces (electron-builder's default is "Name Setup 1.0.0.exe"): this name
+  # goes into latest.yml and into URLs.
+  artifactName: ${productName}-Setup-${version}.${ext}
 
 nsis:
   oneClick: false

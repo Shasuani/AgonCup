@@ -85,6 +85,8 @@ import { SettingsStore } from "./settingsStore.js";
 import { LcuStatusPoller, type LcuStatus } from "./lcu/statusPoller.js";
 import { ChampSelectPoller, type ChampSelectView } from "./lcu/champSelectPoller.js";
 import { LiveGamePoller, type LiveGameView } from "./lcu/liveGamePoller.js";
+import { resolveServerUrls } from "./serverUrls.js";
+import { wireAutoUpdate, type AutoUpdateHandle } from "./updater.js";
 
 /** Default heartbeat cadence while pre-game/in-game (PLAN.md §3.6.1 ~2-3s). */
 const DEFAULT_HEARTBEAT_MS = 2_500;
@@ -602,7 +604,12 @@ function isMainEntry(): boolean {
   return typeof versions?.["electron"] === "string";
 }
 
-/** Resolve the backend base URL from env or the dev default. */
+/**
+ * The backend base URL. `bootstrap()` seeds `BACKEND_URL` from
+ * {@link resolveServerUrls} before anything reads it, so this — and the
+ * per-module fallbacks in auth/, accounts/, teams/, tournaments/ that read the
+ * same variable — all agree on one origin.
+ */
 function backendBaseUrl(): string {
   return process.env["BACKEND_URL"] ?? "http://localhost:8000";
 }
@@ -615,7 +622,7 @@ function backendBaseUrl(): string {
  */
 async function bootstrap(): Promise<void> {
   // Imported lazily so `electron` is never required during a unit-test import.
-  const { app, BrowserWindow, ipcMain, safeStorage } = await import("electron");
+  const { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } = await import("electron");
   const path = await import("node:path");
   const fsp = await import("node:fs/promises");
   const fs = await import("node:fs");
@@ -624,8 +631,13 @@ async function bootstrap(): Promise<void> {
     console.log(`[desktop] ${event}`, detail);
   };
 
-  const realtimeUrl =
-    process.env["REALTIME_URL"] ?? "ws://localhost:8000/api/v1/realtime/ws";
+  // An installed build defaults to production, `electron .` to localhost, an
+  // explicit env var wins. Seeded into the env because every backend module's
+  // own fallback reads BACKEND_URL — this is the one place it gets decided.
+  const urls = resolveServerUrls({ isPackaged: app.isPackaged, env: process.env });
+  process.env["BACKEND_URL"] = urls.backendUrl;
+  const realtimeUrl = urls.realtimeUrl;
+  log("server_urls", { ...urls, packaged: app.isPackaged });
 
   // Encrypted-at-rest refresh-token store under userData (never plaintext).
   const userData = app.getPath("userData");
@@ -1264,6 +1276,52 @@ async function bootstrap(): Promise<void> {
   champSelectPoller.start();
   liveGamePoller.start();
 
+  // --- auto-update (installed builds only) ---------------------------------- //
+  // `electron .` has no app-update.yml and nothing to update to; electron-updater
+  // is also loaded lazily here so a unit-test import never pulls it in.
+  let updates: AutoUpdateHandle | null = null;
+  if (app.isPackaged) {
+    // electron-updater is CommonJS whose `autoUpdater` is a lazy getter, which
+    // Node's ESM named-export detection cannot see — so read it off `default`.
+    const updaterModule = await import("electron-updater");
+    const autoUpdater = updaterModule.default.autoUpdater;
+    autoUpdater.logger = {
+      info: (m: unknown) => log("updater", { info: String(m) }),
+      warn: (m: unknown) => log("updater", { warn: String(m) }),
+      error: (m: unknown) => log("updater", { error: String(m) }),
+      debug: () => {},
+    };
+    const ask = async (title: string, message: string, detail: string, yes: string) => {
+      const opts = { type: "info" as const, title, message, detail, buttons: [yes, "Later"], defaultId: 0, cancelId: 1 };
+      const { response } =
+        mainWindow !== null ? await dialog.showMessageBox(mainWindow, opts) : await dialog.showMessageBox(opts);
+      return response === 0;
+    };
+    updates = wireAutoUpdate({
+      updater: autoUpdater,
+      platform: process.platform,
+      downloadsUrl: urls.downloadsUrl,
+      scheduler: SYSTEM_SCHEDULER,
+      askRestart: (version) =>
+        ask(
+          "Update ready",
+          `LeagueOfLeagues ${version} is ready to install.`,
+          "It takes a few seconds and the app reopens by itself. In a match right now? Choose Later — it installs when you close the app.",
+          "Restart now",
+        ),
+      askDownload: (version) =>
+        ask(
+          "Update available",
+          `LeagueOfLeagues ${version} is available.`,
+          "Download the new version, open the .dmg and drag it into Applications to replace this one.",
+          "Download",
+        ),
+      openExternal: (url) => void shell.openExternal(url),
+      log,
+    });
+    updates.start();
+  }
+
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow();
   });
@@ -1272,6 +1330,7 @@ async function bootstrap(): Promise<void> {
     poller.stop();
     champSelectPoller.stop();
     liveGamePoller.stop();
+    updates?.stop();
     if (process.platform !== "darwin") app.quit();
   });
 }

@@ -11,7 +11,7 @@
 # plain directory on the site — https://lol.gameras.gr/downloads/ — filled by
 # infra/publish-desktop.sh. Nothing is ever uploaded BY electron-builder (the
 # `dist` scripts pass --publish never); the generic provider is read-only.
-# See src/updater.ts for what each platform does with the feed.
+# See src/update/ for what each platform does with the feed.
 #
 # SIGNING is driven entirely by CI env / secrets — there is NOTHING secret in
 # this file:
@@ -55,9 +55,10 @@ mac:
   category: public.app-category.utilities
   # ONE universal .dmg (Intel + Apple Silicon) instead of one per arch: the
   # website gets a single "Download for Mac" button and no player has to know
-  # which chip they have. The zip is what latest-mac.yml describes (Squirrel.Mac
-  # updates from a zip, never a dmg); it is NOT uploaded while the build is
-  # unsigned — src/updater.ts only checks the feed on macOS.
+  # which chip they have. The zip is what latest-mac.yml describes and what an
+  # installed Mac client downloads to update itself (src/update/installers.ts
+  # verifies its SHA-512 from the feed, unpacks it and swaps the bundle —
+  # Squirrel.Mac would refuse an unsigned one). publish-desktop.sh uploads it.
   target:
     - target: dmg
       arch:

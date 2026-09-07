@@ -447,6 +447,21 @@ h1, h2, h3, p { margin: 0; }
 .ll-countdown--live { color: ${t.teal}; }
 
 /* ------------------------------------------------------------ progress ---- */
+.ll-update { display: flex; align-items: center; gap: 16px; padding: 10px 18px 10px 20px; border-bottom: 1px solid rgba(200, 170, 110, 0.35); background: linear-gradient(90deg, rgba(200, 170, 110, 0.16), rgba(10, 200, 185, 0.06) 70%, transparent); flex-shrink: 0; animation: ll-fade-in 240ms ease; }
+.ll-update--required { border-bottom-color: rgba(240, 200, 110, 0.6); background: linear-gradient(90deg, rgba(200, 170, 110, 0.26), rgba(196, 74, 74, 0.1)); }
+.ll-update--failed { border-bottom-color: rgba(196, 74, 74, 0.45); background: linear-gradient(90deg, rgba(196, 74, 74, 0.14), transparent); }
+.ll-update__icon { width: 34px; height: 34px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; color: ${t.goldBright}; background: rgba(200, 170, 110, 0.12); border: 1px solid rgba(200, 170, 110, 0.35); flex-shrink: 0; }
+.ll-update--failed .ll-update__icon { color: #ffb3b3; border-color: rgba(196, 74, 74, 0.45); background: rgba(196, 74, 74, 0.1); }
+.ll-update__body { flex: 1; min-width: 0; }
+.ll-update__title { font-family: ${t.display}; font-weight: 700; font-size: 14px; letter-spacing: 0.04em; color: ${t.textStrong}; }
+.ll-update__sub { font-size: 12.5px; color: ${t.textDim}; margin-top: 2px; }
+.ll-update__bar { margin-top: 7px; max-width: 360px; }
+.ll-update__actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.ll-version { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; font-size: 11.5px; color: ${t.textDim}; }
+.ll-version__tag { font-family: ${t.mono}; letter-spacing: 0.04em; }
+.ll-version__note { color: ${t.teal}; }
+.ll-version__note--err { color: #ffb3b3; }
+@keyframes ll-fade-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 .ll-progress { height: 6px; border-radius: 3px; background: rgba(200, 170, 110, 0.1); overflow: hidden; }
 .ll-progress > span { display: block; height: 100%; border-radius: 3px; background: linear-gradient(90deg, ${t.goldDim}, ${t.gold}); transition: width 300ms ease; }
 .ll-progress--teal > span { background: linear-gradient(90deg, #0a7d76, ${t.teal}); }

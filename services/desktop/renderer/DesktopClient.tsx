@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { chromeStyle, dragRegion, noDrag, isMac, TRAFFIC_LIGHT_INSET, TITLE_BAR_HEIGHT } from './theme';
-import { lol, useAsync, useLcuStatus, type BridgeUser, type LcuStatus } from './bridge';
+import { lol, useAsync, useLcuStatus, useUpdateState, type BridgeUser, type LcuStatus } from './bridge';
+import UpdateBanner, { VersionLine, updateNeedsAttention } from './UpdateBanner';
 import { Icon, BrandMark, type IconName } from './icons';
 import { Button, Dot } from './ui';
 import { ProfileIcon } from './champion';
@@ -50,6 +51,12 @@ export default function DesktopClient({ user, onSignOut }: { user: BridgeUser | 
   const profileIconId = summoner.data?.profileIconId ?? profile.data?.profileIconId ?? null;
   const level = summoner.data?.summonerLevel ?? profile.data?.summonerLevel ?? null;
 
+  // Self-update: the banner shows whenever the main process says a version is
+  // pending; "Later" hides it for that version only (never for a required one).
+  const update = useUpdateState();
+  const [laterFor, setLaterFor] = useState<string | null>(null);
+  const showUpdate = updateNeedsAttention(update) && (update.required || laterFor !== update.latest);
+
   const acc = (accounts.data ?? [])[0];
   const riotId = summoner.data?.gameName && summoner.data?.tagLine
     ? `${summoner.data.gameName}#${summoner.data.tagLine}`
@@ -72,6 +79,8 @@ export default function DesktopClient({ user, onSignOut }: { user: BridgeUser | 
           <LcuBadge status={lcu} />
         </div>
       </div>
+
+      {showUpdate && <UpdateBanner state={update} onLater={() => setLaterFor(update.latest)} />}
 
       <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
         {/* Sidebar */}
@@ -108,6 +117,7 @@ export default function DesktopClient({ user, onSignOut }: { user: BridgeUser | 
                 <Dot tone="teal" size={6} pulse={(presence.data ?? 0) > 0} /> {presence.data ?? 0} in game
               </span>
             </div>
+            <VersionLine state={update} onShowUpdate={() => setLaterFor(null)} />
             <Button size="sm" block icon="logout" onClick={signOut}>Sign out</Button>
           </div>
         </aside>

@@ -124,12 +124,22 @@ and the electron-updater feed files (`latest.yml`, `latest-mac.yml`), uploads
 them, and points the stable names the site links at
 (`LeagueOfLeagues.dmg`, `LeagueOfLeagues-Setup.exe`) at the new build.
 
-What installed clients do (`services/desktop/src/updater.ts`):
+What installed clients do (`services/desktop/src/update/`): 10 s after start
+and every 30 minutes they ask the backend `GET /api/v1/desktop/version?platform=…&version=…`
+(which reads `latest.yml` / `latest-mac.yml` from `/downloads/`, cached 5 min).
+A newer version triggers a native "Update available" notification plus an
+in-app banner, and the package is fetched in the background:
 
-| OS | On a new version in the feed |
-|----|------------------------------|
-| Windows | Downloads it in the background, asks to restart; "Later" installs on quit. |
-| macOS | Shows a prompt that opens the `.dmg` — the build is unsigned, and macOS will not self-update an unsigned app. |
+| OS | How it installs |
+|----|-----------------|
+| Windows | electron-updater downloads the `.exe` from the feed; "Restart now" installs silently and relaunches; "Later" installs when the app quits. |
+| macOS | The client downloads the universal `.zip`, verifies its SHA-512 against `latest-mac.yml`, unpacks it and (on "Restart now") a detached script swaps `/Applications/LeagueOfLeagues.app` and relaunches. A copy still running from the mounted `.dmg` is sent to the manual download instead. |
+
+Backend knobs (`services/backend/.env`): `DESKTOP_DOWNLOADS_URL` (default
+`<FRONTEND_BASE_URL>/downloads`), `DESKTOP_DOWNLOADS_DIR` (read the feed from a
+mounted directory instead), `DESKTOP_MINIMUM_VERSION` (older clients see the
+update as *required* — no "Later"), `DESKTOP_LATEST_VERSION` (override for
+staging), `DESKTOP_FEED_CACHE_SECONDS` (default 300).
 
 Until the client is signed (Apple Developer ID + notarization, the beta-gate
 item in `docs/compliance-checklist.md`), first-time Mac installs also need

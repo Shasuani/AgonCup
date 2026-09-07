@@ -416,6 +416,16 @@ export interface LolBridge {
   myHistory(): Promise<HistoryBridgeResult>;
   /** The last summoner icon/level this device saw (works with League closed). */
   getProfile(): Promise<ProfileBridgeResult>;
+  /** The self-update state (current version, latest, phase, progress). */
+  getUpdateState(): Promise<UpdateStateBridge>;
+  /** Ask the backend now ("Check for updates"); resolves with the new state. */
+  checkForUpdates(): Promise<UpdateStateBridge>;
+  /** Download (if needed) and install the update; the app restarts itself. */
+  installUpdate(): Promise<UpdateStateBridge>;
+  /** Subscribe to update-state changes. Returns an unsubscribe function. */
+  onUpdate(callback: (state: UpdateStateBridge) => void): () => void;
+  /** Open an http(s) link in the system browser (the manual installer). */
+  openExternal(url: string): Promise<{ ok: true } | { ok: false; detail: string }>;
   /** Is this session allowed to drive the League client (lobby writes)? */
   getAutomation(): Promise<AutomationBridgeResult>;
   /** Grant/revoke that permission for this session only (never persisted). */
@@ -434,6 +444,29 @@ export interface LolBridge {
   /** Subscribe to "a background retry got the session back" events, so a screen
    * showing "reconnecting…" can leave it. Returns an unsubscribe function. */
   onSessionRestored(callback: () => void): () => void;
+}
+
+/** Mirror of `UpdateState` in src/update/coordinator.ts (keep in sync). */
+export interface UpdateStateBridge {
+  current: string;
+  platform: string;
+  supported: boolean;
+  phase:
+    | "idle"
+    | "checking"
+    | "up_to_date"
+    | "unknown"
+    | "available"
+    | "downloading"
+    | "ready"
+    | "installing"
+    | "failed";
+  latest: string | null;
+  required: boolean;
+  downloadUrl: string | null;
+  progress: number | null;
+  error: string | null;
+  lastCheckedAt: string | null;
 }
 
 const bridge: LolBridge = {
@@ -491,6 +524,16 @@ const bridge: LolBridge = {
   presence: () => ipcRenderer.invoke("lol:presence") as Promise<PresenceBridgeResult>,
   myHistory: () => ipcRenderer.invoke("lol:history-mine") as Promise<HistoryBridgeResult>,
   getProfile: () => ipcRenderer.invoke("lol:profile-get") as Promise<ProfileBridgeResult>,
+  getUpdateState: () => ipcRenderer.invoke("lol:update-state") as Promise<UpdateStateBridge>,
+  checkForUpdates: () => ipcRenderer.invoke("lol:update-check") as Promise<UpdateStateBridge>,
+  installUpdate: () => ipcRenderer.invoke("lol:update-install") as Promise<UpdateStateBridge>,
+  onUpdate: (callback) => {
+    const listener = (_event: unknown, state: UpdateStateBridge): void => callback(state);
+    ipcRenderer.on("lol:update", listener);
+    return () => ipcRenderer.removeListener("lol:update", listener);
+  },
+  openExternal: (url) =>
+    ipcRenderer.invoke("lol:open-external", { url }) as Promise<{ ok: true } | { ok: false; detail: string }>,
   getAutomation: () => ipcRenderer.invoke("lol:automation-get") as Promise<AutomationBridgeResult>,
   setAutomation: (enabled) =>
     ipcRenderer.invoke("lol:automation-set", { enabled }) as Promise<AutomationBridgeResult>,

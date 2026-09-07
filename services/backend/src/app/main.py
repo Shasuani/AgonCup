@@ -21,6 +21,7 @@ from app.accounts.router import router as accounts_router
 from app.audit.router import router as audit_router
 from app.auth.router import router as auth_router
 from app.config import get_settings
+from app.desktop.router import router as desktop_router
 from app.federation.router import router as federation_router
 from app.integrations.discord.router import router as discord_bridge_router
 from app.lifecycle.router import router as lifecycle_router
@@ -170,6 +171,7 @@ def create_app() -> FastAPI:
         orchestration_router,
         presence_router,
         results_router,
+        desktop_router,
         audit_router,
         realtime_router,
         lifecycle_router,

@@ -173,6 +173,36 @@ class Settings(BaseSettings):
     )
 
     # --- Riot (Account-V1 personal key only; NO Tournament API) -------------
+    # --- Desktop client releases (``GET /desktop/version``) --------------------
+    desktop_downloads_url: str = Field(
+        default="",
+        description="Origin+path the installers and the electron-builder feed files "
+        "(latest.yml / latest-mac.yml) are served from, no trailing slash. Empty = "
+        "<frontend_base_url>/downloads (the edge Caddy's /downloads/ route).",
+    )
+    desktop_downloads_dir: str = Field(
+        default="",
+        description="Optional local directory holding the same feed files (mount "
+        "edge/downloads read-only into the backend). When set it is read instead of "
+        "fetching desktop_downloads_url over HTTP.",
+    )
+    desktop_minimum_version: str = Field(
+        default="",
+        description="Oldest client version still allowed to run. Older clients are told "
+        "the update is REQUIRED (the client hides 'Later'). Empty = no minimum.",
+    )
+    desktop_latest_version: str = Field(
+        default="",
+        description="Override for the latest client version (skips reading the feed). "
+        "For staging/dev only — production reads the feed the installers ship with.",
+    )
+    desktop_feed_cache_seconds: int = Field(
+        default=300,
+        description="How long a parsed feed is reused before re-reading it. Installed "
+        "clients poll every 30 minutes, so 5 minutes keeps the edge quiet and a fresh "
+        "publish visible within the same poll interval.",
+    )
+
     riot_api_key: str = Field(default="", description="Riot Account-V1 personal API key.")
     riot_region: str = Field(
         default="americas",

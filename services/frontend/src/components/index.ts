@@ -1,6 +1,6 @@
 // Barrel export for the shared UI building blocks the screens reuse.
 export { Button } from "./Button";
-export type { ButtonProps, ButtonVariant } from "./Button";
+export type { ButtonProps, ButtonSize, ButtonVariant } from "./Button";
 export { Spinner } from "./Spinner";
 export type { SpinnerProps } from "./Spinner";
 export { ErrorBanner, errorMessage } from "./ErrorBanner";
@@ -17,6 +17,10 @@ export { IdChip } from "./IdChip";
 export type { IdChipProps } from "./IdChip";
 export { Modal, ConfirmDialog } from "./Modal";
 export type { ModalProps, ConfirmDialogProps } from "./Modal";
+export { Drawer } from "./Drawer";
+export type { DrawerProps } from "./Drawer";
+export { Toolbar, ToolbarSearch, ToolbarCount, Segmented, countLabel } from "./Toolbar";
+export type { SegmentedOption, SegmentedProps, ToolbarSearchProps } from "./Toolbar";
 export { Icon } from "./Icon";
 export type { IconName, IconProps } from "./Icon";
 export { StatCard, StatCardGrid } from "./StatCard/StatCard";

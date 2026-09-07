@@ -51,6 +51,9 @@
   --primary-softer: rgba(109, 92, 246, 0.07);
   --primary-line: rgba(109, 92, 246, 0.36);
   --brand-gradient: linear-gradient(135deg, var(--primary), var(--accent));
+  /* Table row hover: one notch above --primary-softer so a row under the
+     pointer is unmistakable without shouting. */
+  --row-hover: rgba(109, 92, 246, 0.1);
 
   /* Control sizing — buttons/inputs/selects share one height so a toolbar row
      lines up instead of stair-stepping. */
@@ -82,10 +85,11 @@
   --shadow-focus: 0 0 0 3px rgba(109, 92, 246, 0.3);
 
   /* Typography */
-  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-    Helvetica, Arial, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas,
-    monospace;
+  --font-sans:
+    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+    Arial, sans-serif;
+  --font-mono:
+    "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
   /* Layout */
   --content-max: 1200px;
@@ -113,8 +117,16 @@ body {
      One very low-amplitude brand glow at the top gives the page a direction of
      light, which the card highlights below are consistent with. */
   background:
-    radial-gradient(900px 520px at 78% -12%, rgba(109, 92, 246, 0.09), transparent 62%),
-    radial-gradient(700px 420px at 8% -6%, rgba(139, 125, 255, 0.055), transparent 60%),
+    radial-gradient(
+      900px 520px at 78% -12%,
+      rgba(109, 92, 246, 0.09),
+      transparent 62%
+    ),
+    radial-gradient(
+      700px 420px at 8% -6%,
+      rgba(139, 125, 255, 0.055),
+      transparent 60%
+    ),
     var(--bg);
   background-attachment: fixed;
   color: var(--text);
@@ -328,7 +340,8 @@ pre {
   flex: none;
   border-radius: var(--radius-sm);
   background: linear-gradient(135deg, var(--primary), var(--accent));
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12),
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.12),
     0 0 0 3px rgba(109, 92, 246, 0.18);
 }
 
@@ -350,7 +363,9 @@ nav[aria-label="Primary"] a {
   font-weight: 500;
   letter-spacing: 0.01em;
   white-space: nowrap;
-  transition: background-color 120ms ease, color 120ms ease;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
 }
 
 nav[aria-label="Primary"] a:hover {
@@ -417,8 +432,12 @@ nav[aria-label="Primary"] a.active {
   border: 1px solid transparent;
   border-radius: var(--radius-md);
   cursor: pointer;
-  transition: background-color 120ms ease, border-color 120ms ease,
-    color 120ms ease, transform 120ms ease, box-shadow 120ms ease;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease,
+    transform 120ms ease,
+    box-shadow 120ms ease;
   white-space: nowrap;
 }
 
@@ -452,7 +471,9 @@ nav[aria-label="Primary"] a.active {
   background: var(--elevate), var(--surface-alt);
   color: var(--text);
   border-color: var(--border);
-  box-shadow: inset 0 1px 0 var(--hairline), var(--shadow-xs);
+  box-shadow:
+    inset 0 1px 0 var(--hairline),
+    var(--shadow-xs);
 }
 
 :is(button, a)[data-variant="secondary"]:hover:not(:disabled) {
@@ -477,6 +498,51 @@ nav[aria-label="Primary"] a.active {
 
 :is(button, a)[data-variant="danger"]:active:not(:disabled) {
   transform: translateY(1px);
+}
+
+/* Ghost: quiet until hovered. For row actions and toolbars, where a bordered
+   button per row turns a list into a wall of buttons. */
+:is(button, a)[data-variant="ghost"] {
+  background: transparent;
+  color: var(--text-muted);
+  border-color: transparent;
+  box-shadow: none;
+}
+
+:is(button, a)[data-variant="ghost"]:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-alt);
+  border-color: var(--border);
+}
+
+:is(button, a)[data-variant="ghost"]:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+/* A ghost that turns dangerous on hover — the row delete. Neutral at rest so a
+   column of them is not a column of red. */
+:is(button, a)[data-variant="ghost"][data-tone="danger"]:hover:not(:disabled) {
+  color: var(--danger);
+  background: rgba(248, 113, 113, 0.1);
+  border-color: rgba(248, 113, 113, 0.35);
+}
+
+/* Compact control for table rows and the topbar. */
+:is(button, a)[data-variant][data-size="sm"] {
+  min-height: var(--control-h-sm);
+  padding-inline: 10px;
+  font-size: 0.8125rem;
+  gap: 6px;
+}
+
+/* Icon-only: a square the height of the control, no label padding. */
+:is(button, a)[data-variant][data-icon-only] {
+  width: var(--control-h);
+  padding-inline: 0;
+}
+
+:is(button, a)[data-variant][data-icon-only][data-size="sm"] {
+  width: var(--control-h-sm);
 }
 
 :is(button, a)[data-variant]:focus-visible {
@@ -540,7 +606,9 @@ textarea {
   border-radius: var(--radius-md);
   padding: var(--space-2) var(--space-3);
   box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.22);
-  transition: border-color 120ms ease, box-shadow 120ms ease,
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease,
     background-color 120ms ease;
 }
 
@@ -572,7 +640,9 @@ textarea:focus {
   outline: none;
   background: var(--surface-alt);
   border-color: var(--primary);
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.18), var(--shadow-focus);
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.18),
+    var(--shadow-focus);
 }
 
 input:focus-visible,
@@ -650,6 +720,29 @@ p[role="alert"][data-field-error]::before {
 /* -------------------------------------------------------------------------
    Tables
    ------------------------------------------------------------------------- */
+/* Wide tables scroll inside their own box on narrow screens instead of
+   stretching the page sideways (the page body must never scroll horizontally). */
+[data-table-scroll] {
+  min-width: 0;
+}
+@media (max-width: 720px) {
+  [data-table-scroll] {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    border-radius: var(--radius-lg, 12px);
+    /* Chrome lets a table's overflowing cells escape an overflow:auto ancestor
+       into the viewport's scroll area (the page grows sideways even though the
+       wrapper scrolls). Paint containment keeps them inside the wrapper. */
+    contain: paint;
+  }
+  [data-table-scroll] > [data-table] {
+    /* Size the table to its cells so the panel background and borders cover
+       every column while the wrapper scrolls, instead of stopping at 100%. */
+    width: min-content;
+    min-width: 100%;
+  }
+}
+
 [data-table] {
   width: 100%;
   border-collapse: separate;
@@ -659,7 +752,9 @@ p[role="alert"][data-field-error]::before {
   background: var(--elevate), var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  box-shadow: inset 0 1px 0 var(--hairline), var(--shadow-sm);
+  box-shadow:
+    inset 0 1px 0 var(--hairline),
+    var(--shadow-sm);
   overflow: hidden;
   margin-bottom: var(--space-5);
 }
@@ -717,7 +812,7 @@ p[role="alert"][data-field-error]::before {
 }
 
 [data-table] tbody tr:hover {
-  background: var(--primary-softer);
+  background: var(--row-hover);
 }
 
 /* When the surrounding ScreenHeader already names the table on screen, the
@@ -796,7 +891,10 @@ p[role="alert"][data-field-error]::before {
   font-size: 1rem;
   line-height: 1;
   cursor: pointer;
-  transition: transform 140ms ease, color 120ms ease, border-color 120ms ease;
+  transition:
+    transform 140ms ease,
+    color 120ms ease,
+    border-color 120ms ease;
 }
 
 [data-expand-toggle] > span {
@@ -1011,7 +1109,9 @@ p[role="alert"][data-field-error]::before {
   background: var(--elevate), var(--surface-raised);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-xl);
-  box-shadow: inset 0 1px 0 var(--hairline), var(--shadow-lg);
+  box-shadow:
+    inset 0 1px 0 var(--hairline),
+    var(--shadow-lg);
   max-width: 520px;
   width: calc(100% - 32px);
   max-height: 85vh;
@@ -1046,7 +1146,9 @@ p[role="alert"][data-field-error]::before {
   color: var(--text-muted);
   border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: background-color 120ms ease, color 120ms ease;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
 }
 
 [role="dialog"][data-modal] > header button[aria-label="Close"]:hover {
@@ -1163,22 +1265,20 @@ p[role="alert"][data-field-error]::before {
   background: var(--elevate), var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
-  box-shadow: inset 0 1px 0 var(--hairline), var(--shadow-lg);
+  box-shadow:
+    inset 0 1px 0 var(--hairline),
+    var(--shadow-lg);
 }
 
-/* Brand mark above the wordmark, so the card opens with the product rather
-   than with a line of text. */
-[data-login-card]::before {
-  content: "";
+/* The heading IS the logo (hex mark + wordmark, same as Discord / sidebar),
+   scaled up from its 206x32 native box. Inline SVG so the wordmark follows the
+   theme's text color. */
+[data-login-card] h1 [data-login-logo] {
   display: block;
-  width: 44px;
-  height: 44px;
-  margin: 0 auto var(--space-4);
-  border-radius: var(--radius-lg);
-  background: var(--brand-gradient);
-  box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.16),
-    0 8px 24px rgba(109, 92, 246, 0.35);
+  width: 258px;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
 }
 
 /* Full-viewport backdrop behind the card: brand hero illustration layered under
@@ -1214,10 +1314,7 @@ p[role="alert"][data-field-error]::before {
 }
 
 [data-login-card] h1 {
-  margin: 0 0 var(--space-1);
-  font-size: 1.5rem;
-  font-weight: 700;
-  letter-spacing: -0.025em;
+  margin: 0 0 var(--space-3);
 }
 
 [data-login-tagline] {
@@ -1273,9 +1370,9 @@ p[role="alert"][data-field-error]::before {
 /* -------------------------------------------------------------------------
    Desktop client downloads (<DownloadClient>)
    ------------------------------------------------------------------------- */
-/* Two anchor-buttons side by side; the visitor's own OS is the primary one.
-   Below the sign-in card it is ruled off like the dev block; on the dashboard
-   it is a panel of its own. */
+/* Two square tiles side by side — OS logo, name, what you get — the visitor's
+   own OS highlighted with the brand ring. Below the sign-in card the section
+   is ruled off like the dev block; on the dashboard it is a panel of its own. */
 [data-download-client] h2 {
   margin: 0 0 var(--space-2);
   font-size: 1rem;
@@ -1289,20 +1386,115 @@ p[role="alert"][data-field-error]::before {
   font-size: 0.875rem;
 }
 
-[data-download-client-buttons] {
-  display: flex;
-  flex-wrap: wrap;
+[data-download-client-tiles] {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 200px));
   gap: var(--space-3);
+  /* Explicit on BOTH axes: grid's default `normal` behaves as `start` for
+     items with an aspect ratio, which let the badge make the highlighted tile
+     taller than its neighbour and then transfer that height into its width.
+     Stretched, both fill their column and share the row height (never below
+     square). */
+  align-items: stretch;
+  justify-items: stretch;
 }
 
-[data-download-client-buttons] a[data-variant] {
-  flex: 1 1 180px;
+[data-download-tile] {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  padding: var(--space-4);
+  text-align: center;
+  color: var(--text);
+  text-decoration: none;
+  background: var(--elevate), var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow:
+    inset 0 1px 0 var(--hairline),
+    var(--shadow-xs);
+  transition:
+    transform 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease;
 }
 
-[data-download-client-note] {
-  margin: var(--space-3) 0 0;
-  color: var(--text-muted);
+[data-download-tile]:hover {
+  text-decoration: none;
+  border-color: var(--border-strong);
+  transform: translateY(-2px);
+  box-shadow:
+    inset 0 1px 0 var(--hairline),
+    var(--shadow-md);
+}
+
+[data-download-tile]:active {
+  transform: translateY(0);
+}
+
+[data-download-tile]:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* The visitor's own OS: brand ring + a lit glyph, so the right tile is obvious
+   at a glance without hiding the other one. */
+[data-download-tile][data-recommended] {
+  border-color: var(--primary);
+  box-shadow:
+    inset 0 1px 0 var(--hairline),
+    0 0 0 1px var(--primary),
+    0 8px 24px rgba(109, 92, 246, 0.28);
+}
+
+[data-download-tile-glyph] {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  margin-bottom: var(--space-2);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+[data-download-tile][data-recommended] [data-download-tile-glyph] {
+  background: var(--brand-gradient);
+  border-color: transparent;
+  color: var(--on-primary);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.16),
+    0 6px 18px rgba(109, 92, 246, 0.35);
+}
+
+[data-download-tile-name] {
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+[data-download-tile-meta] {
   font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* In flow above the glyph (not pinned to a corner — a square tile has no
+   spare corner once the glyph is centred), so the stack just grows by one
+   row on the highlighted tile. */
+[data-download-tile-badge] {
+  margin-bottom: var(--space-2);
+  padding: 2px 8px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--on-primary);
+  background: var(--primary);
+  border-radius: 999px;
 }
 
 [data-login] [data-download-client] {
@@ -1312,27 +1504,66 @@ p[role="alert"][data-field-error]::before {
   text-align: left;
 }
 
+[data-login] [data-download-client-tiles] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 [data-dashboard-downloads] {
   margin-top: var(--space-6);
   padding: var(--space-5);
   background: var(--elevate), var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
-  box-shadow: inset 0 1px 0 var(--hairline), var(--shadow-sm);
+  box-shadow:
+    inset 0 1px 0 var(--hairline),
+    var(--shadow-sm);
 }
 
 /* -------------------------------------------------------------------------
    Acting guild selector
    ------------------------------------------------------------------------- */
+/* A pill in the topbar: shield icon + the server's NAME (a select when the
+   backend could name the operator's servers), or the short id in an editable
+   field when it could not. The control itself is borderless — the pill is the
+   border — so both forms look identical. */
 [data-acting-guild] {
   display: inline-flex;
   align-items: center;
+  gap: 6px;
+  height: var(--control-h-sm);
+  max-width: 260px;
+  padding: 0 4px 0 10px;
+  background: var(--elevate), var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  box-shadow:
+    inset 0 1px 0 var(--hairline),
+    var(--shadow-xs);
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+[data-acting-guild]:hover {
+  border-color: var(--border-strong);
+}
+
+[data-acting-guild]:focus-within {
+  border-color: var(--primary);
+  box-shadow:
+    inset 0 1px 0 var(--hairline),
+    var(--shadow-focus);
+}
+
+[data-acting-guild] > [data-icon] {
+  color: var(--accent);
 }
 
 [data-acting-guild] [data-form-field] {
   margin-bottom: 0;
   flex-direction: row;
   align-items: center;
+  min-width: 0;
 }
 
 /* Hide the label visually but keep it for screen readers. */
@@ -1349,19 +1580,69 @@ p[role="alert"][data-field-error]::before {
   border: 0;
 }
 
-/* Header controls are the compact size. `min-height` must be re-stated, not
-   just `height`: the base control rule sets min-height: var(--control-h), and
-   a min-height always beats a smaller height. */
+/* `min-height` must be re-stated, not just `height`: the base control rule
+   sets min-height: var(--control-h), and a min-height always beats a smaller
+   height. */
 [data-acting-guild] input,
 [data-acting-guild] select {
-  height: var(--control-h-sm);
-  min-height: var(--control-h-sm);
+  height: 26px;
+  min-height: 26px;
   padding-block: 0;
+  padding-inline: 4px;
   font-size: 0.8125rem;
-  background: var(--surface-alt);
+  font-weight: 500;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
   box-shadow: none;
-  border-radius: var(--radius-pill);
-  min-width: 160px;
+  min-width: 0;
+}
+
+[data-acting-guild] input:hover:not(:disabled):not(:focus),
+[data-acting-guild] select:hover:not(:disabled):not(:focus) {
+  border-color: transparent;
+}
+
+[data-acting-guild] input:focus,
+[data-acting-guild] select:focus {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+/* The id form: monospace, truncated with an ellipsis until focused. */
+[data-acting-guild] input {
+  width: 12ch;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.02em;
+  text-overflow: ellipsis;
+}
+
+[data-acting-guild] input:focus {
+  width: 30ch;
+  max-width: 40vw;
+}
+
+/* The named form: the server name, with the shared custom chevron. */
+[data-acting-guild] select {
+  max-width: 200px;
+  padding-right: 24px;
+  background-position: right 6px center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 480px) {
+  [data-acting-guild] {
+    max-width: 160px;
+  }
+
+  [data-acting-guild] select {
+    max-width: 120px;
+  }
 }
 
 /* -------------------------------------------------------------------------
@@ -1628,7 +1909,9 @@ section[aria-labelledby]:first-child {
   background: var(--elevate), var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  box-shadow: inset 0 1px 0 var(--hairline), var(--shadow-sm);
+  box-shadow:
+    inset 0 1px 0 var(--hairline),
+    var(--shadow-sm);
   padding: var(--space-5);
   margin-bottom: var(--space-5);
 }
@@ -1636,14 +1919,13 @@ section[aria-labelledby]:first-child {
 /* Danger variant of the panel — a destructive section (guild purge) needs to
    look different from an ordinary one BEFORE the button is read. */
 [data-panel][data-tone="danger"] {
-  background: linear-gradient(
-      0deg,
-      rgba(248, 113, 113, 0.05),
-      rgba(248, 113, 113, 0.05)
-    ),
+  background:
+    linear-gradient(0deg, rgba(248, 113, 113, 0.05), rgba(248, 113, 113, 0.05)),
     var(--surface);
   border-color: rgba(248, 113, 113, 0.32);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), var(--shadow-sm);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    var(--shadow-sm);
 }
 
 /* -------------------------------------------------------------------------
@@ -1682,7 +1964,9 @@ section[aria-labelledby]:first-child {
   padding: 20px;
   color: var(--text);
   text-decoration: none;
-  transition: border-color 120ms ease, transform 120ms ease,
+  transition:
+    border-color 120ms ease,
+    transform 120ms ease,
     box-shadow 120ms ease;
 }
 
@@ -1912,6 +2196,846 @@ dd {
 }
 
 /* -------------------------------------------------------------------------
+   List toolbar (<Toolbar>, <ToolbarSearch>, <Segmented>, <ToolbarCount>)
+   ------------------------------------------------------------------------- */
+/* Search + segmented filter + count on one line above a table. The Accounts
+   roster keeps its data-roster-* hooks alongside these so its tests hold. */
+[data-toolbar],
+[data-roster-toolbar] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+[data-toolbar-search],
+[data-roster-search] {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+[data-toolbar-search] > [data-icon],
+[data-roster-search] > [data-icon] {
+  position: absolute;
+  left: 12px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+[data-toolbar-search] input,
+[data-roster-search] input {
+  width: 100%;
+  height: var(--control-h);
+  min-height: var(--control-h);
+  padding: 0 var(--space-3) 0 34px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.875rem;
+  box-shadow: none;
+}
+
+[data-toolbar-search] input::placeholder,
+[data-roster-search] input::placeholder {
+  color: var(--text-muted);
+}
+
+[data-toolbar-search] input:focus,
+[data-roster-search] input:focus {
+  background: var(--surface);
+  border-color: var(--primary);
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+/* Chrome/Safari draw their own clear affordance; keep it off the pill's edge. */
+[data-toolbar-search] input::-webkit-search-cancel-button,
+[data-roster-search] input::-webkit-search-cancel-button {
+  margin-right: var(--space-1);
+}
+
+[data-segmented],
+[data-roster-filters] {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+}
+
+[data-segmented-option],
+[data-roster-filter] {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.2;
+  padding: 6px 14px;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+[data-segmented-option]:hover,
+[data-roster-filter]:hover {
+  color: var(--text);
+}
+
+[data-segmented-option]:focus-visible,
+[data-roster-filter]:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+[data-segmented-option][data-active],
+[data-roster-filter][data-active] {
+  background: var(--elevate), var(--surface);
+  color: var(--text);
+  box-shadow:
+    inset 0 1px 0 var(--hairline),
+    var(--shadow-xs);
+}
+
+[data-toolbar-count],
+[data-roster-count] {
+  margin: 0 0 0 auto;
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  [data-toolbar-count],
+  [data-roster-count] {
+    margin-left: 0;
+  }
+}
+
+/* -------------------------------------------------------------------------
+   Drawer (<Drawer>) — right-hand slide-over for a row's detail
+   ------------------------------------------------------------------------- */
+[data-drawer-overlay] {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(6, 7, 11, 0.55);
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+  animation: lol-fade 160ms ease;
+}
+
+[data-drawer] {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(640px, 100vw);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-5) var(--space-5) var(--space-6);
+  background: var(--elevate), var(--surface-raised);
+  border-left: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-lg);
+  outline: none;
+  animation: lol-slide-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* The detail's own section header sits at the top of the panel — no screen
+   rhythm to respect above it. */
+[data-drawer] [data-screen-header][data-section-header] {
+  margin-top: 0;
+}
+
+[data-drawer] [data-screen-header][data-section-header] h2 {
+  font-size: clamp(1.25rem, 1.15rem + 0.4vw, 1.375rem);
+}
+
+/* Panels inside the drawer sit one plane below its raised surface. */
+[data-drawer] [data-panel],
+[data-drawer] [data-tournament-summary],
+[data-drawer] [data-registrations],
+[data-drawer] [data-start],
+[data-drawer] [data-bracket-section] {
+  background: var(--elevate), var(--surface);
+  margin-bottom: var(--space-4);
+}
+
+@media (max-width: 720px) {
+  [data-drawer] {
+    width: 100vw;
+    border-left: 0;
+    padding-inline: var(--space-4);
+  }
+}
+
+body[data-scroll-locked] {
+  overflow: hidden;
+}
+
+/* -------------------------------------------------------------------------
+   Screen enter
+   ------------------------------------------------------------------------- */
+/* Routed screens fade and rise 4px on mount — enough that a tab change reads
+   as a change of page, short enough that it never gets in the way. No fill
+   mode on purpose: once it ends the section has no transform, so fixed
+   descendants (dialogs) are positioned against the viewport again. */
+[data-app-main] > section {
+  animation: lol-screen-in 160ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-app-main] > section,
+  [data-drawer],
+  [data-drawer-overlay] {
+    animation: none !important;
+  }
+}
+
+/* -------------------------------------------------------------------------
+   Landing (the public /login page)
+   -------------------------------------------------------------------------
+   Two columns on a wide viewport: the pitch on the left, the sign-in card on
+   the right. The card keeps every hook the auth flow relies on; the hero is
+   the part a first-time visitor was missing. */
+[data-login] {
+  /* The old centred stage put a 420px card in the middle of the viewport;
+     the landing needs the top of the page, so the stage aligns to start. */
+  align-items: start;
+  padding-block: clamp(32px, 7vh, 80px) var(--space-7);
+}
+
+[data-landing] {
+  width: 100%;
+  max-width: 1120px;
+  margin-inline: auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(360px, 440px);
+  gap: clamp(32px, 6vw, 88px);
+  align-items: start;
+}
+
+[data-landing-hero] {
+  min-width: 0;
+  padding-top: var(--space-3);
+}
+
+[data-landing-brand] {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+
+[data-landing-logo] {
+  display: block;
+  width: 206px;
+  height: auto;
+}
+
+[data-landing-brand] [data-login-tagline] {
+  margin: 0;
+  padding-left: var(--space-4);
+  border-left: 1px solid var(--border);
+}
+
+[data-landing-title] {
+  font-size: clamp(2.125rem, 1.6rem + 2.2vw, 3.25rem);
+  line-height: 1.08;
+  letter-spacing: -0.032em;
+  max-width: 14ch;
+  margin-bottom: var(--space-4);
+}
+
+[data-landing-title] em {
+  font-style: normal;
+  background: var(--brand-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+[data-landing-lead] {
+  font-size: 1.0625rem;
+  line-height: 1.6;
+  color: var(--text-muted);
+  max-width: 52ch;
+  margin-bottom: var(--space-6);
+}
+
+[data-landing-features] {
+  list-style: none;
+  margin: 0 0 var(--space-6);
+  padding: 0;
+  display: grid;
+  gap: var(--space-3);
+}
+
+[data-landing-features] > li {
+  display: flex;
+  gap: var(--space-4);
+  align-items: flex-start;
+  padding: var(--space-4) 18px;
+  background: var(--elevate), var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow:
+    inset 0 1px 0 var(--hairline),
+    var(--shadow-xs);
+}
+
+[data-landing-features] h2 {
+  margin: 0 0 2px;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+[data-landing-features] p {
+  margin: 0;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+[data-landing-feature-icon] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  flex: none;
+  border-radius: var(--radius-md);
+  color: var(--accent);
+  background: var(--primary-soft);
+  border: 1px solid var(--primary-line);
+}
+
+[data-landing-steps-title] {
+  margin: 0 0 var(--space-3);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+}
+
+[data-landing-steps] ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+[data-landing-steps] li {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  min-width: 0;
+}
+
+[data-landing-steps] li div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+[data-landing-steps] li strong {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+[data-landing-steps] li span:not([data-landing-step-num]) {
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+[data-landing-step-num] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--brand-gradient);
+  color: var(--on-primary);
+  font-size: 0.75rem;
+  font-weight: 700;
+  box-shadow: 0 0 0 3px var(--primary-softer);
+}
+
+/* The card: it stays a card, now with a kicker + title of its own. */
+[data-login-card] {
+  text-align: left;
+  position: sticky;
+  top: 32px;
+}
+
+[data-login-card-kicker] {
+  margin: 0 0 var(--space-1);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--accent);
+}
+
+[data-login-card-title] {
+  margin: 0 0 var(--space-2);
+  font-size: 1.375rem;
+}
+
+[data-login-card] [data-login-copy] {
+  font-size: 0.9375rem;
+}
+
+[data-login-cta] {
+  gap: 10px;
+}
+
+@media (max-width: 960px) {
+  [data-landing] {
+    grid-template-columns: 1fr;
+    gap: var(--space-6);
+  }
+
+  [data-landing-steps] ol {
+    grid-template-columns: 1fr;
+  }
+
+  [data-login-card] {
+    position: static;
+    max-width: 480px;
+  }
+}
+
+@media (max-width: 560px) {
+  [data-landing-brand] {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-2);
+  }
+
+  [data-landing-brand] [data-login-tagline] {
+    padding-left: 0;
+    border-left: 0;
+  }
+}
+
+/* -------------------------------------------------------------------------
+   Dashboard — operations panels
+   ------------------------------------------------------------------------- */
+/* Section links: one quiet row, not six cards. */
+[data-dash-links] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: calc(var(--space-4) * -1) 0 var(--space-5);
+}
+
+[data-dash-link] {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: var(--surface-alt);
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  transition:
+    color 120ms ease,
+    border-color 120ms ease,
+    background-color 120ms ease;
+}
+
+[data-dash-link]:hover {
+  color: var(--text);
+  border-color: var(--primary-line);
+  background: var(--primary-softer);
+  text-decoration: none;
+}
+
+[data-dash-link] [data-icon] {
+  color: var(--accent);
+}
+
+[data-dash-grid] {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+[data-dash-panel] {
+  margin-bottom: 0;
+  min-width: 0;
+}
+
+[data-dash-panel][data-span="2"] {
+  grid-column: 1 / -1;
+}
+
+[data-dash-panel-head] {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+[data-dash-panel-head] h2 {
+  margin: 0;
+  font-size: 1.0625rem;
+}
+
+[data-dash-more] {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+[data-dash-more]:hover {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+[data-dash-panel] p[data-muted] {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+[data-dash-empty] {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  align-items: flex-start;
+}
+
+[data-dash-empty] p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+/* Needs attention */
+[data-attention-list] {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+
+[data-attention-item] {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--surface-alt);
+  color: var(--text);
+  transition:
+    border-color 120ms ease,
+    transform 120ms ease,
+    background-color 120ms ease;
+}
+
+[data-attention-item]:hover {
+  text-decoration: none;
+  border-color: var(--border-strong);
+  transform: translateX(2px);
+}
+
+[data-attention-item] > [data-icon]:last-child {
+  color: var(--text-muted);
+  flex: none;
+}
+
+[data-attention-icon] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border-radius: var(--radius-md);
+  color: var(--accent);
+  background: var(--primary-soft);
+  border: 1px solid var(--primary-line);
+}
+
+[data-attention-item][data-tone="danger"] [data-attention-icon] {
+  color: var(--danger);
+  background: rgba(248, 113, 113, 0.12);
+  border-color: rgba(248, 113, 113, 0.35);
+}
+
+[data-attention-item][data-tone="warning"] [data-attention-icon] {
+  color: var(--warning);
+  background: rgba(251, 191, 36, 0.12);
+  border-color: rgba(251, 191, 36, 0.35);
+}
+
+[data-attention-item][data-tone="success"] [data-attention-icon] {
+  color: var(--success);
+  background: rgba(52, 211, 153, 0.12);
+  border-color: rgba(52, 211, 153, 0.35);
+}
+
+[data-attention-body] {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+[data-attention-body] strong {
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+[data-attention-body] span {
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+[data-attention-clear] {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  padding: var(--space-3) 0;
+}
+
+[data-attention-clear] strong {
+  display: block;
+  margin-bottom: 2px;
+}
+
+[data-attention-clear] p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+[data-attention-clear-icon] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  border-radius: 50%;
+  color: var(--success);
+  background: rgba(52, 211, 153, 0.12);
+  border: 1px solid rgba(52, 211, 153, 0.35);
+}
+
+/* Live & upcoming */
+[data-live-list] {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+[data-live-row] {
+  padding: 12px 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+[data-live-row]:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+[data-live-title] {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+[data-live-name] {
+  font-weight: 600;
+  color: var(--text);
+}
+
+[data-live-name]:hover {
+  color: var(--accent);
+}
+
+[data-live-meta] {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 3px;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+[data-live-progress-row] {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: 8px;
+}
+
+[data-progress] {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border-subtle);
+  overflow: hidden;
+}
+
+[data-progress] > span {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--brand-gradient);
+  transition: width 300ms ease;
+}
+
+[data-progress][data-tone="success"] > span {
+  background: linear-gradient(90deg, #10b981, var(--success));
+}
+
+[data-live-progress-label] {
+  flex: none;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 96px;
+  text-align: right;
+}
+
+/* Recent results */
+[data-results-list],
+[data-activity-list] {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+[data-result-row],
+[data-activity-row] {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 10px 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+[data-result-row]:first-child,
+[data-activity-row]:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+[data-result-outcome] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border-radius: var(--radius-md);
+  color: var(--success);
+  background: rgba(52, 211, 153, 0.12);
+  border: 1px solid rgba(52, 211, 153, 0.3);
+}
+
+[data-result-body],
+[data-activity-body] {
+  min-width: 0;
+  flex: 1;
+}
+
+[data-result-title] {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: baseline;
+  font-size: 0.9375rem;
+}
+
+[data-result-title] strong {
+  font-weight: 600;
+}
+
+[data-result-vs] {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+[data-result-meta],
+[data-activity-what] {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+[data-activity-body] {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+[data-activity-who] {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+[data-activity-what] {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[data-activity-when] {
+  flex: none;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  [data-dash-grid] {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* -------------------------------------------------------------------------
    Animations
    ------------------------------------------------------------------------- */
 @keyframes lol-spin {
@@ -1943,6 +3067,28 @@ dd {
   from {
     opacity: 0;
     transform: translateY(4px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes lol-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes lol-screen-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
   }
   to {
     opacity: 1;

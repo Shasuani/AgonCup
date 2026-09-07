@@ -81,7 +81,10 @@ export function DataTable<Row>({
   // them visible (see the note above).
   const showSkeleton = loading && rows.length === 0;
   const showEmpty = !loading && rows.length === 0;
-  const skeletonRows = Array.from({ length: Math.max(1, loadingRows) }, (_, i) => i);
+  const skeletonRows = Array.from(
+    { length: Math.max(1, loadingRows) },
+    (_, i) => i,
+  );
 
   const expandable = renderExpanded !== undefined;
   // The toggle occupies a column of its own, so every colSpan below has to
@@ -89,25 +92,32 @@ export function DataTable<Row>({
   const totalColumns = columns.length + (expandable ? 1 : 0);
 
   return (
-    <table data-table data-expandable={expandable || undefined} aria-busy={loading || undefined}>
-      <caption data-caption-hidden={hideCaption || undefined}>{caption}</caption>
-      <thead>
-        <tr>
-          {expandable ? (
-            <th scope="col" data-expand-col>
-              <span data-visually-hidden>Expand</span>
-            </th>
-          ) : null}
-          {columns.map((col) => (
-            <th key={col.id} scope="col">
-              {col.header}
-            </th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {showSkeleton
-          ? skeletonRows.map((r) => (
+    <div data-table-scroll>
+      <table
+        data-table
+        data-expandable={expandable || undefined}
+        aria-busy={loading || undefined}
+      >
+        <caption data-caption-hidden={hideCaption || undefined}>
+          {caption}
+        </caption>
+        <thead>
+          <tr>
+            {expandable ? (
+              <th scope="col" data-expand-col>
+                <span data-visually-hidden>Expand</span>
+              </th>
+            ) : null}
+            {columns.map((col) => (
+              <th key={col.id} scope="col">
+                {col.header}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {showSkeleton ? (
+            skeletonRows.map((r) => (
               // Placeholder rows are decorative: aria-busy on the table already
               // tells AT the data is coming.
               <tr key={`skeleton-${r}`} aria-hidden="true">
@@ -120,53 +130,54 @@ export function DataTable<Row>({
                 ))}
               </tr>
             ))
-          : showEmpty
-            ? (
-                <tr>
-                  <td colSpan={totalColumns} data-empty>
-                    <div data-empty-inner>
-                      <p data-empty-message>{emptyMessage}</p>
-                      {emptyAction !== undefined && emptyAction !== null ? (
-                        <div data-empty-action>{emptyAction}</div>
-                      ) : null}
-                    </div>
-                  </td>
-                </tr>
-              )
-            : rows.map((row) => {
-                const key = rowKey(row);
-                const open = expandable && expandedKeys?.has(key) === true;
-                return (
-                  <Fragment key={key}>
-                    <tr data-row-open={open || undefined}>
-                      {expandable ? (
-                        <td data-expand-cell>
-                          <button
-                            type="button"
-                            data-expand-toggle
-                            aria-expanded={open}
-                            aria-label={
-                              expandLabel ? expandLabel(row) : "Show details"
-                            }
-                            onClick={() => onToggleExpand?.(row)}
-                          >
-                            <span aria-hidden="true">›</span>
-                          </button>
-                        </td>
-                      ) : null}
-                      {columns.map((col) => (
-                        <td key={col.id}>{col.cell(row)}</td>
-                      ))}
-                    </tr>
-                    {open ? (
-                      <tr data-expanded-row>
-                        <td colSpan={totalColumns}>{renderExpanded?.(row)}</td>
-                      </tr>
+          ) : showEmpty ? (
+            <tr>
+              <td colSpan={totalColumns} data-empty>
+                <div data-empty-inner>
+                  <p data-empty-message>{emptyMessage}</p>
+                  {emptyAction !== undefined && emptyAction !== null ? (
+                    <div data-empty-action>{emptyAction}</div>
+                  ) : null}
+                </div>
+              </td>
+            </tr>
+          ) : (
+            rows.map((row) => {
+              const key = rowKey(row);
+              const open = expandable && expandedKeys?.has(key) === true;
+              return (
+                <Fragment key={key}>
+                  <tr data-row-open={open || undefined}>
+                    {expandable ? (
+                      <td data-expand-cell>
+                        <button
+                          type="button"
+                          data-expand-toggle
+                          aria-expanded={open}
+                          aria-label={
+                            expandLabel ? expandLabel(row) : "Show details"
+                          }
+                          onClick={() => onToggleExpand?.(row)}
+                        >
+                          <span aria-hidden="true">›</span>
+                        </button>
+                      </td>
                     ) : null}
-                  </Fragment>
-                );
-              })}
-      </tbody>
-    </table>
+                    {columns.map((col) => (
+                      <td key={col.id}>{col.cell(row)}</td>
+                    ))}
+                  </tr>
+                  {open ? (
+                    <tr data-expanded-row>
+                      <td colSpan={totalColumns}>{renderExpanded?.(row)}</td>
+                    </tr>
+                  ) : null}
+                </Fragment>
+              );
+            })
+          )}
+        </tbody>
+      </table>
+    </div>
   );
 }

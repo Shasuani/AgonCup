@@ -14,9 +14,11 @@ import "./Breadcrumbs.css";
 
 /** Human labels for top-level route segments (mirrors NAV_ITEMS). */
 const NAV_LABELS: Record<string, string> = {
+  servers: "Servers",
   tournaments: "Tournaments",
   teams: "Teams",
   accounts: "Accounts",
+  history: "Match history",
   disputes: "Disputes",
   audit: "Audit log",
   guilds: "Guilds",

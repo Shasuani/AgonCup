@@ -28,6 +28,18 @@ export interface HistoryPlayer {
   kills: number;
   deaths: number;
   assists: number;
+  /** Scoreboard extras — absent on reports captured before the client kept them. */
+  champion_name?: string | null;
+  level?: number | null;
+  /** Final build in slot order incl. trinket; 0 = empty slot. */
+  items?: number[];
+  spell1_id?: number | null;
+  spell2_id?: number | null;
+  gold_earned?: number | null;
+  minions_killed?: number | null;
+  damage_to_champions?: number | null;
+  vision_score?: number | null;
+  profile_icon_id?: number | null;
 }
 
 /** One team's block within a game (winner flag + its players). */
@@ -63,7 +75,8 @@ export function fetchMatchHistory(client: ApiClient): Promise<HistoryGame[]> {
   });
 }
 
-/** A champion square icon by numeric id (CommunityDragon, served by id). */
+/** A champion square icon by numeric id — the CommunityDragon fallback URL.
+ *  Screens prefer `lib/ddragon`'s `championIconUrl(registry, id)` (official art). */
 export function championIconUrl(championId: number): string {
   return (
     "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/" +

@@ -25,20 +25,20 @@ describe("DownloadClient", () => {
     expect(mac).toHaveAttribute("href", MAC_INSTALLER_URL);
     expect(WINDOWS_INSTALLER_URL).toBe("/downloads/LeagueOfLeagues-Setup.exe");
     expect(MAC_INSTALLER_URL).toBe("/downloads/LeagueOfLeagues.dmg");
-    // Neither is ever hidden; an unknown OS just gets no emphasis.
-    expect(win).toHaveAttribute("data-variant", "secondary");
-    expect(mac).toHaveAttribute("data-variant", "secondary");
+    // Neither is ever hidden; an unknown OS just gets no highlight.
+    expect(win).not.toHaveAttribute("data-recommended");
+    expect(mac).not.toHaveAttribute("data-recommended");
+    expect(screen.queryByText("For this device")).not.toBeInTheDocument();
   });
 
-  it("emphasises the visitor's own OS", () => {
+  it("highlights the visitor's own OS", () => {
     render(<DownloadClient os="mac" />);
     expect(screen.getByRole("link", { name: "Download for Mac" })).toHaveAttribute(
-      "data-variant",
-      "primary",
+      "data-recommended",
     );
-    expect(screen.getByRole("link", { name: "Download for Windows" })).toHaveAttribute(
-      "data-variant",
-      "secondary",
+    expect(screen.getByRole("link", { name: "Download for Windows" })).not.toHaveAttribute(
+      "data-recommended",
     );
+    expect(screen.getByText("For this device")).toBeInTheDocument();
   });
 });

@@ -32,6 +32,25 @@ export interface LiveGame {
   result: 'win' | 'loss' | null;
 }
 
+export type UpdatePhase = 'idle' | 'checking' | 'up_to_date' | 'unknown' | 'available' | 'downloading' | 'ready' | 'installing' | 'failed';
+/** Mirror of `UpdateState` in services/desktop/src/update/coordinator.ts. */
+export interface UpdateState {
+  current: string;
+  platform: string;
+  /** Can this build install the update itself (packaged + platform strategy)? */
+  supported: boolean;
+  phase: UpdatePhase;
+  latest: string | null;
+  /** Below the server's minimum: no "Later". */
+  required: boolean;
+  /** The manual installer link (always usable). */
+  downloadUrl: string | null;
+  /** 0..100 while downloading. */
+  progress: number | null;
+  error: string | null;
+  lastCheckedAt: string | null;
+}
+
 export interface BridgeUser { userId: string; discordUserId: string; displayName: string }
 export type SessionStatus = 'signed-in' | 'needs-pairing' | 'unavailable';
 export interface SessionState { signedIn: boolean; user: BridgeUser | null; status?: SessionStatus }
@@ -106,6 +125,16 @@ export interface LolBridge {
   myHistory?(): Promise<Res<{ games: HistoryGame[] }>>;
   /** The last summoner icon/level this device saw (works with League closed); absent on an old build. */
   getProfile?(): Promise<{ ok: true; profileIconId?: number; summonerLevel?: number }>;
+  /** Self-update state (current version, latest, phase, progress); absent on an old build. */
+  getUpdateState?(): Promise<UpdateState>;
+  /** "Check for updates": asks the backend now and resolves with the new state. */
+  checkForUpdates?(): Promise<UpdateState>;
+  /** Download (if needed) and install the update; the app restarts itself. */
+  installUpdate?(): Promise<UpdateState>;
+  /** Subscribe to update-state changes. Returns an unsubscribe function. */
+  onUpdate?(callback: (state: UpdateState) => void): () => void;
+  /** Open an http(s) link in the system browser. */
+  openExternal?(url: string): Promise<{ ok: true } | { ok: false; detail: string }>;
   /** Is this client allowed to drive the League client (lobby writes)? */
   getAutomation(): Promise<{ ok: true; enabled: boolean }>;
   /** Grant/revoke that permission; remembered per device (settings.json). */
@@ -165,6 +194,20 @@ export function useLcuStatus(): LcuStatus {
     return b.onLcuStatus(setStatus);
   }, []);
   return status;
+}
+
+/** The self-update state, live; null on a build without the updater bridge. */
+export function useUpdateState(): UpdateState | null {
+  const [state, setState] = useState<UpdateState | null>(null);
+  useEffect(() => {
+    const b = lol();
+    if (!b || typeof b.onUpdate !== 'function') return;
+    let alive = true;
+    if (typeof b.getUpdateState === 'function') void b.getUpdateState().then((s) => { if (alive) setState(s); });
+    const off = b.onUpdate((s) => { if (alive) setState(s); });
+    return () => { alive = false; off(); };
+  }, []);
+  return state;
 }
 
 /** Live champ-select board; null while not in champ select (or an old build). */

@@ -15,7 +15,8 @@
 #
 # What happens:
 #   1. `npm run dist:all` in services/desktop -> release/: one universal .dmg,
-#      one Windows .exe (+ .blockmap), latest.yml and latest-mac.yml.
+#      one universal .zip (what installed Mac clients update from), one Windows
+#      .exe (+ .blockmap), latest.yml and latest-mac.yml.
 #   2. The files are copied to <DEPLOY_PATH>/edge/downloads on the server. Caddy
 #      serves that directory at https://<domain>/downloads/ (the site block in
 #      .gitlab-ci.yml; mounted read-only by infra/docker-compose.edge.yml).
@@ -25,11 +26,16 @@
 #      LeagueOfLeagues-Setup.exe — are hard-linked to the versioned files just
 #      uploaded, so the buttons never need to know a version number.
 #
-# Shipping a new version = bump "version" in services/desktop/package.json and
-# run this again. Installed Windows clients pick it up on their own (electron-
-# updater reads latest.yml); Mac clients are shown a prompt that opens the .dmg
-# (unsigned builds cannot self-update on macOS — see services/desktop/src/updater.ts).
-# Older versioned files are left in place; delete them by hand if disk matters.
+# Shipping a new version = bump "version" in services/desktop/package.json
+# (`npm version minor --no-git-tag-version` in services/desktop) and run this
+# again. Installed clients ask the backend (`GET /api/v1/desktop/version`, which
+# reads these feed files) at start and every 30 minutes, show an "update
+# available" notification, and install themselves: Windows through electron-
+# updater (latest.yml + the .exe), macOS by downloading the .zip named in
+# latest-mac.yml, verifying its SHA-512 and swapping the bundle — see
+# services/desktop/src/update/. To FORCE old clients to update, set
+# DESKTOP_MINIMUM_VERSION on the backend. Older versioned files are left in
+# place; delete them by hand if disk matters.
 
 set -euo pipefail
 
@@ -42,8 +48,8 @@ DEPLOY_ROOT="${DEPLOY_PATH:-/home/$DEPLOY_USER/lol}"
 DEST_DIR="$DEPLOY_ROOT/edge/downloads"
 TARGET="$DEPLOY_USER@$DEPLOY_HOST"
 
-# Must match src/updater.ts (MAC_INSTALLER_FILE / WINDOWS_INSTALLER_FILE) and
-# the SPA's DownloadClient component.
+# Must match src/update/installers.ts (MAC_INSTALLER_FILE / WINDOWS_INSTALLER_FILE),
+# the backend's app/desktop/service.py and the SPA's DownloadClient component.
 MAC_STABLE="LeagueOfLeagues.dmg"
 WIN_STABLE="LeagueOfLeagues-Setup.exe"
 
@@ -71,6 +77,7 @@ _only_one() {
 }
 
 DMG="$(_only_one '*.dmg' '.dmg')"
+ZIP="$(_only_one '*-mac.zip' 'mac .zip')"
 EXE="$(_only_one '*.exe' '.exe')"
 EXE_BLOCKMAP="$EXE.blockmap"
 for f in "$EXE_BLOCKMAP" "$RELEASE/latest.yml" "$RELEASE/latest-mac.yml"; do
@@ -82,10 +89,11 @@ done
 
 echo "=== uploading to $TARGET:$DEST_DIR (port $SSH_PORT)"
 echo "    $(basename "$DMG")"
+echo "    $(basename "$ZIP")"
 echo "    $(basename "$EXE")"
 ssh -p "$SSH_PORT" "$TARGET" "mkdir -p '$DEST_DIR'"
 # Installers first, feed files last (see the header).
-scp -P "$SSH_PORT" "$DMG" "$EXE" "$EXE_BLOCKMAP" "$TARGET:$DEST_DIR/"
+scp -P "$SSH_PORT" "$DMG" "$ZIP" "$EXE" "$EXE_BLOCKMAP" "$TARGET:$DEST_DIR/"
 scp -P "$SSH_PORT" "$RELEASE/latest.yml" "$RELEASE/latest-mac.yml" "$TARGET:$DEST_DIR/"
 
 echo "=== pointing the stable names at this version"
@@ -97,4 +105,6 @@ ssh -p "$SSH_PORT" "$TARGET" "cd '$DEST_DIR' \
 echo "=== published:"
 echo "    https://lol.gameras.gr/downloads/$MAC_STABLE"
 echo "    https://lol.gameras.gr/downloads/$WIN_STABLE"
-echo "    https://lol.gameras.gr/downloads/latest.yml  (Windows auto-update feed)"
+echo "    https://lol.gameras.gr/downloads/latest.yml      (Windows update feed)"
+echo "    https://lol.gameras.gr/downloads/latest-mac.yml  (macOS update feed)"
+echo "    https://lol.gameras.gr/api/v1/desktop/version    (what installed clients ask; cached 5 min)"

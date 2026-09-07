@@ -87,7 +87,15 @@ import { LcuStatusPoller, type LcuStatus } from "./lcu/statusPoller.js";
 import { ChampSelectPoller, type ChampSelectView } from "./lcu/champSelectPoller.js";
 import { LiveGamePoller, type LiveGameView } from "./lcu/liveGamePoller.js";
 import { resolveServerUrls } from "./serverUrls.js";
-import { wireAutoUpdate, type AutoUpdateHandle } from "./updater.js";
+import { checkDesktopVersion } from "./update/check.js";
+import { createUpdates } from "./update/coordinator.js";
+import {
+  appBundleFromExecPath,
+  electronUpdaterInstaller,
+  macSwapInstaller,
+  type Installer,
+} from "./update/installers.js";
+import { downloadToFile, run, sha512Base64 } from "./update/io.js";
 
 /** Default heartbeat cadence while pre-game/in-game (PLAN.md §3.6.1 ~2-3s). */
 const DEFAULT_HEARTBEAT_MS = 2_500;
@@ -623,7 +631,7 @@ function backendBaseUrl(): string {
  */
 async function bootstrap(): Promise<void> {
   // Imported lazily so `electron` is never required during a unit-test import.
-  const { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } = await import("electron");
+  const { app, BrowserWindow, ipcMain, Notification, safeStorage, shell } = await import("electron");
   const path = await import("node:path");
   const fsp = await import("node:fs/promises");
   const fs = await import("node:fs");
@@ -1208,6 +1216,105 @@ async function bootstrap(): Promise<void> {
   // banner outlives the game, so pushes may be long past by then).
   ipcMain.handle("lol:live-game-get", () => liveGamePoller.lastView);
 
+  // --- updates: backend-driven version check + self-install ------------------- //
+  // The backend (`GET /desktop/version`) reads the feed the installers ship with,
+  // so the client asks IT — silently 10s after boot and every 30 minutes — and
+  // installs through the platform strategy (src/update/installers.ts). `electron .`
+  // has nothing to update, so it only ever gets the manual download link.
+  let installer: Installer | null = null;
+  if (app.isPackaged && process.platform === "win32") {
+    // electron-updater is CommonJS whose `autoUpdater` is a lazy getter, which
+    // Node's ESM named-export detection cannot see — so read it off `default`.
+    const updaterModule = await import("electron-updater");
+    const autoUpdater = updaterModule.default.autoUpdater;
+    autoUpdater.logger = {
+      info: (m: unknown) => log("updater", { info: String(m) }),
+      warn: (m: unknown) => log("updater", { warn: String(m) }),
+      error: (m: unknown) => log("updater", { error: String(m) }),
+      debug: () => {},
+    };
+    installer = electronUpdaterInstaller({
+      updater: autoUpdater,
+      feedUrl: urls.downloadsUrl,
+      currentVersion: app.getVersion(),
+      log,
+    });
+  } else if (app.isPackaged && process.platform === "darwin") {
+    const bundle = appBundleFromExecPath(process.execPath);
+    if (bundle !== null) {
+      const { spawn } = await import("node:child_process");
+      installer = macSwapInstaller({
+        appBundlePath: bundle,
+        stagingDir: path.join(userData, "updates"),
+        pid: process.pid,
+        download: (url, dest, onProgress) => downloadToFile(url, dest, onProgress),
+        sha512Base64,
+        extractZip: (zip, dir) => run("ditto", ["-x", "-k", zip, dir]),
+        findAppBundle: async (dir) => {
+          const name = (await fsp.readdir(dir)).find((n) => n.endsWith(".app"));
+          return name === undefined ? null : path.join(dir, name);
+        },
+        isWritable: async (p) => {
+          try {
+            await fsp.access(p, fs.constants.W_OK);
+            await fsp.access(path.dirname(p), fs.constants.W_OK);
+            return true;
+          } catch {
+            return false;
+          }
+        },
+        writeFile: (p, text) => fsp.writeFile(p, text, "utf8"),
+        chmod: (p, mode) => fsp.chmod(p, mode),
+        rm: (p) => fsp.rm(p, { recursive: true, force: true }),
+        mkdir: async (p) => {
+          await fsp.mkdir(p, { recursive: true });
+        },
+        spawnDetached: (script) => {
+          const child = spawn("/bin/sh", [script], { detached: true, stdio: "ignore" });
+          child.unref();
+        },
+        quit: () => app.quit(),
+        log,
+      });
+    } else {
+      log("update_no_bundle", { execPath: process.execPath });
+    }
+  }
+  const updates = createUpdates({
+    currentVersion: app.getVersion(),
+    platform: process.platform,
+    check: (args) => checkDesktopVersion(args, { backendUrl: urls.backendUrl }),
+    installer,
+    scheduler: SYSTEM_SCHEDULER,
+    now: () => Date.now(),
+    onState: (state) => sendToRenderer("lol:update", state),
+    notify: ({ version, required }) => {
+      if (!Notification.isSupported()) return;
+      const n = new Notification({
+        title: required ? "Update required" : "Update available",
+        body: required
+          ? `LeagueOfLeagues ${version} is required to keep playing. Open the app to update.`
+          : `LeagueOfLeagues ${version} is ready to install. Open the app and press Update.`,
+      });
+      n.on("click", () => {
+        mainWindow?.show();
+        mainWindow?.focus();
+      });
+      n.show();
+    },
+    log,
+  });
+  // The renderer has no window.open; the manual installer link goes through here.
+  ipcMain.handle("lol:open-external", async (_event, args: { url?: unknown }) => {
+    const url = typeof args?.url === "string" ? args.url : "";
+    if (!/^https?:\/\//i.test(url)) return { ok: false as const, detail: "Only http(s) links can be opened." };
+    await shell.openExternal(url);
+    return { ok: true as const };
+  });
+  ipcMain.handle("lol:update-state", () => updates.state());
+  ipcMain.handle("lol:update-check", () => updates.checkNow("manual"));
+  ipcMain.handle("lol:update-install", () => updates.install());
+
   const createWindow = (): import("electron").BrowserWindow => {
     const win = new BrowserWindow({
       width: 1280,
@@ -1301,51 +1408,8 @@ async function bootstrap(): Promise<void> {
   champSelectPoller.start();
   liveGamePoller.start();
 
-  // --- auto-update (installed builds only) ---------------------------------- //
-  // `electron .` has no app-update.yml and nothing to update to; electron-updater
-  // is also loaded lazily here so a unit-test import never pulls it in.
-  let updates: AutoUpdateHandle | null = null;
-  if (app.isPackaged) {
-    // electron-updater is CommonJS whose `autoUpdater` is a lazy getter, which
-    // Node's ESM named-export detection cannot see — so read it off `default`.
-    const updaterModule = await import("electron-updater");
-    const autoUpdater = updaterModule.default.autoUpdater;
-    autoUpdater.logger = {
-      info: (m: unknown) => log("updater", { info: String(m) }),
-      warn: (m: unknown) => log("updater", { warn: String(m) }),
-      error: (m: unknown) => log("updater", { error: String(m) }),
-      debug: () => {},
-    };
-    const ask = async (title: string, message: string, detail: string, yes: string) => {
-      const opts = { type: "info" as const, title, message, detail, buttons: [yes, "Later"], defaultId: 0, cancelId: 1 };
-      const { response } =
-        mainWindow !== null ? await dialog.showMessageBox(mainWindow, opts) : await dialog.showMessageBox(opts);
-      return response === 0;
-    };
-    updates = wireAutoUpdate({
-      updater: autoUpdater,
-      platform: process.platform,
-      downloadsUrl: urls.downloadsUrl,
-      scheduler: SYSTEM_SCHEDULER,
-      askRestart: (version) =>
-        ask(
-          "Update ready",
-          `LeagueOfLeagues ${version} is ready to install.`,
-          "It takes a few seconds and the app reopens by itself. In a match right now? Choose Later — it installs when you close the app.",
-          "Restart now",
-        ),
-      askDownload: (version) =>
-        ask(
-          "Update available",
-          `LeagueOfLeagues ${version} is available.`,
-          "Download the new version, open the .dmg and drag it into Applications to replace this one.",
-          "Download",
-        ),
-      openExternal: (url) => void shell.openExternal(url),
-      log,
-    });
-    updates.start();
-  }
+  // Silent version check 10s after boot, then every 30 minutes (src/update/coordinator.ts).
+  updates.start();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow();
@@ -1355,7 +1419,7 @@ async function bootstrap(): Promise<void> {
     poller.stop();
     champSelectPoller.stop();
     liveGamePoller.stop();
-    updates?.stop();
+    updates.stop();
     if (process.platform !== "darwin") app.quit();
   });
 }

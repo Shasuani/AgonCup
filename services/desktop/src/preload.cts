@@ -34,6 +34,9 @@ export interface ReadSummonerBridgeResult {
   tagLine?: string;
   summonerId?: string;
   region?: string;
+  /** Summoner icon id + account level (display only). */
+  profileIconId?: number;
+  summonerLevel?: number;
   reason?: string;
   detail?: string;
 }
@@ -274,6 +277,49 @@ export type PresenceBridgeResult =
   | { ok: true; playersInGame: number; entries: PresenceEntryBridge[] }
   | { ok: false; status: number; detail: string };
 
+/** One scoreboard line of a played game (display-only, from the eog reports). */
+export interface HistoryPlayerBridge {
+  puuid: string;
+  displayName: string | null;
+  riotId: string | null;
+  championId: number;
+  kills: number;
+  deaths: number;
+  assists: number;
+  championName: string | null;
+  level: number | null;
+  items: number[];
+  spell1Id: number | null;
+  spell2Id: number | null;
+  goldEarned: number | null;
+  minionsKilled: number | null;
+  damageToChampions: number | null;
+  visionScore: number | null;
+  profileIconId: number | null;
+}
+
+/** The last summoner icon/level this device saw (display only). */
+export type ProfileBridgeResult = { ok: true; profileIconId?: number; summonerLevel?: number };
+
+export interface HistoryTeamBridge {
+  isWinner: boolean;
+  players: HistoryPlayerBridge[];
+}
+
+export interface HistoryGameBridge {
+  matchId: string;
+  tournamentId: string;
+  tournamentName: string | null;
+  round: number | null;
+  lcuGameId: string;
+  playedAt: string;
+  teams: HistoryTeamBridge[];
+}
+
+export type HistoryBridgeResult =
+  | { ok: true; games: HistoryGameBridge[] }
+  | { ok: false; status: number; detail: string };
+
 /** LCU reachability badge state pushed from the main-process poller. */
 export type LcuStatusBridge = "online" | "loading" | "offline";
 
@@ -366,6 +412,10 @@ export interface LolBridge {
   deleteTeam(teamId: string): Promise<ActOnRequestBridgeResult>;
   /** Global live presence (who is in a game + which server). */
   presence(): Promise<PresenceBridgeResult>;
+  /** The signed-in player's recent games (per-game scoreboards). */
+  myHistory(): Promise<HistoryBridgeResult>;
+  /** The last summoner icon/level this device saw (works with League closed). */
+  getProfile(): Promise<ProfileBridgeResult>;
   /** Is this session allowed to drive the League client (lobby writes)? */
   getAutomation(): Promise<AutomationBridgeResult>;
   /** Grant/revoke that permission for this session only (never persisted). */
@@ -439,6 +489,8 @@ const bridge: LolBridge = {
   deleteTeam: (teamId) =>
     ipcRenderer.invoke("lol:team-delete", { teamId }) as Promise<ActOnRequestBridgeResult>,
   presence: () => ipcRenderer.invoke("lol:presence") as Promise<PresenceBridgeResult>,
+  myHistory: () => ipcRenderer.invoke("lol:history-mine") as Promise<HistoryBridgeResult>,
+  getProfile: () => ipcRenderer.invoke("lol:profile-get") as Promise<ProfileBridgeResult>,
   getAutomation: () => ipcRenderer.invoke("lol:automation-get") as Promise<AutomationBridgeResult>,
   setAutomation: (enabled) =>
     ipcRenderer.invoke("lol:automation-set", { enabled }) as Promise<AutomationBridgeResult>,

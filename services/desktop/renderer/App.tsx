@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { theme as t, chromeStyle, dragRegion, TITLE_BAR_HEIGHT } from './theme';
+import { globalCss } from './styles';
 import { lol, type BridgeUser } from './bridge';
 import { Spinner } from './ui';
+import { BrandMark } from './icons';
 import PairScreen from './PairScreen';
 import DesktopClient from './DesktopClient';
 
@@ -43,8 +45,11 @@ export default function App() {
   let screen: React.ReactNode;
   if (state === 'loading') {
     screen = (
-      <div style={{ width: '100vw', height: '100vh', background: t.bg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <Spinner size={28} />
+      <div className="ll-stage">
+        <div style={{ textAlign: 'center' }}>
+          <BrandMark size={40} />
+          <div style={{ marginTop: 18 }}><Spinner size={22} /></div>
+        </div>
       </div>
     );
   } else if (state === 'offline') screen = <OfflineScreen name={user?.displayName ?? null} />;
@@ -53,6 +58,9 @@ export default function App() {
 
   return (
     <>
+      {/* The one global stylesheet (fonts, reset, .ll-* classes). Mounted once
+          here so every screen — pair, offline, the shell — shares it. */}
+      <style>{globalCss}</style>
       <DragStrip />
       {screen}
     </>
@@ -73,14 +81,20 @@ function DragStrip() {
  * the user to Discord to solve a problem they do not have. */
 function OfflineScreen({ name }: { name: string | null }) {
   return (
-    <div style={{ width: '100vw', height: '100vh', background: t.bg, color: t.text, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div style={{ textAlign: 'center', maxWidth: 420, padding: 24 }}>
-        <Spinner size={28} />
-        <h2 style={{ margin: '20px 0 8px', fontSize: 18 }}>Can’t reach the server</h2>
-        <p style={{ margin: 0, color: t.textDim, fontSize: 14, lineHeight: 1.6 }}>
-          {name ? `You’re still signed in as ${name}. ` : 'You’re still signed in. '}
-          Reconnecting automatically — no need to enter a new code.
-        </p>
+    <div className="ll-stage">
+      <div className="ll-stage__card" style={{ textAlign: 'center', maxWidth: 440 }}>
+        <div className="ll-center" style={{ gap: 12, marginBottom: 22 }}>
+          <BrandMark size={28} />
+          <span className="ll-wordmark">LEAGUE<em>OF</em>LEAGUES</span>
+        </div>
+        <div className="ll-panel" style={{ padding: '34px 36px' }}>
+          <Spinner size={26} />
+          <h2 className="ll-h2" style={{ marginTop: 18 }}>Can’t reach the server</h2>
+          <p className="ll-lead" style={{ marginTop: 10, color: t.text }}>
+            {name ? `You’re still signed in as ${name}. ` : 'You’re still signed in. '}
+            Reconnecting automatically — no need to enter a new code.
+          </p>
+        </div>
       </div>
     </div>
   );

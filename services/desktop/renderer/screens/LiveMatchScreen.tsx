@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { theme as t } from '../theme';
-import { Kicker } from '../ui';
+import { PageHead, Panel, Badge, Dot, Credential, Switch, EmptyState, Notice, Chip } from '../ui';
+import { Icon } from '../icons';
+import { ChampIcon, championName, useChampions } from '../champion';
 import {
   lol, useAsync, useChampSelect, useLiveGame, errText,
-  type MyMatch, type ChampSelectBoard, type ChampSelectMember, type LiveGame,
+  type MyMatch, type ChampSelectBoard, type ChampSelectMember, type LiveGame, type LcuStatus,
 } from '../bridge';
 
 // The live lobby, as the backend knows it. This screen used to show only which
@@ -27,25 +29,43 @@ const PHASE_TEXT: Record<string, string> = {
   host_lost: 'This one is opened by hand — see below',
 };
 
+/** The visible milestones of a match, in order, and which phases sit at each. */
+const STEPS: { label: string; phases: string[] }[] = [
+  { label: 'Host', phases: ['assigned_host', 'awaiting_create', 'host_lost'] },
+  { label: 'Lobby', phases: ['lobby_open'] },
+  { label: 'Players', phases: ['filling', 'ready'] },
+  { label: 'Champ select', phases: ['starting'] },
+  { label: 'In game', phases: ['in_game'] },
+  { label: 'Result', phases: ['result_pending', 'ended'] },
+];
+
+function stepIndex(state: string | null): number {
+  if (state === null) return -1;
+  const i = STEPS.findIndex((s) => s.phases.includes(state));
+  return i;
+}
+
 /** True once the lobby demonstrably exists in the League client. */
 function lobbyExists(state: string | null): boolean {
   return state === 'lobby_open' || state === 'filling' || state === 'ready' ||
     state === 'starting' || state === 'in_game' || state === 'result_pending';
 }
 
-function Dot({ colour }: { colour: string }) {
+function Stepper({ state }: { state: string | null }) {
+  const current = stepIndex(state);
+  const finished = state === 'ended';
   return (
-    <span style={{ fontSize: 12, color: colour, letterSpacing: '.1em', animation: 'llBlink 1.6s ease-in-out infinite' }}>
-      {'●'}
-    </span>
-  );
-}
-
-function Credential({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <div style={{ fontSize: 11, color: t.textDim, letterSpacing: '.08em', textTransform: 'uppercase' }}>{label}</div>
-      <div style={{ fontFamily: 'ui-monospace, monospace', fontSize: 18, color: t.goldBright, marginTop: 4, userSelect: 'text' }}>{value}</div>
+    <div className="ll-stepper" aria-label="Match progress">
+      {STEPS.map((s, i) => {
+        const done = finished || i < current;
+        const cur = !finished && i === current;
+        return (
+          <div key={s.label} className={`ll-step${done ? ' is-done' : ''}${cur ? ' is-current' : ''}`}>
+            <div className="ll-step__dot">{done && <Icon name="check" size={11} />}</div>
+            <div className="ll-step__label">{s.label}</div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -92,30 +112,30 @@ function AutomationToggle() {
 
   const on = enabled === true;
   return (
-    <div style={{ border: `1px solid ${on ? t.gold : t.line}`, background: t.panel, padding: '16px 20px', marginBottom: 18, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 20 }}>
-      <div>
-        <div style={{ fontSize: 14, color: enabled === 'unavailable' ? t.red : t.text }}>
-          {enabled === 'loading' && 'Automation — checking…'}
-          {enabled === 'unavailable' && 'Automation is unavailable — this client is running an old build. Close it fully and start it again from VS Code.'}
-          {enabled === true && 'Automation is on'}
-          {enabled === false && 'Automation is off'}
-        </div>
-        <div style={{ fontSize: 12, color: t.textDim, marginTop: 4, lineHeight: 1.5, maxWidth: 520 }}>
-          Lets this app create the lobby, invite your opponents and accept the
-          lobby invite for you. It never touches anything in a game, and your
-          choice is remembered on this device until you change it.
+    <Panel tight featured={on} tone={enabled === 'unavailable' ? 'danger' : undefined} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 24 }}>
+      <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+        <span style={{ color: on ? t.gold : t.textDim, display: 'inline-flex', marginTop: 2 }}><Icon name="bolt" size={20} /></span>
+        <div>
+          <div className="ll-strong" style={{ fontWeight: 600, fontSize: 15, color: enabled === 'unavailable' ? '#ffb3b3' : undefined }}>
+            {enabled === 'loading' && 'Automation — checking…'}
+            {enabled === 'unavailable' && 'Automation is unavailable — this client is running an old build. Close it fully and start it again.'}
+            {enabled === true && 'Automation is on'}
+            {enabled === false && 'Automation is off'}
+          </div>
+          <div className="ll-dim" style={{ fontSize: 12.5, marginTop: 4, lineHeight: 1.5, maxWidth: 560 }}>
+            Lets this app create the lobby, invite your opponents and accept the
+            lobby invite for you. It never touches anything in a game, and your
+            choice is remembered on this device until you change it.
+          </div>
         </div>
       </div>
       {typeof enabled === 'boolean' && (
-        <button
-          onClick={() => void toggle()}
-          disabled={busy}
-          style={{ cursor: busy ? 'default' : 'pointer', background: on ? t.gold : 'transparent', color: on ? '#0b0b0d' : t.gold, border: `1px solid ${t.gold}`, padding: '8px 18px', fontSize: 13, letterSpacing: '.06em', textTransform: 'uppercase', whiteSpace: 'nowrap' }}
-        >
-          {on ? 'Turn off' : 'Turn on'}
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
+          <span className="ll-cap" style={{ color: on ? t.gold : t.textDim }}>{on ? 'On' : 'Off'}</span>
+          <Switch on={on} disabled={busy} onToggle={() => void toggle()} label="Let this app drive the League client" />
+        </div>
       )}
-    </div>
+    </Panel>
   );
 }
 
@@ -158,10 +178,12 @@ function LiveGamePanel({ view, duel }: { view: LiveGame; duel: boolean }) {
 
   let kicker: string; let title: string; let sub: string | null = null;
   let decided = false;
+  let won: boolean | null = null;
 
   if (duel) {
     if (fb !== null) {
       decided = true;
+      won = fb.isYou;
       kicker = 'Duel decided · first blood';
       title = `${fb.scorer} wins the duel`;
       sub = fb.isYou === true
@@ -180,6 +202,7 @@ function LiveGamePanel({ view, duel }: { view: LiveGame; duel: boolean }) {
     }
   } else if (ended) {
     decided = view.result !== null;
+    won = view.result === null ? null : view.result === 'win';
     kicker = 'Game over';
     title = view.result === 'win' ? 'Victory' : view.result === 'loss' ? 'Defeat' : 'Game over';
     sub = view.result === null
@@ -193,20 +216,21 @@ function LiveGamePanel({ view, duel }: { view: LiveGame; duel: boolean }) {
       : 'The winner appears here when the game ends.';
   }
 
+  const tone = decided ? (won === false ? 'red' : 'teal') : 'gold';
   return (
-    <div style={{ border: `1px solid ${decided ? t.goldBright : t.gold}`, background: t.panel, padding: '18px 22px', marginBottom: 18 }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 16 }}>
-        <div style={{ fontSize: 11, color: t.textDim, letterSpacing: '.08em', textTransform: 'uppercase' }}>{kicker}</div>
-        <Dot colour={decided ? t.goldBright : t.gold} />
+    <Panel featured tone={decided && won !== false ? 'teal' : undefined} style={{ padding: '22px 26px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
+        <span className="ll-kicker" style={{ color: tone === 'red' ? '#ff9e9e' : tone === 'teal' ? t.teal : t.gold }}>{kicker}</span>
+        <Dot tone={tone} pulse={!decided} />
       </div>
-      <div style={{ fontFamily: t.display, fontSize: decided ? 26 : 20, color: t.goldBright, marginTop: 6 }}>{title}</div>
-      {sub !== null && <div style={{ fontSize: 13, color: t.text, marginTop: 6, lineHeight: 1.5 }}>{sub}</div>}
+      <h2 className="ll-h2" style={{ fontSize: decided ? 30 : 22, marginTop: 8, color: tone === 'red' ? '#ffb3b3' : undefined }}>{title}</h2>
+      {sub !== null && <p className="ll-lead" style={{ marginTop: 8 }}>{sub}</p>}
       {decided && (
-        <div style={{ fontSize: 12, color: t.textDim, marginTop: 10 }}>
-          The result is recorded automatically from everyone's reports — nothing to submit.
+        <div className="ll-dim" style={{ fontSize: 12.5, marginTop: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Icon name="check" size={14} /> The result is recorded automatically from everyone's reports — nothing to submit.
         </div>
       )}
-    </div>
+    </Panel>
   );
 }
 
@@ -219,17 +243,19 @@ const SELECT_PHASE_TEXT: Record<string, string> = {
 };
 
 function Seat({ m }: { m: ChampSelectMember }) {
-  const champ = m.championName ?? (m.championId > 0 ? `Champion #${m.championId}` : null);
+  const champions = useChampions();
+  const champ = m.championName ?? (m.championId > 0 ? (championName(champions, m.championId) ?? `Champion #${m.championId}`) : null);
   return (
-    <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, padding: '7px 0', borderBottom: `1px solid ${t.line}` }}>
-      <div style={{ fontSize: 13, color: t.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {m.gameName ?? `Player ${m.cellId + 1}`}
+    <div className={`ll-seat${m.locked ? ' ll-seat--locked' : ''}`}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+        <ChampIcon id={m.championId} name={champ ?? undefined} size={28} ring={m.locked ? 'gold' : 'none'} />
+        <div className="ll-seat__name">{m.gameName ?? `Player ${m.cellId + 1}`}</div>
       </div>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, whiteSpace: 'nowrap' }}>
-        <span style={{ fontSize: 13, color: champ ? t.goldBright : t.textDim }}>{champ ?? '—'}</span>
-        <span style={{ fontSize: 10, letterSpacing: '.1em', textTransform: 'uppercase', color: m.locked ? t.gold : t.textDim }}>
-          {m.locked ? '◆ locked' : champ ? 'picking…' : 'choosing…'}
-        </span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, whiteSpace: 'nowrap' }}>
+        <span className="ll-seat__champ" style={champ ? undefined : { color: t.textDim, fontWeight: 400 }}>{champ ?? '—'}</span>
+        {m.locked
+          ? <Badge tone="teal">Locked</Badge>
+          : <Badge tone="dim">{champ ? 'Picking…' : 'Choosing…'}</Badge>}
       </div>
     </div>
   );
@@ -245,25 +271,27 @@ function ChampSelectPanel({ board }: { board: ChampSelectBoard }) {
   const mine = board.members.filter((m) => m.side === 'my');
   const theirs = board.members.filter((m) => m.side === 'their');
   const phase = (board.timerPhase && SELECT_PHASE_TEXT[board.timerPhase]) ?? 'Champion select';
-  const column = (label: string, seats: ChampSelectMember[]) => (
+  const column = (label: string, seats: ChampSelectMember[], tone: 'teal' | 'red') => (
     <div style={{ flex: 1, minWidth: 0 }}>
-      <div style={{ fontSize: 11, color: t.textDim, letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 6 }}>{label}</div>
-      {seats.length === 0 && <div style={{ fontSize: 13, color: t.textDim }}>—</div>}
+      <div className="ll-cap" style={{ marginBottom: 6, color: tone === 'teal' ? t.teal : '#e07b7b' }}>{label}</div>
+      {seats.length === 0 && <div className="ll-dim" style={{ fontSize: 13 }}>—</div>}
       {seats.map((m) => <Seat key={`${m.side}:${m.cellId}`} m={m} />)}
     </div>
   );
   return (
-    <div style={{ border: `1px solid ${t.gold}`, background: t.panel, padding: '18px 22px', marginBottom: 18 }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 16 }}>
-        <div style={{ fontFamily: t.display, fontSize: 20, color: t.goldBright }}>Champion select</div>
-        <Dot colour={t.gold} />
+    <Panel featured style={{ padding: '22px 26px' }}>
+      <div className="ll-panel__head">
+        <div>
+          <h2 className="ll-h2">Champion select</h2>
+          <div className="ll-lead" style={{ marginTop: 4 }}>{phase}</div>
+        </div>
+        <Badge tone="gold" dot pulse>Live</Badge>
       </div>
-      <div style={{ fontSize: 13, color: t.text, marginTop: 6 }}>{phase}</div>
-      <div style={{ display: 'flex', gap: 36, marginTop: 14 }}>
-        {column('Your team', mine)}
-        {column('Enemy team', theirs)}
+      <div style={{ display: 'flex', gap: 36, marginTop: 16 }}>
+        {column('Your team', mine, 'teal')}
+        {column('Enemy team', theirs, 'red')}
       </div>
-    </div>
+    </Panel>
   );
 }
 
@@ -278,33 +306,39 @@ function MatchCard({ m }: { m: MyMatch }) {
   const phase = m.lobbyState === null
     ? 'Drawn — the lobby has not been opened yet'
     : (PHASE_TEXT[m.lobbyState] ?? m.lobbyState);
+  const aborted = m.lobbyState === 'aborted';
 
   return (
-    <div style={{ border: `1px solid ${exists ? t.gold : t.line}`, background: t.panel, padding: '22px 26px', marginBottom: 14 }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 16 }}>
+    <Panel featured={exists} style={{ padding: '22px 26px' }}>
+      <div className="ll-panel__head" style={{ alignItems: 'flex-start' }}>
         <div>
-          <div style={{ fontFamily: t.display, fontSize: 22, color: t.goldBright }}>{m.tournamentName}</div>
-          <div style={{ fontSize: 13, color: t.textDim, marginTop: 4 }}>
-            {m.roundLabel} &middot; {modeText(m.gameMode)}
+          <h2 className="ll-h2" style={{ fontSize: 22 }}>{m.tournamentName}</h2>
+          <div className="ll-chips" style={{ marginTop: 8 }}>
+            <Chip icon="trophy">{m.roundLabel}</Chip>
+            <Chip icon="map">{modeText(m.gameMode)}</Chip>
           </div>
         </div>
-        <Dot colour={exists ? t.gold : t.red} />
+        {exists
+          ? <Badge tone="teal" dot pulse>Lobby up</Badge>
+          : aborted ? <Badge tone="red">Aborted</Badge> : <Badge tone="gold" dot pulse>Waiting</Badge>}
       </div>
 
-      <div style={{ fontSize: 14, color: t.text, marginTop: 14, lineHeight: 1.5 }}>{phase}</div>
+      {!aborted && <Stepper state={m.lobbyState} />}
+
+      <div className="ll-lead" style={{ marginTop: 18, color: t.textStrong }}>{phase}</div>
 
       {m.isHost && !byHand && (
-        <div style={{ fontSize: 13, color: t.gold, marginTop: 10 }}>
-          {'◆'} You are the host — your client is creating this lobby.
+        <div style={{ fontSize: 13, color: t.gold, marginTop: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
+          <Icon name="crown" size={15} /> You are the host — your client is creating this lobby.
         </div>
       )}
       {m.isHost && byHand && (
-        <div style={{ fontSize: 13, color: t.gold, marginTop: 10 }}>
-          {'◆'} You are opening this match — create the custom game below.
+        <div style={{ fontSize: 13, color: t.gold, marginTop: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
+          <Icon name="crown" size={15} /> You are opening this match — create the custom game below.
         </div>
       )}
       {!m.isHost && m.hostName !== null && (
-        <div style={{ fontSize: 13, color: t.textDim, marginTop: 10 }}>
+        <div className="ll-dim" style={{ fontSize: 13, marginTop: 8 }}>
           {byHand
             ? `${m.hostName} is opening the custom game — you will be invited automatically.`
             : `Host: ${m.hostName} — watch for the invite, it is accepted automatically.`}
@@ -312,44 +346,46 @@ function MatchCard({ m }: { m: MyMatch }) {
       )}
 
       {m.lobbyName !== null && m.lobbyPassword !== null && (
-        <div style={{ marginTop: 18, paddingTop: 16, borderTop: `1px dashed ${t.line}` }}>
+        <div className="ll-hr-dashed" style={{ marginBottom: 0 }}>
           {m.isHost && byHand && (
-            <div style={{ fontSize: 13, color: t.text, marginBottom: 14, lineHeight: 1.5 }}>
-              Make a <strong>custom game</strong> — {modeText(m.gameMode)} — with
+            <p className="ll-lead" style={{ margin: '16px 0 14px' }}>
+              Make a <strong className="ll-strong">custom game</strong> — {modeText(m.gameMode)} — with
               these exact details. As soon as it exists this app invites the other
               players for you — leave it running.
-            </div>
+            </p>
           )}
           {nobody && (
-            <div style={{ fontSize: 13, color: t.text, marginBottom: 14, lineHeight: 1.5 }}>
-              Nobody is set up to open this match. Make a <strong>custom game</strong>{' '}
+            <p className="ll-lead" style={{ margin: '16px 0 14px' }}>
+              Nobody is set up to open this match. Make a <strong className="ll-strong">custom game</strong>{' '}
               with these details — everyone else has the same ones and can join it
               directly.
-            </div>
+            </p>
           )}
           {!m.isHost && byHand && !nobody && (
-            <div style={{ fontSize: 13, color: t.textDim, marginBottom: 14, lineHeight: 1.5 }}>
+            <p className="ll-dim" style={{ fontSize: 13, margin: '16px 0 14px' }}>
               If the invite does not arrive, join the custom game by hand with these:
-            </div>
+            </p>
           )}
-          <div style={{ display: 'flex', gap: 40 }}>
+          {!(m.isHost && byHand) && !nobody && !(!m.isHost && byHand) && (
+            <p className="ll-dim" style={{ fontSize: 12.5, margin: '14px 0 12px' }}>Lobby details, in case you need to join by hand:</p>
+          )}
+          <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap' }}>
             <Credential label="Lobby name" value={m.lobbyName} />
             <Credential label="Password" value={m.lobbyPassword} />
-            <Credential label="Game" value={modeShort(m.gameMode)} />
+            <Credential label="Game" value={modeShort(m.gameMode)} copy={false} />
           </div>
           {isDuel(m.gameMode) && (
-            <div style={{ fontSize: 12, color: t.textDim, marginTop: 12, lineHeight: 1.5 }}>
-              {'◆'} This is a duel: the game is decided by <strong>first blood</strong> —
-              one kill and it&apos;s over.
+            <div className="ll-dim" style={{ fontSize: 12.5, marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+              <Icon name="bolt" size={14} /> This is a duel: the game is decided by <strong className="ll-strong">first blood</strong> — one kill and it's over.
             </div>
           )}
         </div>
       )}
-    </div>
+    </Panel>
   );
 }
 
-export default function LiveMatchScreen() {
+export default function LiveMatchScreen({ lcu }: { lcu?: LcuStatus }) {
   const b = lol();
   const board = useChampSelect();
   const live = useLiveGame();
@@ -368,37 +404,36 @@ export default function LiveMatchScreen() {
 
   return (
     <div>
-      <Kicker>Live Match &middot; Orchestration</Kicker>
-      <h1 style={{ fontFamily: t.display, fontWeight: 700, fontSize: 32, color: t.goldBright, margin: '10px 0 0' }}>Live match</h1>
+      <PageHead kicker="Live match · Orchestration" title="Live match" intro="Your matches as they happen: who opens the lobby, whether it exists yet, and the name and password to join by hand." />
 
-      <div style={{ marginTop: 24 }}><AutomationToggle /></div>
+      <div className="ll-stack">
+        <AutomationToggle />
 
-      {live !== null && playing !== undefined && (
-        <LiveGamePanel view={live} duel={isDuel(playing.gameMode)} />
-      )}
+        {lcu === 'offline' && matches.length > 0 && (
+          <Notice tone="gold">The League client is not open. Start it so the lobby invite can reach you.</Notice>
+        )}
 
-      {board !== null && <ChampSelectPanel board={board} />}
+        {live !== null && playing !== undefined && (
+          <LiveGamePanel view={live} duel={isDuel(playing.gameMode)} />
+        )}
 
-      {loading && <div style={{ color: t.textDim, marginTop: 24 }}>Loading…</div>}
-      {error && <div style={{ color: t.red, marginTop: 24, fontSize: 13 }}>{error}</div>}
+        {board !== null && <ChampSelectPanel board={board} />}
 
-      {!loading && !error && matches.length === 0 && (
-        <div style={{ marginTop: 40, border: `1px dashed ${t.line}`, background: t.panel, borderRadius: 3, padding: '56px 40px', textAlign: 'center' }}>
-          <div style={{ fontSize: 40, color: t.goldDim, marginBottom: 16 }}>{'▸'}</div>
-          <div style={{ fontFamily: t.display, fontSize: 22, color: t.goldBright }}>No live match right now</div>
-          <div style={{ fontSize: 14, color: t.text, marginTop: 10, maxWidth: 460, marginInline: 'auto', lineHeight: 1.5 }}>
-            When one of your tournaments starts your match, the lobby appears here —
-            who is opening it, whether the custom game exists yet, and the name and
-            password to join it by hand.
-          </div>
-        </div>
-      )}
+        {loading && <div className="ll-loading">Loading your matches…</div>}
+        {error && <Notice tone="err">{error}</Notice>}
 
-      {!loading && !error && matches.length > 0 && (
-        <div style={{ marginTop: 24 }}>
-          {matches.map((m) => <MatchCard key={m.matchId} m={m} />)}
-        </div>
-      )}
+        {!loading && !error && matches.length === 0 && (
+          <Panel tone="dashed" style={{ marginTop: 8 }}>
+            <EmptyState icon="swords" title="No live match right now">
+              When one of your tournaments starts your match, the lobby appears here —
+              who is opening it, whether the custom game exists yet, and the name and
+              password to join it by hand.
+            </EmptyState>
+          </Panel>
+        )}
+
+        {!loading && !error && matches.map((m) => <MatchCard key={m.matchId} m={m} />)}
+      </div>
     </div>
   );
 }

@@ -1,8 +1,9 @@
 // LeagueOfLeagues — hextech theme tokens (desktop renderer).
 import type { CSSProperties } from 'react';
-// Fonts are loaded from bundled/system fallbacks only — the Electron CSP
-// (default-src 'self') blocks CDN font fetches, so Cinzel/Barlow degrade to
-// the serif/sans fallbacks below. Inline styles are allowed (style-src 'unsafe-inline').
+// Cinzel + Barlow are bundled as data: URIs (fonts.ts) — the Electron CSP
+// (default-src 'self', font-src 'self' data:) blocks every CDN, so this is the
+// only way the real faces reach the renderer. The stacks below still name a
+// fallback for the split second before the @font-face parses.
 export const theme = {
   bg: '#010a13',
   panel: '#0a1626',
@@ -16,12 +17,12 @@ export const theme = {
   red: '#c44a4a',
   text: '#a09b8c',
   textStrong: '#f0e6d2',
-  textDim: '#5b5a4d',
+  textDim: '#6b6a5c',
   line: 'rgba(200,170,110,.22)',
   lineSoft: 'rgba(200,170,110,.10)',
   display: "'Cinzel', Georgia, 'Times New Roman', serif",
   body: "'Barlow', 'Helvetica Neue', Helvetica, Arial, sans-serif",
-  mono: "ui-monospace, 'SF Mono', Menlo, monospace",
+  mono: "ui-monospace, 'SF Mono', Menlo, Consolas, monospace",
 } as const;
 
 /** True under the macOS build, where the native title bar is hidden
@@ -41,6 +42,8 @@ export const dragRegion = { WebkitAppRegion: 'drag' } as CSSProperties;
 /** Opt an interactive child out of the drag region so it stays clickable. */
 export const noDrag = { WebkitAppRegion: 'no-drag' } as CSSProperties;
 
+/** Kept for any caller that still injects it; the keyframes now live in
+ *  styles.ts (globalCss), which App mounts once. */
 export const keyframesCss = `
 @keyframes llBlink { 0%,100%{opacity:1;} 50%{opacity:.35;} }
 @keyframes llBar { 0%{background-position:0 0;} 100%{background-position:40px 0;} }

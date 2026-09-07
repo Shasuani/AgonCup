@@ -45,6 +45,10 @@ export interface CurrentSummonerOk {
   readonly tagLine: string;
   /** Platform route read from the LCU (e.g. "euw1"); undefined if unreadable. */
   readonly region: string | undefined;
+  /** Summoner icon id (display only; Data Dragon `img/profileicon/<id>.png`). */
+  readonly profileIconId?: number;
+  /** Account level (display only). */
+  readonly summonerLevel?: number;
 }
 
 /** Riot region label (from /riotclient/region-locale `region`) -> platform route. */
@@ -154,6 +158,8 @@ export async function readCurrentSummoner(
       gameName: summoner.gameName,
       tagLine: summoner.tagLine,
       region,
+      ...(summoner.profileIconId !== undefined ? { profileIconId: summoner.profileIconId } : {}),
+      ...(summoner.summonerLevel !== undefined ? { summonerLevel: summoner.summonerLevel } : {}),
     };
   } catch (err) {
     // Lockfile missing or connection refused => League client isn't running.

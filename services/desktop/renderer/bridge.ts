@@ -35,7 +35,7 @@ export interface LiveGame {
 export interface BridgeUser { userId: string; discordUserId: string; displayName: string }
 export type SessionStatus = 'signed-in' | 'needs-pairing' | 'unavailable';
 export interface SessionState { signedIn: boolean; user: BridgeUser | null; status?: SessionStatus }
-export interface ReadSummoner { ok: boolean; puuid?: string; gameName?: string; tagLine?: string; region?: string; reason?: string; detail?: string }
+export interface ReadSummoner { ok: boolean; puuid?: string; gameName?: string; tagLine?: string; region?: string; profileIconId?: number; summonerLevel?: number; reason?: string; detail?: string }
 export interface LinkedAccount { accountId: string; gameName: string | null; tagLine: string | null; region: string | null; verified: boolean; rankText: string }
 /** A live match of the caller's, with whatever is known about its lobby. */
 export interface MyMatch {
@@ -60,6 +60,11 @@ export interface TeamMember { teamId: string; userId: string; role: string; disp
 export interface JoinRequest { teamId: string; teamName: string; userId: string; displayName: string }
 export interface PresenceEntry { matchId: string; guildName: string; tournamentName: string; gameMode: string; startedAt: string | null; players: string[] }
 export interface BracketMatch { id: string; round: number; slot: number; teamAName: string | null; teamBName: string | null; winnerTeamId: string | null; teamAId: string | null; teamBId: string | null; status: string; readyDeadlineAt: string | null; teamAReady: boolean; teamBReady: boolean }
+
+/** One scoreboard line of a played game (display-only, rebuilt from eog reports). */
+export interface HistoryPlayer { puuid: string; displayName: string | null; riotId: string | null; championId: number; kills: number; deaths: number; assists: number; championName: string | null; level: number | null; items: number[]; spell1Id: number | null; spell2Id: number | null; goldEarned: number | null; minionsKilled: number | null; damageToChampions: number | null; visionScore: number | null; profileIconId: number | null }
+export interface HistoryTeam { isWinner: boolean; players: HistoryPlayer[] }
+export interface HistoryGame { matchId: string; tournamentId: string; tournamentName: string | null; round: number | null; lcuGameId: string; playedAt: string; teams: HistoryTeam[] }
 
 export interface EntrantPlayer { userId: string; name: string; lockedIn: boolean; isYou: boolean }
 export interface Entrant { teamId: string; name: string; lockedIn: boolean; isSolo: boolean; isYou: boolean; canLockIn: boolean; players: EntrantPlayer[] }
@@ -97,6 +102,10 @@ export interface LolBridge {
   leaveTeam(teamId: string): Promise<Res<Record<string, never>>>;
   deleteTeam(teamId: string): Promise<Res<Record<string, never>>>;
   presence(): Promise<Res<{ playersInGame: number; entries: PresenceEntry[] }>>;
+  /** The signed-in player's recent games; absent on an old main-process build. */
+  myHistory?(): Promise<Res<{ games: HistoryGame[] }>>;
+  /** The last summoner icon/level this device saw (works with League closed); absent on an old build. */
+  getProfile?(): Promise<{ ok: true; profileIconId?: number; summonerLevel?: number }>;
   /** Is this client allowed to drive the League client (lobby writes)? */
   getAutomation(): Promise<{ ok: true; enabled: boolean }>;
   /** Grant/revoke that permission; remembered per device (settings.json). */

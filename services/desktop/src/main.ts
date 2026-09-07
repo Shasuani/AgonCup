@@ -73,6 +73,7 @@ import {
   removeMember,
 } from "./teams/teams.js";
 import { getPresence } from "./presence/presence.js";
+import { listMyHistory } from "./results/history.js";
 import {
   pairDesktop,
   refreshSession,
@@ -668,7 +669,12 @@ async function bootstrap(): Promise<void> {
   const adapter = createLcuAdapter();
   // Re-apply the device's remembered automation consent before any orchestration
   // command can arrive (the adapter itself always constructs with writes OFF).
+  let lastProfile: { profileIconId?: number; summonerLevel?: number } = {};
   void settingsStore.load().then((s) => {
+    lastProfile = {
+      ...(s.profileIconId !== undefined ? { profileIconId: s.profileIconId } : {}),
+      ...(s.summonerLevel !== undefined ? { summonerLevel: s.summonerLevel } : {}),
+    };
     if (s.automationOptIn === true) {
       adapter.setWriteAutomationOptIn(true);
       log("automation_opt_in_restored", { enabled: true });
@@ -842,6 +848,14 @@ async function bootstrap(): Promise<void> {
   ipcMain.handle("lol:read-summoner", async () => {
     const result = await readCurrentSummoner();
     if (result.ok) {
+      // Remember the icon/level so the profile still renders with League closed.
+      if (result.profileIconId !== undefined) {
+        lastProfile = {
+          profileIconId: result.profileIconId,
+          ...(result.summonerLevel !== undefined ? { summonerLevel: result.summonerLevel } : {}),
+        };
+        void settingsStore.save(lastProfile);
+      }
       return {
         ok: true,
         puuid: result.puuid,
@@ -850,10 +864,16 @@ async function bootstrap(): Promise<void> {
         tagLine: result.tagLine,
         summonerId: result.summonerId,
         region: result.region,
+        profileIconId: result.profileIconId,
+        summonerLevel: result.summonerLevel,
       };
     }
     return { ok: false, reason: result.reason, detail: result.detail };
   });
+
+  // The last summoner icon/level this device saw (display only) — what the
+  // sidebar shows before/without the League client being open.
+  ipcMain.handle("lol:profile-get", () => ({ ok: true, ...lastProfile }));
 
   // Current session state so the renderer chooses pairing vs verify on load.
   // `status` distinguishes the two ways of being signed out: "needs-pairing"
@@ -1098,6 +1118,11 @@ async function bootstrap(): Promise<void> {
   // Global live presence (bell badge + panel).
   ipcMain.handle("lol:presence", () =>
     withSession((t) => getPresence({ accessToken: t }, { backendUrl: backendBaseUrl() })),
+  );
+  // The player's own recent games (per-game scoreboards) — the Home strip and
+  // the Match history screen. Read-only, display-only (see results/history.ts).
+  ipcMain.handle("lol:history-mine", () =>
+    withSession((t) => listMyHistory({ accessToken: t }, { backendUrl: backendBaseUrl() })),
   );
 
   // --- LCU write automation: the player's remembered consent ----------------- //

@@ -5,7 +5,7 @@
 import { useState } from "react";
 import { Navigate } from "react-router-dom";
 import { sessionFromTokenPair, useAuth } from "../../auth/AuthProvider";
-import { Button } from "../../components";
+import { Button, DownloadClient } from "../../components";
 import { config } from "../../config";
 
 export default function LoginScreen(): JSX.Element {
@@ -61,6 +61,10 @@ export default function LoginScreen(): JSX.Element {
         <Button variant="primary" onClick={login} data-login-cta>
           Sign in with Discord
         </Button>
+
+        {/* Players land here from Discord looking for the client, not for the
+            admin console — the installers sit below the sign-in, no account needed. */}
+        <DownloadClient />
 
         {/* Stripped from production builds — import.meta.env.DEV is a compile
             time constant, so the whole block is dead code in a release bundle. */}

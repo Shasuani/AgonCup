@@ -32,3 +32,10 @@ export { EmptyState, ErrorState } from "./EmptyState";
 export type { EmptyStateProps, ErrorStateProps } from "./EmptyState";
 export { ToastProvider, useToast } from "./Toast";
 export type { ToastApi, ToastOptions, ToastProviderProps, ToastVariant } from "./Toast";
+export {
+  DownloadClient,
+  detectDesktopOs,
+  MAC_INSTALLER_URL,
+  WINDOWS_INSTALLER_URL,
+} from "./DownloadClient";
+export type { DesktopOs, DownloadClientProps } from "./DownloadClient";

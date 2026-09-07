@@ -26,6 +26,7 @@ import { useAsyncData } from "../api/useAsync";
 import { ScreenHeader } from "../components/ScreenHeader";
 import { StatCard, StatCardGrid } from "../components/StatCard/StatCard";
 import { Icon, type IconName } from "../components/Icon";
+import { DownloadClient } from "../components/DownloadClient";
 import { fetchDisputeQueue } from "./results/disputes";
 
 import "./HomeScreen.css";
@@ -205,6 +206,12 @@ export default function HomeScreen(): JSX.Element {
           </li>
         ))}
       </ul>
+
+      {/* Admins hand the installer link to their players; keep it one click
+          from the dashboard rather than only on the sign-in page. */}
+      <div data-dashboard-downloads>
+        <DownloadClient />
+      </div>
     </section>
   );
 }

@@ -91,6 +91,10 @@ export interface CurrentSummoner {
   readonly gameName: string;
   /** Riot ID tag line (e.g. "Shasu") — reliable; pairs with {@link gameName}. */
   readonly tagLine: string;
+  /** `profileIconId` — the summoner icon (Data Dragon `img/profileicon/<id>.png`). */
+  readonly profileIconId?: number;
+  /** `summonerLevel` — account level, display only. */
+  readonly summonerLevel?: number;
 }
 
 /** LCU-reported `gameId` — the corroboration join key (PLAN.md §3.6.5/§3.6.6). */
@@ -399,6 +403,25 @@ export interface EogPlayerStats {
   readonly numDeaths: number;
   /** `ASSISTS`. */
   readonly assists: number;
+  /** `championName` — display name as the client had it (optional, RE). */
+  readonly championName?: string;
+  /** `level` — final champion level (optional, RE). */
+  readonly level?: number;
+  /** `items` — final build, item ids in slot order incl. trinket (0 = empty). */
+  readonly items?: readonly number[];
+  /** `spell1Id` / `spell2Id` — summoner spell ids (optional, RE). */
+  readonly spell1Id?: number;
+  readonly spell2Id?: number;
+  /** `GOLD_EARNED` (optional, RE). */
+  readonly goldEarned?: number;
+  /** `MINIONS_KILLED` + `NEUTRAL_MINIONS_KILLED` (optional, RE). */
+  readonly minionsKilled?: number;
+  /** `TOTAL_DAMAGE_DEALT_TO_CHAMPIONS` (optional, RE). */
+  readonly damageToChampions?: number;
+  /** `VISION_SCORE` (optional, RE). */
+  readonly visionScore?: number;
+  /** `profileIconId` (optional, RE) — the player's summoner icon. */
+  readonly profileIconId?: number;
 }
 
 /** `RE` — one team's block from the eog-stats-block. */
@@ -1329,7 +1352,19 @@ export class LcuAdapterImpl implements LcuAdapter {
       typeof rec['gameName'] === 'string' ? rec['gameName'] : '';
     const tagLine =
       typeof rec['tagLine'] === 'string' ? rec['tagLine'] : '';
-    return { puuid, summonerId, displayName, gameName, tagLine };
+    const profileIconId =
+      typeof rec['profileIconId'] === 'number' ? rec['profileIconId'] : undefined;
+    const summonerLevel =
+      typeof rec['summonerLevel'] === 'number' ? rec['summonerLevel'] : undefined;
+    return {
+      puuid,
+      summonerId,
+      displayName,
+      gameName,
+      tagLine,
+      ...(profileIconId !== undefined ? { profileIconId } : {}),
+      ...(summonerLevel !== undefined ? { summonerLevel } : {}),
+    };
   }
 
   // -- getGameflowPhase -----------------------------------------------------
@@ -1479,13 +1514,47 @@ export class LcuAdapterImpl implements LcuAdapter {
           pr['summonerId'] !== undefined
             ? (String(asNumber(pr['summonerId'])) as SummonerId)
             : undefined;
+        // The live client nests the counters under `stats`; older captures (and
+        // the fake harness) carry them flat on the player. Read whichever exists.
+        const stats = asRecord(pr['stats']);
+        const stat = (key: string): number =>
+          pr[key] !== undefined ? asNumber(pr[key]) : asNumber(stats[key]);
+        const optNum = (v: unknown): number | undefined =>
+          typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+        const items = Array.isArray(pr['items'])
+          ? (pr['items'] as unknown[]).map((i) => asNumber(i))
+          : undefined;
+        const championName = asOptString<string>(pr['championName']);
+        const level = optNum(pr['level']);
+        const spell1Id = optNum(pr['spell1Id']);
+        const spell2Id = optNum(pr['spell2Id']);
+        const profileIconId = optNum(pr['profileIconId']);
+        const gold = optNum(pr['GOLD_EARNED'] ?? stats['GOLD_EARNED']);
+        const cs =
+          optNum(pr['MINIONS_KILLED'] ?? stats['MINIONS_KILLED']) !== undefined
+            ? stat('MINIONS_KILLED') + stat('NEUTRAL_MINIONS_KILLED')
+            : undefined;
+        const dmg = optNum(
+          pr['TOTAL_DAMAGE_DEALT_TO_CHAMPIONS'] ?? stats['TOTAL_DAMAGE_DEALT_TO_CHAMPIONS'],
+        );
+        const vision = optNum(pr['VISION_SCORE'] ?? stats['VISION_SCORE']);
         return {
           ...(puuid !== undefined ? { puuid } : {}),
           ...(summonerId !== undefined ? { summonerId } : {}),
           championId: asNumber(pr['championId']),
-          championsKilled: asNumber(pr['CHAMPIONS_KILLED']),
-          numDeaths: asNumber(pr['NUM_DEATHS']),
-          assists: asNumber(pr['ASSISTS']),
+          championsKilled: stat('CHAMPIONS_KILLED'),
+          numDeaths: stat('NUM_DEATHS'),
+          assists: stat('ASSISTS'),
+          ...(championName !== undefined ? { championName } : {}),
+          ...(level !== undefined ? { level } : {}),
+          ...(items !== undefined ? { items } : {}),
+          ...(spell1Id !== undefined ? { spell1Id } : {}),
+          ...(spell2Id !== undefined ? { spell2Id } : {}),
+          ...(gold !== undefined ? { goldEarned: gold } : {}),
+          ...(cs !== undefined ? { minionsKilled: cs } : {}),
+          ...(dmg !== undefined ? { damageToChampions: dmg } : {}),
+          ...(vision !== undefined ? { visionScore: vision } : {}),
+          ...(profileIconId !== undefined ? { profileIconId } : {}),
         };
       });
       return {

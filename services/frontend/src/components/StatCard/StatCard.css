@@ -124,6 +124,7 @@ a[data-statcard-link]:hover [data-statcard-icon] {
   font-weight: 700;
   letter-spacing: -0.03em;
   font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
   color: var(--text);
 }
 

@@ -501,6 +501,18 @@ class HistoryPlayer:
     kills: int
     deaths: int
     assists: int
+    # Scoreboard extras the newer clients capture (PLAN.md §3.6.5); all optional
+    # so reports from before they were captured still render.
+    champion_name: str | None = None
+    level: int | None = None
+    items: tuple[int, ...] = ()
+    spell1_id: int | None = None
+    spell2_id: int | None = None
+    gold_earned: int | None = None
+    minions_killed: int | None = None
+    damage_to_champions: int | None = None
+    vision_score: int | None = None
+    profile_icon_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -535,6 +547,12 @@ def _history_players(
             continue
         puuid = str(p.get("puuid") or "")
         display_name, riot_id = names.get(puuid, (None, None))
+        raw_items = p.get("items")
+        items = (
+            tuple(int(i) for i in raw_items if isinstance(i, (int, float)))
+            if isinstance(raw_items, list)
+            else ()
+        )
         out.append(
             HistoryPlayer(
                 puuid=puuid,
@@ -544,9 +562,52 @@ def _history_players(
                 kills=int(p.get("championsKilled") or 0),
                 deaths=int(p.get("numDeaths") or 0),
                 assists=int(p.get("assists") or 0),
+                champion_name=_opt_str(p.get("championName")),
+                level=_opt_int(p.get("level")),
+                items=items,
+                spell1_id=_opt_int(p.get("spell1Id")),
+                spell2_id=_opt_int(p.get("spell2Id")),
+                gold_earned=_opt_int(p.get("goldEarned")),
+                minions_killed=_opt_int(p.get("minionsKilled")),
+                damage_to_champions=_opt_int(p.get("damageToChampions")),
+                vision_score=_opt_int(p.get("visionScore")),
+                profile_icon_id=_opt_int(p.get("profileIconId")),
             )
         )
     return out
+
+
+def _opt_int(value: object) -> int | None:
+    return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _opt_str(value: object) -> str | None:
+    return value if isinstance(value, str) and value != "" else None
+
+
+async def list_my_match_history(
+    session: AsyncSession, *, user_id: uuid.UUID, limit: int = 20
+) -> list[HistoryGame]:
+    """The caller's own recent games — the player-facing slice of the history.
+
+    A player's desktop client shows "your recent games" (PLAN.md §3.4 client-first):
+    the same per-game scoreboards as :func:`list_match_history`, kept only when one
+    of the caller's linked ``RiotAccount`` PUUIDs appears on a team. The scan reads
+    a wider window than ``limit`` (the tenant's recent games are mostly other
+    people's) and trims afterwards. Same RLS scope and the same forgeable,
+    display-only caveat as the admin view.
+    """
+    puuids = {
+        str(puuid)
+        for (puuid,) in (
+            await session.execute(select(RiotAccount.puuid).where(RiotAccount.user_id == user_id))
+        ).all()
+    }
+    if not puuids:
+        return []
+    games = await list_match_history(session, limit=max(limit * 5, 100))
+    mine = [g for g in games if any(p.puuid in puuids for team in g.teams for p in team.players)]
+    return mine[:limit]
 
 
 async def list_match_history(session: AsyncSession, *, limit: int = 50) -> list[HistoryGame]:

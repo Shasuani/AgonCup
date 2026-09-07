@@ -1,10 +1,15 @@
 import React, { useState } from 'react';
 import { theme as t } from '../theme';
-import { Kicker, PrimaryButton, AsyncState, Spinner } from '../ui';
+import { PageHead, PrimaryButton, Spinner, Input, Panel, Badge, Chip, Feedback, Notice, LinkButton, EmptyState, type Tone } from '../ui';
+import { Icon } from '../icons';
 import { lol, useAsync, errText, type BracketMatch, type Entrant, type MyTeam, type Tournament } from '../bridge';
 
-const STATUS_ACCENT: Record<string, string> = {
-  running: t.teal, check_in: t.gold, open: t.gold, draft: t.textDim, completed: t.textDim, cancelled: t.red,
+const STATUS_TONE: Record<string, Tone> = {
+  running: 'teal', check_in: 'gold', open: 'gold', draft: 'dim', completed: 'dim', cancelled: 'red',
+};
+
+const STATUS_LABEL: Record<string, string> = {
+  running: 'Running', check_in: 'Check-in', open: 'Open', draft: 'Draft', completed: 'Finished', cancelled: 'Cancelled',
 };
 
 // Short server labels players actually say ("EUNE", not "eun1"). Unmapped codes
@@ -19,13 +24,21 @@ export function regionShort(region: string | null): string | null {
   return REGION_SHORT[region.toLowerCase()] ?? region.toUpperCase();
 }
 
-function meta(tr: Tournament): string {
-  const fmt = tr.format === 'double_elimination' ? 'Double Elimination' : 'Single Elimination';
+function MetaChips({ tr }: { tr: Tournament }) {
+  const fmt = tr.format === 'double_elimination' ? 'Double elimination' : 'Knockout';
   const mode = tr.gameMode === 'aram_1v1' ? '1v1 ARAM' : "Summoner's Rift 5v5";
   const region = regionShort(tr.region);
   // The region is part of what the tournament IS — a player on the wrong server
   // cannot play it — so it sits in the one summary line every view shows.
-  return `${fmt} · ${tr.maxTeams} teams · Bo${tr.bestOf} · ${mode}${region ? ` · ${region}` : ''}`;
+  return (
+    <div className="ll-chips">
+      <Chip icon="map">{mode}</Chip>
+      <Chip icon="trophy">{fmt}</Chip>
+      <Chip icon="users">{tr.maxTeams} {tr.gameMode === 'aram_1v1' ? 'players' : 'teams'}</Chip>
+      <Chip icon="bolt">Bo{tr.bestOf}</Chip>
+      {region && <Chip title={tr.region ?? undefined}>{region}</Chip>}
+    </div>
+  );
 }
 
 export default function TournamentsScreen() {
@@ -102,59 +115,59 @@ export default function TournamentsScreen() {
 
   return (
     <div>
-      <Kicker>Tournaments</Kicker>
-      <h1 style={{ fontFamily: t.display, fontWeight: 700, fontSize: 32, color: t.goldBright, margin: '10px 0 22px' }}>Join &amp; follow</h1>
+      <PageHead kicker="Tournaments" title="Join & follow" intro="Paste a join code from your Discord server to enter. Everything you're in shows up below, with the bracket once it starts." />
 
-      <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
-        <input value={code} onChange={(e) => setCode(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && join()} placeholder="Enter join code…" style={{ flex: 1, background: t.panel, border: `1px solid ${t.line}`, color: t.textStrong, fontFamily: t.mono, fontSize: 14, padding: '14px 18px', borderRadius: 2 }} />
-        <PrimaryButton onClick={join} disabled={busy || !code.trim()} style={{ padding: '0 30px', fontSize: 14 }}>{busy ? 'Joining…' : 'Join'}</PrimaryButton>
-      </div>
-      {msg && <div style={{ marginBottom: 20, color: msg.includes('✓') ? t.teal : t.red, fontSize: 13 }}>{msg}</div>}
+      <form className="ll-field" onSubmit={(e) => { e.preventDefault(); void join(); }} style={{ marginBottom: 14 }}>
+        <Input value={code} onChange={(e) => setCode(e.target.value)} placeholder="Enter a join code…" aria-label="Join code" code autoComplete="off" />
+        <PrimaryButton type="submit" icon="plus" busy={busy} disabled={!code.trim()} style={{ height: 44, padding: '0 28px' }}>Join</PrimaryButton>
+      </form>
+      <Feedback msg={msg} style={{ marginBottom: 16 }} />
 
       {pick && (
-        <div style={{ border: `1px solid ${t.gold}`, background: t.panel, padding: '20px 24px', marginBottom: 20 }}>
-          <div style={{ fontSize: 11, letterSpacing: '.16em', textTransform: 'uppercase', color: t.gold, marginBottom: 6 }}>
-            Which team enters?
-          </div>
-          <div style={{ fontSize: 13, color: t.textDim, marginBottom: 14 }}>
+        <Panel featured tight style={{ marginBottom: 16 }}>
+          <div className="ll-kicker" style={{ marginBottom: 6 }}>Which team enters?</div>
+          <div className="ll-dim" style={{ fontSize: 13, marginBottom: 14 }}>
             {pick.tournamentName} is a team tournament and you captain {pick.teams.length} teams.
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div className="ll-stack" style={{ gap: 8 }}>
             {pick.teams.map((tm) => (
               <button
                 key={tm.teamId}
+                type="button"
                 onClick={() => joinWithTeam(tm.teamId)}
                 disabled={busy}
-                style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: t.bg, border: `1px solid ${t.line}`, color: t.textStrong, fontFamily: t.body, fontSize: 14, padding: '12px 16px', borderRadius: 2, cursor: busy ? 'not-allowed' : 'pointer', textAlign: 'left' }}
+                className="ll-entrant ll-entrant__head"
+                style={{ width: '100%', justifyContent: 'space-between', color: t.textStrong, fontSize: 14, cursor: busy ? 'not-allowed' : 'pointer', textAlign: 'left' }}
               >
                 <span>{tm.name}</span>
-                <span style={{ color: t.gold, fontSize: 12, letterSpacing: '.1em', textTransform: 'uppercase' }}>enter</span>
+                <span className="ll-cap" style={{ color: t.gold }}>Enter →</span>
               </button>
             ))}
           </div>
-          <button onClick={() => setPick(null)} style={{ marginTop: 14, background: 'transparent', border: 'none', color: t.textDim, fontSize: 13, cursor: 'pointer', padding: 0 }}>Cancel</button>
-        </div>
+          <div style={{ marginTop: 14 }}><LinkButton onClick={() => setPick(null)} style={{ color: t.textDim }}>Cancel</LinkButton></div>
+        </Panel>
       )}
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        <AsyncState loading={loading} error={error}>
-          {tournaments.length === 0 && (
-            <div style={{ color: t.textDim, fontSize: 14, lineHeight: 1.6 }}>
-              You&rsquo;re not in any tournament yet.<br />
+      <div className="ll-stack">
+        {loading && <div className="ll-loading"><Spinner /> Loading your tournaments…</div>}
+        {error && <Notice tone="err">{error}</Notice>}
+        {!loading && !error && tournaments.length === 0 && (
+          <Panel tone="dashed">
+            <EmptyState icon="trophy" title="You're not in any tournament yet">
               Paste a join code above — or, in a team tournament, wait for your captain
-              to enter the team. You&rsquo;ll appear here automatically.
-            </div>
-          )}
-          {tournaments.map((tr) => (
-            <TournamentCard
-              key={tr.id}
-              tournament={tr}
-              open={!collapsed.has(tr.id)}
-              onToggle={() => toggle(tr.id)}
-              onRemoved={reload}
-            />
-          ))}
-        </AsyncState>
+              to enter the team. You'll appear here automatically.
+            </EmptyState>
+          </Panel>
+        )}
+        {!loading && !error && tournaments.map((tr) => (
+          <TournamentCard
+            key={tr.id}
+            tournament={tr}
+            open={!collapsed.has(tr.id)}
+            onToggle={() => toggle(tr.id)}
+            onRemoved={reload}
+          />
+        ))}
       </div>
     </div>
   );
@@ -166,19 +179,16 @@ export default function TournamentsScreen() {
  * click — without that, removing a tournament would also fold the card it was in.
  */
 function QuietButton(
-  { onClick, color, disabled, inline, children }:
-  { onClick: () => void; color: string; disabled?: boolean; inline?: boolean; children: React.ReactNode },
+  { onClick, color, disabled, children }:
+  { onClick: () => void; color: string; disabled?: boolean; children: React.ReactNode },
 ) {
   return (
     <button
+      type="button"
       onClick={(e) => { e.stopPropagation(); onClick(); }}
       disabled={disabled}
-      style={{
-        background: 'transparent', border: 'none', padding: 0, color,
-        fontFamily: t.body, fontSize: 11, letterSpacing: '.1em', textTransform: 'uppercase',
-        cursor: disabled ? 'not-allowed' : 'pointer',
-        marginTop: inline ? 0 : 8, display: inline ? 'inline' : 'block', marginLeft: inline ? 0 : 'auto',
-      }}
+      className="ll-link"
+      style={{ color, fontSize: 11, letterSpacing: '.1em', textTransform: 'uppercase', cursor: disabled ? 'not-allowed' : 'pointer' }}
     >
       {children}
     </button>
@@ -193,7 +203,7 @@ function QuietButton(
  */
 function TournamentCard({ tournament: tr, open, onToggle, onRemoved }: { tournament: Tournament; open: boolean; onToggle: () => void; onRemoved: () => void }) {
   const b = lol();
-  const accent = STATUS_ACCENT[tr.status] ?? t.textDim;
+  const tone = STATUS_TONE[tr.status] ?? 'dim';
   const featured = tr.status === 'running';
   const entrants = useAsync(async () => {
     const r = await b!.tournamentEntrants(tr.id);
@@ -220,50 +230,44 @@ function TournamentCard({ tournament: tr, open, onToggle, onRemoved }: { tournam
   }
 
   return (
-    <div style={{ border: `1px solid ${featured ? t.gold : t.line}`, background: t.panel }}>
-      <div onClick={onToggle} style={{ padding: '24px 28px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <span style={{ color: t.gold, fontSize: 13, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }}>{'▸'}</span>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ fontFamily: t.display, fontSize: 22, color: t.goldBright }}>{tr.name}</span>
+    <Panel flush featured={featured}>
+      <div className="ll-card-head" onClick={onToggle} role="button" aria-expanded={open} tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(); } }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, minWidth: 0 }}>
+          <Icon name="chevron" size={16} className={`ll-chevron${open ? ' is-open' : ''}`} />
+          <div style={{ minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <h2 className="ll-h2" style={{ fontSize: 22 }}>{tr.name}</h2>
               {/* Every tournament on this screen is one you are in — a teammate
                   never redeemed a code and would otherwise have no idea why it
                   is listed at all. */}
-              <span style={{ fontSize: 10, letterSpacing: '.14em', textTransform: 'uppercase', color: t.teal, border: `1px solid ${t.teal}`, padding: '3px 8px', borderRadius: 2 }}>
-                you&rsquo;re in
-              </span>
+              <Badge tone="teal">You're in</Badge>
             </div>
-            <div style={{ fontSize: 13, color: t.text, marginTop: 6 }}>{meta(tr)}</div>
+            <div style={{ marginTop: 8 }}><MetaChips tr={tr} /></div>
           </div>
         </div>
-        <div style={{ textAlign: 'right' }}>
-          <div style={{ fontSize: 12, letterSpacing: '.14em', textTransform: 'uppercase', color: accent }}>{featured ? '◆ ' : ''}{tr.status.replace('_', '-')}</div>
-          {tr.startAt && <div style={{ fontSize: 13, color: t.textDim, marginTop: 6 }}>starts {new Date(tr.startAt).toLocaleString()}</div>}
-          <div style={{ fontSize: 11, color: t.textDim, marginTop: 6 }}>{open ? 'collapse' : 'expand'}</div>
+        <div style={{ textAlign: 'right', flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+          <Badge tone={tone} dot pulse={featured}>{STATUS_LABEL[tr.status] ?? tr.status.replace('_', ' ')}</Badge>
+          {tr.startAt && <div className="ll-dim" style={{ fontSize: 12.5 }}>Starts {new Date(tr.startAt).toLocaleString()}</div>}
 
           {/* Two steps on purpose: there is no undo from the client, and this
               button sits inside a row whose whole job is to be clicked. */}
           {finished && !confirming && (
-            <QuietButton
-              onClick={() => { setConfirming(true); setRemoveError(null); }}
-              color={t.textDim}
-            >
+            <QuietButton onClick={() => { setConfirming(true); setRemoveError(null); }} color={t.textDim}>
               remove from my list
             </QuietButton>
           )}
           {finished && confirming && (
-            <div style={{ marginTop: 8, display: 'flex', gap: 12, justifyContent: 'flex-end', alignItems: 'baseline' }}>
+            <div style={{ display: 'flex', gap: 12, alignItems: 'baseline' }}>
               <span style={{ fontSize: 11, color: t.textDim }}>remove?</span>
-              <QuietButton onClick={remove} color={t.red} disabled={removing} inline>
+              <QuietButton onClick={remove} color="#ff9e9e" disabled={removing}>
                 {removing ? 'removing…' : 'yes'}
               </QuietButton>
-              <QuietButton onClick={() => setConfirming(false)} color={t.textDim} inline>
+              <QuietButton onClick={() => setConfirming(false)} color={t.textDim}>
                 no
               </QuietButton>
             </div>
           )}
-          {removeError && <div style={{ fontSize: 11, color: t.red, marginTop: 6 }}>{removeError}</div>}
+          {removeError && <div style={{ fontSize: 11, color: '#ff9e9e' }}>{removeError}</div>}
         </div>
       </div>
 
@@ -281,7 +285,7 @@ function TournamentCard({ tournament: tr, open, onToggle, onRemoved }: { tournam
           <BracketDetail tournamentId={tr.id} entrants={entrants.data ?? []} />
         </>
       )}
-    </div>
+    </Panel>
   );
 }
 
@@ -318,32 +322,35 @@ function EntrantsPanel({ tournamentId, solo, maxTeams, entrants: data, loading, 
   // How many of MY teammates still have to press it. Your captain redeemed the code
   // for all of you, so the thing you actually need to know is who is still missing.
   const myPending = me ? me.players.filter((p) => !p.lockedIn).length : 0;
-  const border = { borderTop: `1px solid ${t.lineSoft}`, padding: '20px 28px' } as const;
+  const lockedCount = entrants.filter((e) => e.lockedIn).length;
 
   if (loading && entrants.length === 0) {
-    return <div style={{ ...border, display: 'flex', gap: 12, alignItems: 'center', color: t.textDim }}><Spinner /> Loading entrants…</div>;
+    return <div className="ll-panel__section"><div className="ll-loading" style={{ padding: 0 }}><Spinner /> Loading entrants…</div></div>;
   }
-  if (error) return <div style={{ ...border, color: t.red, fontSize: 13 }}>{error}</div>;
+  if (error) return <div className="ll-panel__section"><Notice tone="err">{error}</Notice></div>;
 
   return (
-    <div style={border}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-        <div style={{ fontSize: 11, letterSpacing: '.16em', textTransform: 'uppercase', color: t.gold }}>
-          {entrants.length} / {maxTeams} {noun} · {entrants.filter((e) => e.lockedIn).length} locked in
+    <div className="ll-panel__section">
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, marginBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span className="ll-kicker" style={{ letterSpacing: '.16em' }}>{entrants.length} / {maxTeams} {noun}</span>
+          <span className="ll-dim" style={{ fontSize: 12 }}>·</span>
+          <span style={{ fontSize: 12.5, color: lockedCount === entrants.length && entrants.length > 0 ? t.teal : t.textDim }}>{lockedCount} locked in</span>
         </div>
         {me?.canLockIn && (
-          <PrimaryButton onClick={lockIn} disabled={busy} style={{ padding: '0 22px', fontSize: 12, height: 34 }}>
+          <PrimaryButton size="sm" icon="check" busy={busy} onClick={lockIn}>
             {busy ? 'Locking in…' : 'Lock in'}
           </PrimaryButton>
         )}
         {me && !me.canLockIn && (
-          <div style={{ fontSize: 13, color: me.lockedIn ? t.teal : t.gold }}>
+          <span style={{ fontSize: 13, color: me.lockedIn ? t.teal : t.gold, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <Icon name="check" size={14} />
             {me.isSolo
-              ? 'You are locked in ✓'
+              ? 'You are locked in'
               : me.lockedIn
-                ? 'Your team is locked in ✓'
-                : `You are locked in ✓ · waiting on ${myPending} teammate${myPending === 1 ? '' : 's'}`}
-          </div>
+                ? 'Your team is locked in'
+                : `You are locked in · waiting on ${myPending} teammate${myPending === 1 ? '' : 's'}`}
+          </span>
         )}
       </div>
 
@@ -351,37 +358,33 @@ function EntrantsPanel({ tournamentId, solo, maxTeams, entrants: data, loading, 
           entered them — so this is where they find out they are in, and that the
           Lock in button above is theirs to press. */}
       {me && !me.isSolo && me.players.length > 0 && (
-        <div style={{ border: `1px solid ${t.lineSoft}`, background: t.bg, padding: '12px 16px', marginBottom: 14 }}>
-          <div style={{ fontSize: 11, letterSpacing: '.16em', textTransform: 'uppercase', color: t.textDim, marginBottom: 10 }}>
-            Your team · {me.name}
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div className="ll-panel ll-panel--sunken" style={{ padding: '12px 16px', marginBottom: 14 }}>
+          <div className="ll-cap" style={{ marginBottom: 10 }}>Your team · <span style={{ color: t.gold }}>{me.name}</span></div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '6px 24px' }}>
             {me.players.map((p) => (
-              <div key={p.userId} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
-                <span style={{ color: p.isYou ? t.goldBright : t.text }}>
-                  {p.name}{p.isYou && <span style={{ color: t.textDim, fontSize: 12 }}> · you</span>}
+              <div key={p.userId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 13, gap: 10 }}>
+                <span style={{ color: p.isYou ? t.goldBright : t.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {p.name}{p.isYou && <span className="ll-you"> · you</span>}
                 </span>
-                <span style={{ color: p.lockedIn ? t.teal : t.textDim, fontSize: 12, letterSpacing: '.1em', textTransform: 'uppercase' }}>
-                  {p.lockedIn ? 'locked in' : 'not ready'}
-                </span>
+                <Badge tone={p.lockedIn ? 'teal' : 'dim'}>{p.lockedIn ? 'Locked in' : 'Not ready'}</Badge>
               </div>
             ))}
           </div>
         </div>
       )}
 
-      {entrants.length === 0 && <div style={{ color: t.textDim, fontSize: 14 }}>Nobody has joined yet.</div>}
+      {entrants.length === 0 && <div className="ll-dim" style={{ fontSize: 14 }}>Nobody has joined yet.</div>}
 
       {/* Two columns: sixteen entries in one list is a scroll, in two it is a
           field you can read at a glance. Solo entries have no roster to open,
           so they stay flat. */}
-      <div style={{ display: 'grid', gridTemplateColumns: entrants.length > 6 ? '1fr 1fr' : '1fr', gap: 8, alignItems: 'start' }}>
+      <div className="ll-entrants" style={{ gridTemplateColumns: entrants.length > 6 ? '1fr 1fr' : '1fr' }}>
         {entrants.map((e, i) => (
           <EntrantRow key={e.teamId} entrant={e} seed={i + 1} />
         ))}
       </div>
 
-      {msg && <div style={{ marginTop: 12, color: t.red, fontSize: 13 }}>{msg}</div>}
+      {msg && <div style={{ marginTop: 12 }}><Notice tone="err">{msg}</Notice></div>}
     </div>
   );
 }
@@ -397,29 +400,28 @@ function EntrantRow({ entrant: e, seed }: { entrant: Entrant; seed: number }) {
   const ready = e.players.filter((p) => p.lockedIn).length;
 
   return (
-    <div style={{ border: `1px solid ${e.isYou ? t.gold : t.line}`, background: t.bg }}>
+    <div className={`ll-entrant${e.isYou ? ' ll-entrant--you' : ''}`}>
       <div
+        className="ll-entrant__head"
         onClick={expandable ? () => setOpen(!open) : undefined}
-        style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', cursor: expandable ? 'pointer' : 'default' }}
+        style={{ cursor: expandable ? 'pointer' : 'default' }}
       >
-        <span style={{ fontFamily: t.mono, fontSize: 11, color: t.textDim, minWidth: 22 }}>#{seed}</span>
-        {expandable && (
-          <span style={{ color: t.gold, fontSize: 11, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }}>{'▸'}</span>
-        )}
-        <span style={{ flex: 1, fontSize: 14, color: e.isYou ? t.goldBright : t.textStrong }}>
-          {e.name}{e.isYou && <span style={{ color: t.textDim, fontSize: 12 }}> · you</span>}
+        <span className="ll-entrant__seed">#{seed}</span>
+        {expandable && <Icon name="chevron" size={13} className={`ll-chevron${open ? ' is-open' : ''}`} />}
+        <span style={{ flex: 1, fontSize: 14, color: e.isYou ? t.goldBright : t.textStrong, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {e.name}{e.isYou && <span className="ll-you"> · you</span>}
         </span>
-        <span style={{ fontSize: 11, letterSpacing: '.1em', textTransform: 'uppercase', color: e.lockedIn ? t.teal : t.textDim, whiteSpace: 'nowrap' }}>
-          {e.lockedIn ? '✓ locked in' : expandable ? `${ready}/${e.players.length} ready` : 'not ready'}
-        </span>
+        {e.lockedIn
+          ? <Badge tone="teal">Locked in</Badge>
+          : <Badge tone="dim">{expandable ? `${ready}/${e.players.length} ready` : 'Not ready'}</Badge>}
       </div>
 
       {open && (
-        <div style={{ borderTop: `1px solid ${t.lineSoft}`, padding: '10px 14px 12px 46px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div className="ll-entrant__body">
           {e.players.map((p) => (
-            <div key={p.userId} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+            <div key={p.userId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 13 }}>
               <span style={{ color: p.isYou ? t.goldBright : t.text }}>
-                {p.name}{p.isYou && <span style={{ color: t.textDim, fontSize: 12 }}> · you</span>}
+                {p.name}{p.isYou && <span className="ll-you"> · you</span>}
               </span>
               <span style={{ color: p.lockedIn ? t.teal : t.textDim, fontSize: 11, letterSpacing: '.1em', textTransform: 'uppercase' }}>
                 {p.lockedIn ? 'locked in' : 'not ready'}
@@ -440,43 +442,49 @@ function BracketDetail({ tournamentId, entrants }: { tournamentId: string; entra
     return r.matches;
   }, [tournamentId], 3000); // live-refresh every 3s while expanded
 
-  if (loading) return <div style={{ borderTop: `1px solid ${t.lineSoft}`, padding: '20px 28px', display: 'flex', gap: 12, alignItems: 'center', color: t.textDim }}><Spinner /> Loading bracket…</div>;
-  if (error) return <div style={{ borderTop: `1px solid ${t.lineSoft}`, padding: '20px 28px', color: t.red, fontSize: 13 }}>{error}</div>;
+  if (loading) return <div className="ll-panel__section"><div className="ll-loading" style={{ padding: 0 }}><Spinner /> Loading bracket…</div></div>;
+  if (error) return <div className="ll-panel__section"><Notice tone="err">{error}</Notice></div>;
 
   const matches = data ?? [];
   if (matches.length === 0) {
-    return <div style={{ borderTop: `1px solid ${t.lineSoft}`, padding: '20px 28px', color: t.textDim, fontSize: 14 }}>Bracket not generated yet — teams register first, then an admin starts the tournament.</div>;
+    return (
+      <div className="ll-panel__section" style={{ display: 'flex', alignItems: 'center', gap: 12, color: t.textDim, fontSize: 13.5 }}>
+        <Icon name="clock" size={16} /> Bracket not generated yet — entrants lock in first, then an admin starts the tournament.
+      </div>
+    );
   }
 
   const rounds = [...new Set(matches.map((m) => m.round))].sort((a, c) => a - c);
   const first = rounds[0] ?? 1;
 
   return (
-    <div style={{ borderTop: `1px solid ${t.lineSoft}`, padding: '22px 28px', display: 'flex', gap: 26, overflowX: 'auto' }}>
-      {rounds.map((round) => {
-        const inRound = matches.filter((m) => m.round === round).sort((a, c) => a.slot - c.slot);
-        // Each round halves the field, so a match must span the vertical space of
-        // the two that feed it and sit centred between them. Without that the
-        // columns were three top-aligned lists and the tree was unreadable —
-        // nothing showed which pair produced which later match.
-        const span = 2 ** (round - first);
-        return (
-          <div key={round} style={{ minWidth: 236, display: 'flex', flexDirection: 'column' }}>
-            <div style={{ fontSize: 11, letterSpacing: '.16em', textTransform: 'uppercase', color: t.gold, marginBottom: 14 }}>
-              {round === rounds[rounds.length - 1] ? 'Final' : `Round ${round}`}
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
-              {inRound.map((m) => (
-                <div key={m.id} style={{ flex: span, display: 'flex', alignItems: 'center', paddingBottom: 10 }}>
-                  <div style={{ width: '100%' }}>
-                    <MatchCard match={m} entrants={entrants} />
+    <div className="ll-panel__section">
+      <div className="ll-bracket">
+        {rounds.map((round) => {
+          const inRound = matches.filter((m) => m.round === round).sort((a, c) => a.slot - c.slot);
+          // Each round halves the field, so a match must span the vertical space of
+          // the two that feed it and sit centred between them. Without that the
+          // columns were three top-aligned lists and the tree was unreadable —
+          // nothing showed which pair produced which later match.
+          const span = 2 ** (round - first);
+          return (
+            <div key={round} className="ll-round">
+              <div className="ll-round__title">
+                {round === rounds[rounds.length - 1] ? 'Final' : `Round ${round}`}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
+                {inRound.map((m) => (
+                  <div key={m.id} style={{ flex: span, display: 'flex', alignItems: 'center', paddingBottom: 10 }}>
+                    <div style={{ width: '100%' }}>
+                      <MatchCard match={m} entrants={entrants} />
+                    </div>
                   </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -504,24 +512,27 @@ function MatchCard({ match: m, entrants }: { match: BracketMatch; entrants: Entr
   const expandable = rosters.some((r) => r.length > 0);
 
   return (
-    <div style={{ border: `1px solid ${decided ? t.gold : live ? t.teal : t.line}`, background: t.bg }}>
+    <div className={`ll-match${decided ? ' ll-match--decided' : ''}${live ? ' ll-match--live' : ''}`}>
       <Side name={m.teamAName} won={aWon} lost={decided && !aWon} ready={m.teamAReady} live={live} />
-      <div style={{ height: 1, background: t.lineSoft }} />
       <Side name={m.teamBName} won={bWon} lost={decided && !bWon} ready={m.teamBReady} live={live} />
 
       <div
+        className={`ll-match__foot${expandable ? ' is-clickable' : ''}`}
         onClick={expandable ? () => setOpen(!open) : undefined}
-        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 10, letterSpacing: '.1em', textTransform: 'uppercase', color: decided ? t.gold : t.textDim, padding: '7px 14px', borderTop: `1px solid ${t.lineSoft}`, cursor: expandable ? 'pointer' : 'default' }}
+        style={decided ? { color: t.gold } : live ? { color: t.teal } : undefined}
       >
-        <span>{live ? '◆ live' : m.status.replace('_', ' ')}</span>
-        {expandable && <span style={{ color: t.textDim }}>{open ? 'hide players' : 'players'}</span>}
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          {live && <span className="ll-dot ll-dot--teal ll-dot--pulse" style={{ width: 6, height: 6 }} />}
+          {live ? 'Live' : m.status.replace('_', ' ')}
+        </span>
+        {expandable && <span>{open ? 'hide players' : 'players'}</span>}
       </div>
 
       {open && (
         <div style={{ borderTop: `1px solid ${t.lineSoft}`, padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}>
           {[m.teamAName, m.teamBName].map((teamName, side) => (
             <div key={side}>
-              <div style={{ fontSize: 10, letterSpacing: '.14em', textTransform: 'uppercase', color: side === 0 ? (aWon ? t.gold : t.textDim) : bWon ? t.gold : t.textDim, marginBottom: 4 }}>
+              <div className="ll-cap" style={{ color: side === 0 ? (aWon ? t.gold : t.textDim) : bWon ? t.gold : t.textDim, marginBottom: 4 }}>
                 {teamName ?? 'TBD'}
               </div>
               {rosters[side]!.length === 0 ? (
@@ -529,7 +540,7 @@ function MatchCard({ match: m, entrants }: { match: BracketMatch; entrants: Entr
               ) : (
                 rosters[side]!.map((p) => (
                   <div key={p.userId} style={{ fontSize: 12, color: p.isYou ? t.goldBright : t.text, lineHeight: 1.7 }}>
-                    {p.name}{p.isYou && <span style={{ color: t.textDim }}> · you</span>}
+                    {p.name}{p.isYou && <span className="ll-you"> · you</span>}
                   </div>
                 ))
               )}
@@ -543,14 +554,11 @@ function MatchCard({ match: m, entrants }: { match: BracketMatch; entrants: Entr
 
 function Side({ name, won, lost, ready, live }: { name: string | null; won: boolean; lost: boolean; ready: boolean; live: boolean }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', background: won ? 'rgba(200,155,60,.14)' : 'transparent' }}>
-      {live && !name ? null : <span style={{ width: 6, height: 6, borderRadius: '50%', background: won ? t.gold : ready ? t.teal : t.textDim, flexShrink: 0 }} />}
-      <span style={{ flex: 1, color: won ? t.goldBright : lost ? t.textDim : name ? t.text : t.textDim, fontWeight: won ? 700 : 400, fontSize: 14, textDecoration: lost ? 'line-through' : 'none', opacity: lost ? 0.65 : 1 }}>
-        {name ?? 'TBD'}
-      </span>
-      {won && (
-        <span style={{ fontSize: 10, letterSpacing: '.14em', color: t.bg, background: t.gold, padding: '2px 7px', borderRadius: 2, fontWeight: 700 }}>WON</span>
-      )}
+    <div className={`ll-side${won ? ' ll-side--won' : ''}${lost ? ' ll-side--lost' : ''}`}>
+      {live && !name ? null : <span className={`ll-dot ll-dot--${won ? 'gold' : ready ? 'teal' : 'dim'}`} style={{ width: 6, height: 6, boxShadow: won || ready ? undefined : 'none' }} />}
+      <span className="ll-side__name" style={!name ? { color: t.textDim } : undefined}>{name ?? 'TBD'}</span>
+      {won && <Badge tone="solid">Won</Badge>}
     </div>
   );
 }
+

@@ -21,7 +21,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit import service as audit_service
-from app.auth.deps import Principal, get_current_principal, require_tenant_role
+from app.auth.deps import (
+    Principal,
+    get_current_principal,
+    get_tenant_session,
+    require_tenant_role,
+)
 from app.logging import get_logger
 from app.models import MatchResult
 from app.results import service
@@ -168,6 +173,18 @@ class HistoryPlayerResponse(BaseModel):
     kills: int
     deaths: int
     assists: int
+    # Scoreboard extras (final build, spells, level, economy) — absent on reports
+    # captured before the client recorded them.
+    champion_name: str | None = None
+    level: int | None = None
+    items: list[int] = []
+    spell1_id: int | None = None
+    spell2_id: int | None = None
+    gold_earned: int | None = None
+    minions_killed: int | None = None
+    damage_to_champions: int | None = None
+    vision_score: int | None = None
+    profile_icon_id: int | None = None
 
 
 class HistoryTeamResponse(BaseModel):
@@ -205,6 +222,16 @@ def _history_response(game: service.HistoryGame) -> HistoryGameResponse:
                         kills=p.kills,
                         deaths=p.deaths,
                         assists=p.assists,
+                        champion_name=p.champion_name,
+                        level=p.level,
+                        items=list(p.items),
+                        spell1_id=p.spell1_id,
+                        spell2_id=p.spell2_id,
+                        gold_earned=p.gold_earned,
+                        minions_killed=p.minions_killed,
+                        damage_to_champions=p.damage_to_champions,
+                        vision_score=p.vision_score,
+                        profile_icon_id=p.profile_icon_id,
                     )
                     for p in t.players
                 ],
@@ -230,6 +257,28 @@ async def list_match_history(
     / admin override. RLS-scoped to the acting guild via the tenant session.
     """
     games = await service.list_match_history(session, limit=limit)
+    return [_history_response(g) for g in games]
+
+
+@router.get(
+    "/history/mine",
+    response_model=list[HistoryGameResponse],
+    summary="The caller's own recent games in the acting guild (any member)",
+)
+async def list_my_match_history(
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    session: Annotated[AsyncSession, Depends(get_tenant_session)],
+    limit: Annotated[int, Query(ge=1, le=50)] = 20,
+) -> list[HistoryGameResponse]:
+    """Per-game scoreboards the caller played in — the desktop client's history.
+
+    Not admin-gated: a member reads only games one of their own linked accounts
+    took part in (PLAN.md §3.4 client-first). Same display-only caveat as
+    ``/history`` — the official winner comes from adjudication, never this read.
+    """
+    games = await service.list_my_match_history(
+        session, user_id=uuid.UUID(principal.user_id), limit=limit
+    )
     return [_history_response(g) for g in games]
 
 

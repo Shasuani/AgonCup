@@ -54,14 +54,14 @@ interface NavItem {
 const NAV_ITEMS: ReadonlyArray<NavItem> = [
   // No `anyOf`: this is where a role-less new user installs the bot and thereby
   // GETS a role. Gating it would hide the only door in.
-  { to: "/servers", label: "Servers", icon: "teams" },
+  { to: "/servers", label: "Servers", icon: "server" },
   { to: "/tournaments", label: "Tournaments", icon: "tournaments", anyOf: [GUILD_ADMIN, PLATFORM_OPERATOR] },
   { to: "/teams", label: "Teams", icon: "teams", anyOf: [GUILD_ADMIN, PLATFORM_OPERATOR] },
   { to: "/accounts", label: "Accounts", icon: "accounts", anyOf: [GUILD_ADMIN, PLATFORM_OPERATOR] },
-  { to: "/history", label: "Match history", icon: "tournaments", anyOf: [GUILD_ADMIN, PLATFORM_OPERATOR] },
+  { to: "/history", label: "Match history", icon: "history", anyOf: [GUILD_ADMIN, PLATFORM_OPERATOR] },
   { to: "/disputes", label: "Disputes", icon: "disputes", anyOf: [GUILD_ADMIN, PLATFORM_OPERATOR] },
   { to: "/audit", label: "Audit log", icon: "audit", anyOf: [PLATFORM_OPERATOR] },
-  { to: "/guilds", label: "Guilds", icon: "teams", anyOf: [PLATFORM_OPERATOR] },
+  { to: "/guilds", label: "Guilds", icon: "guild", anyOf: [PLATFORM_OPERATOR] },
 ];
 
 /** Registers the standard command set + renders the topbar palette trigger. */

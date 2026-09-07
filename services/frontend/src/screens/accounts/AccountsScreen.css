@@ -5,99 +5,11 @@
    monogram chip, which is generated per player from a hue and therefore uses
    hsl() with a fixed lightness that reads on both surfaces. */
 
-/* Breathing room between the KPI row and the toolbar below it. */
+/* The toolbar itself (search pill, segmented filter, count) is the shared
+   recipe in global.css ([data-toolbar] & co.). Only the spacing after the KPI
+   row is this screen's own. */
 [data-roster-toolbar] {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-3);
   margin-top: var(--space-5);
-  margin-bottom: var(--space-4);
-}
-
-/* ---------------------------------------------------------------- search --- */
-[data-roster-search] {
-  position: relative;
-  display: flex;
-  align-items: center;
-  flex: 1 1 260px;
-  min-width: 0;
-}
-
-[data-roster-search] [data-icon] {
-  position: absolute;
-  left: 12px;
-  color: var(--text-muted);
-  pointer-events: none;
-}
-
-[data-roster-search] input {
-  width: 100%;
-  height: 36px;
-  padding: 0 var(--space-3) 0 34px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  color: var(--text);
-  font: inherit;
-  font-size: 0.875rem;
-}
-
-[data-roster-search] input::placeholder {
-  color: var(--text-muted);
-}
-
-[data-roster-search] input:focus-visible {
-  border-color: var(--primary);
-  outline: none;
-  box-shadow: var(--shadow-focus);
-}
-
-/* Chrome/Safari draw their own clear affordance; keep it from crowding the pill. */
-[data-roster-search] input::-webkit-search-cancel-button {
-  margin-right: var(--space-1);
-}
-
-/* ------------------------------------------------------- status segments --- */
-[data-roster-filters] {
-  display: inline-flex;
-  padding: 3px;
-  gap: 2px;
-  background: var(--surface-alt);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-}
-
-[data-roster-filter] {
-  appearance: none;
-  border: 0;
-  background: transparent;
-  color: var(--text-muted);
-  font: inherit;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  padding: 5px 14px;
-  border-radius: var(--radius-pill);
-  cursor: pointer;
-  transition: background 120ms ease, color 120ms ease;
-}
-
-[data-roster-filter]:hover {
-  color: var(--text);
-}
-
-[data-roster-filter][data-active] {
-  background: var(--surface);
-  color: var(--text);
-  box-shadow: var(--shadow-xs);
-}
-
-[data-roster-count] {
-  margin: 0 0 0 auto;
-  color: var(--text-muted);
-  font-size: 0.8125rem;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
 }
 
 /* ----------------------------------------------------------------- table --- */
@@ -203,14 +115,4 @@
   margin-top: var(--space-5);
 }
 
-@media (max-width: 640px) {
-  [data-roster-count] {
-    margin-left: 0;
-  }
-}
 
-@media (prefers-reduced-motion: reduce) {
-  [data-roster-filter] {
-    transition: none;
-  }
-}

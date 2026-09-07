@@ -12,7 +12,6 @@ import { useApi } from "../../api/ApiProvider";
 import { useAsyncData } from "../../api/useAsync";
 import { Button, EmptyState, ErrorBanner, ScreenHeader, Skeleton } from "../../components";
 import {
-  championIconUrl,
   fetchMatchHistory,
   kdaText,
   playerLabel,
@@ -20,6 +19,15 @@ import {
   type HistoryPlayer,
   type HistoryTeam,
 } from "./matchHistory";
+import {
+  championIconUrl,
+  championName,
+  itemIconUrl,
+  spellIconUrl,
+  spellName,
+  useDdragon,
+  type DdragonRegistry,
+} from "../../lib/ddragon";
 
 import "./MatchHistoryScreen.css";
 
@@ -28,25 +36,63 @@ function onIconError(e: React.SyntheticEvent<HTMLImageElement>): void {
   e.currentTarget.style.visibility = "hidden";
 }
 
-function PlayerRow({ player }: { player: HistoryPlayer }): JSX.Element {
+/** Six item slots + the trinket, in slot order; empty slots stay empty. */
+function ItemRow({ items, reg }: { items: number[]; reg: DdragonRegistry | null }): JSX.Element {
+  const slots = [...items];
+  while (slots.length < 7) slots.push(0);
+  return (
+    <span data-history-items aria-label="Final build">
+      {slots.slice(0, 7).map((id, i) => {
+        const src = itemIconUrl(reg, id);
+        return src ? (
+          <img key={i} data-history-item data-trinket={i === 6 || undefined} src={src} alt={`Item ${id}`} title={`Item ${id}`} width={20} height={20} loading="lazy" onError={onIconError} />
+        ) : (
+          <span key={i} data-history-item data-empty data-trinket={i === 6 || undefined} aria-hidden="true" />
+        );
+      })}
+    </span>
+  );
+}
+
+function SpellPair({ a, b, reg }: { a: number | null | undefined; b: number | null | undefined; reg: DdragonRegistry | null }): JSX.Element {
+  const one = (id: number | null | undefined, i: number): JSX.Element => {
+    const src = id != null ? spellIconUrl(reg, id) : null;
+    const label = id != null ? spellName(reg, id) ?? `Spell ${id}` : "";
+    return src ? (
+      <img key={i} src={src} alt={label} title={label} width={14} height={14} loading="lazy" onError={onIconError} />
+    ) : (
+      <span key={i} data-empty aria-hidden="true" />
+    );
+  };
+  return <span data-history-spells>{one(a, 0)}{one(b, 1)}</span>;
+}
+
+function PlayerRow({ player, reg }: { player: HistoryPlayer; reg: DdragonRegistry | null }): JSX.Element {
+  const src = championIconUrl(reg, player.champion_id);
+  const name = player.champion_name ?? championName(reg, player.champion_id) ?? undefined;
+  const hasBuild = (player.items?.length ?? 0) > 0 || player.spell1_id != null;
   return (
     <li data-history-player>
-      <img
-        data-history-champ
-        src={championIconUrl(player.champion_id)}
-        alt=""
-        width={24}
-        height={24}
-        loading="lazy"
-        onError={onIconError}
-      />
-      <span data-history-name>{playerLabel(player)}</span>
-      <span data-history-kda>{kdaText(player)}</span>
+      <span data-history-champ-wrap>
+        {src ? (
+          <img data-history-champ src={src} alt="" title={name} width={28} height={28} loading="lazy" onError={onIconError} />
+        ) : (
+          <span data-history-champ data-empty aria-hidden="true" />
+        )}
+        {player.level != null ? <span data-history-level>{player.level}</span> : null}
+      </span>
+      {hasBuild ? <SpellPair a={player.spell1_id} b={player.spell2_id} reg={reg} /> : null}
+      <span data-history-name title={name}>{playerLabel(player)}</span>
+      {hasBuild ? <ItemRow items={player.items ?? []} reg={reg} /> : null}
+      <span data-history-kda>
+        {kdaText(player)}
+        {player.minions_killed != null ? <small>{player.minions_killed} CS</small> : null}
+      </span>
     </li>
   );
 }
 
-function TeamColumn({ team, label }: { team: HistoryTeam; label: string }): JSX.Element {
+function TeamColumn({ team, label, reg }: { team: HistoryTeam; label: string; reg: DdragonRegistry | null }): JSX.Element {
   return (
     <div data-history-team data-winner={team.is_winner ? "true" : "false"}>
       <div data-history-team-head>
@@ -55,14 +101,14 @@ function TeamColumn({ team, label }: { team: HistoryTeam; label: string }): JSX.
       </div>
       <ul data-history-players>
         {team.players.map((p, i) => (
-          <PlayerRow key={p.puuid || `${label}-${i}`} player={p} />
+          <PlayerRow key={p.puuid || `${label}-${i}`} player={p} reg={reg} />
         ))}
       </ul>
     </div>
   );
 }
 
-function GameCard({ game }: { game: HistoryGame }): JSX.Element {
+function GameCard({ game, reg }: { game: HistoryGame; reg: DdragonRegistry | null }): JSX.Element {
   const played = new Date(game.played_at);
   const when = Number.isNaN(played.getTime()) ? game.played_at : played.toLocaleString();
   const heading = game.tournament_name ?? "Match";
@@ -76,7 +122,7 @@ function GameCard({ game }: { game: HistoryGame }): JSX.Element {
       </header>
       <div data-history-teams>
         {game.teams.map((team, i) => (
-          <TeamColumn key={i} team={team} label={`Team ${i + 1}`} />
+          <TeamColumn key={i} team={team} label={i === 0 ? "Blue side" : "Red side"} reg={reg} />
         ))}
       </div>
     </article>
@@ -89,6 +135,7 @@ export default function MatchHistoryScreen(): JSX.Element {
     () => fetchMatchHistory(api),
     [api],
   );
+  const reg = useDdragon();
 
   return (
     <section aria-labelledby="history-heading">
@@ -125,7 +172,7 @@ export default function MatchHistoryScreen(): JSX.Element {
         ) : (
           <div data-history-list>
             {games.map((g) => (
-              <GameCard key={`${g.match_id}:${g.lcu_game_id}`} game={g} />
+              <GameCard key={`${g.match_id}:${g.lcu_game_id}`} game={g} reg={reg} />
             ))}
           </div>
         )

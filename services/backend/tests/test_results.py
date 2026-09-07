@@ -458,7 +458,23 @@ async def test_list_match_history_dedupes_and_resolves() -> None:
         {
             "isWinningTeam": True,
             "players": [
-                {"puuid": "p1", "championId": 1, "championsKilled": 7, "numDeaths": 2, "assists": 9}
+                {
+                    "puuid": "p1",
+                    "championId": 1,
+                    "championsKilled": 7,
+                    "numDeaths": 2,
+                    "assists": 9,
+                    "championName": "Annie",
+                    "level": 16,
+                    "items": [3020, 3089, 0, 4645, 3157, 3135, 3364],
+                    "spell1Id": 4,
+                    "spell2Id": 14,
+                    "goldEarned": 13250,
+                    "minionsKilled": 188,
+                    "damageToChampions": 24110,
+                    "visionScore": 21,
+                    "profileIconId": 4,
+                }
             ],
         },
         {
@@ -492,9 +508,19 @@ async def test_list_match_history_dedupes_and_resolves() -> None:
     assert (win.kills, win.deaths, win.assists) == (7, 2, 9)
     assert win.display_name == "Chama"
     assert win.riot_id == "ChamaIGN#EUNE"
-    # Unlinked player resolves to no name.
-    assert g.teams[1].players[0].display_name is None
-    assert g.teams[1].players[0].riot_id is None
+    # Scoreboard extras ride along when the client captured them …
+    assert win.champion_name == "Annie"
+    assert win.level == 16
+    assert win.items == (3020, 3089, 0, 4645, 3157, 3135, 3364)
+    assert (win.spell1_id, win.spell2_id) == (4, 14)
+    assert (win.gold_earned, win.minions_killed) == (13250, 188)
+    assert (win.damage_to_champions, win.vision_score, win.profile_icon_id) == (24110, 21, 4)
+    # … and default to absent on an older report that did not.
+    lose = g.teams[1].players[0]
+    assert lose.display_name is None
+    assert lose.riot_id is None
+    assert lose.items == ()
+    assert lose.level is None and lose.spell1_id is None
 
 
 @pytest.mark.asyncio
@@ -638,3 +664,43 @@ async def test_replaying_the_final_repairs_a_tournament_left_running() -> None:
     await record_winner(session, match_id=final.id, winner_team_id=final.team_a)
 
     assert tournament.status is TournamentStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_list_my_match_history_keeps_only_the_callers_games() -> None:
+    from datetime import UTC, datetime
+
+    mine = uuid.uuid4()
+    theirs = uuid.uuid4()
+    tid = uuid.uuid4()
+    my_teams = [
+        {"isWinningTeam": True, "players": [{"puuid": "me", "championId": 103}]},
+        {"isWinningTeam": False, "players": [{"puuid": "p2", "championId": 5}]},
+    ]
+    other_teams = [
+        {"isWinningTeam": True, "players": [{"puuid": "p3", "championId": 1}]},
+        {"isWinningTeam": False, "players": [{"puuid": "p4", "championId": 2}]},
+    ]
+    session = _QueuedSession(
+        _HistResult([("me",)]),  # the caller's linked PUUIDs
+        _HistResult(
+            [
+                _report(theirs, "300", datetime(2026, 6, 4, tzinfo=UTC), other_teams),
+                _report(mine, "100", datetime(2026, 6, 3, tzinfo=UTC), my_teams),
+            ]
+        ),
+        _HistResult([]),  # no linked names
+        _HistResult([(mine, 1, tid, "Summer Cup"), (theirs, 1, tid, "Summer Cup")]),
+    )
+
+    games = await service.list_my_match_history(session, user_id=uuid.uuid4(), limit=20)  # type: ignore[arg-type]
+
+    assert [g.lcu_game_id for g in games] == ["100"]
+    assert games[0].teams[0].players[0].puuid == "me"
+
+
+@pytest.mark.asyncio
+async def test_list_my_match_history_empty_without_linked_accounts() -> None:
+    # No PUUIDs → no second query is even issued (the queue holds one result).
+    session = _QueuedSession(_HistResult([]))
+    assert await service.list_my_match_history(session, user_id=uuid.uuid4()) == []  # type: ignore[arg-type]

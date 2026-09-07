@@ -6,15 +6,31 @@
 // rendered at the top level (no hooks) so the screen degrades gracefully if it
 // is ever mounted outside the provider/router stack (see ScreenBoundary).
 
-import { Component, useCallback, useState, type ErrorInfo, type ReactNode } from "react";
+import {
+  Component,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ErrorInfo,
+  type ReactNode,
+} from "react";
+import { useSearchParams } from "react-router-dom";
 import type { TournamentResponse } from "@lol/clients-ts";
 import {
   Button,
   DataTable,
+  Drawer,
   ErrorBanner,
+  Icon,
   ScreenHeader,
   SectionHeader,
+  Segmented,
   StatusBadge,
+  Toolbar,
+  ToolbarCount,
+  ToolbarSearch,
+  countLabel,
   type Column,
 } from "../../components";
 import {
@@ -34,6 +50,28 @@ import { CreateTournamentForm } from "./CreateTournamentForm";
 import { TournamentDetail } from "./TournamentDetail";
 
 const ADMIN_ROLES = [GUILD_ADMIN, PLATFORM_OPERATOR] as const;
+
+/** The toolbar's status buckets. Raw enum values grouped by what an admin is
+ *  looking for: what still needs entrants, what is being played, what is over. */
+type StatusFilter = "all" | "open" | "running" | "finished";
+
+const STATUS_FILTERS: ReadonlyArray<{ id: StatusFilter; label: string }> = [
+  { id: "all", label: "All" },
+  { id: "open", label: "Open" },
+  { id: "running", label: "Running" },
+  { id: "finished", label: "Finished" },
+];
+
+const OPEN_STATUSES = new Set(["draft", "open", "registration", "check_in", "scheduled"]);
+const RUNNING_STATUSES = new Set(["running", "in_progress", "active", "live"]);
+const FINISHED_STATUSES = new Set(["completed", "cancelled", "ended", "done"]);
+
+function inStatusBucket(status: string, bucket: StatusFilter): boolean {
+  if (bucket === "all") return true;
+  if (bucket === "open") return OPEN_STATUSES.has(status);
+  if (bucket === "running") return RUNNING_STATUSES.has(status);
+  return FINISHED_STATUSES.has(status);
+}
 
 /**
  * Isolates the data-bound portion of the screen. If the providers/router are
@@ -118,10 +156,30 @@ function TournamentsBody(): JSX.Element {
     () => api.tournaments.list(),
     [],
   );
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Deep links from the dashboard: `?open=<id>` opens that tournament's
+  // drawer, `?create=1` opens the create form. Read once, then dropped from
+  // the URL so Back does not re-open them.
+  const [params, setParams] = useSearchParams();
+  const openParam = params.get("open");
+  const createParam = params.get("create");
+  const [selectedId, setSelectedId] = useState<string | null>(openParam);
+  const closeDetail = useCallback(() => setSelectedId(null), []);
   // The create form used to sit permanently ABOVE the list, so every visit
   // opened on a wall of inputs instead of on the tournaments themselves.
-  const [creating, setCreating] = useState(false);
+  const [creating, setCreating] = useState(createParam === "1");
+  useEffect(() => {
+    if (openParam === null && createParam === null) return;
+    setParams({}, { replace: true });
+  }, [openParam, createParam, setParams]);
+
+  // Client-side search + status bucket over the loaded list (it is small and
+  // fully loaded; the list route takes no query parameters).
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState<StatusFilter>("all");
+  const clearFilters = useCallback(() => {
+    setQuery("");
+    setStatus("all");
+  }, []);
 
   const handleCreated = useCallback(() => {
     reload();
@@ -195,18 +253,25 @@ function TournamentsBody(): JSX.Element {
     { id: "schedule", header: "Schedule", cell: scheduleCell },
     {
       id: "actions",
-      header: "",
+      header: <span data-visually-hidden>Actions</span>,
+      // A quiet icon button: a bordered "Delete" on every row turned the list
+      // into a wall of buttons. It goes red only under the pointer.
       cell: (t) => (
         <RoleGate anyOf={ADMIN_ROLES}>
           <Button
-            variant="secondary"
+            variant="ghost"
+            size="sm"
             data-delete-tournament
-            disabled={deletingId === t.id}
+            data-icon-only
+            data-tone="danger"
+            aria-label={`Delete ${t.name}`}
+            title="Delete"
+            busy={deletingId === t.id}
             onClick={() => {
               void handleDelete(t);
             }}
           >
-            {deletingId === t.id ? "Deleting…" : "Delete"}
+            <Icon name="trash" size={16} />
           </Button>
         </RoleGate>
       ),
@@ -214,6 +279,13 @@ function TournamentsBody(): JSX.Element {
   ];
 
   const rows = data ?? [];
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return rows.filter(
+      (t) => inStatusBucket(t.status, status) && (needle === "" || t.name.toLowerCase().includes(needle)),
+    );
+  }, [rows, query, status]);
+  const filtering = filtered.length !== rows.length;
 
   return (
     <>
@@ -251,17 +323,43 @@ function TournamentsBody(): JSX.Element {
       {error ? <ErrorBanner error={error} onRetry={reload} /> : null}
       {deleteError ? <ErrorBanner error={deleteError} /> : null}
 
+      {rows.length > 0 ? (
+        <Toolbar>
+          <ToolbarSearch
+            label="Search tournaments by name"
+            placeholder="Search tournaments…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          <Segmented
+            label="Filter by status"
+            options={STATUS_FILTERS}
+            value={status}
+            onChange={setStatus}
+          />
+          <ToolbarCount>{countLabel(filtered.length, rows.length, "tournament")}</ToolbarCount>
+        </Toolbar>
+      ) : null}
+
       <DataTable<TournamentResponse>
         caption="Tournaments"
         hideCaption
         columns={columns}
-        rows={rows}
+        rows={filtered}
         rowKey={(t) => t.id}
         loading={loading}
         loadingRows={4}
-        emptyMessage="No tournaments yet. Create one to mint a join code and open entries."
+        emptyMessage={
+          filtering
+            ? "No tournaments match those filters."
+            : "No tournaments yet. Create one to mint a join code and open entries."
+        }
         emptyAction={
-          creating ? null : (
+          filtering ? (
+            <Button variant="secondary" onClick={clearFilters}>
+              Clear filters
+            </Button>
+          ) : creating ? null : (
             <RoleGate anyOf={ADMIN_ROLES}>
               <Button variant="primary" onClick={() => setCreating(true)}>
                 New tournament
@@ -271,7 +369,11 @@ function TournamentsBody(): JSX.Element {
         }
       />
 
-      {selectedId ? <TournamentDetail tournamentId={selectedId} onClose={() => setSelectedId(null)} /> : null}
+      {/* The detail arrives beside the row that opened it, instead of below a
+          table that may be twenty rows tall. */}
+      <Drawer open={selectedId !== null} onClose={closeDetail} labelledBy="tournament-detail-heading">
+        {selectedId ? <TournamentDetail tournamentId={selectedId} onClose={closeDetail} /> : null}
+      </Drawer>
     </>
   );
 }

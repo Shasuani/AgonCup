@@ -1,25 +1,8 @@
-/* HomeScreen dashboard polish — KPI grid spacing + nav card icon chrome.
-   All colors/spacing/radii from the Cobalt Slate :root tokens. */
+/* HomeScreen — the dashboard's own spacing. Everything else (panels, feeds,
+   attention list, progress bars, section links) lives in global.css under
+   "Dashboard" so the tokens and light-theme overrides stay in one place. */
 
-/* Space the KPI grid from the nav cards below it. */
+/* Space the KPI grid from the panels below it. */
 [data-statcard-grid] {
-  margin-bottom: var(--space-6);
-}
-
-/* Leading icon chip on each dashboard nav card. */
-[data-dash-card] [data-dash-card-icon] {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  margin-bottom: var(--space-3);
-  border-radius: var(--radius-md);
-  background: rgba(109, 92, 246, 0.14);
-  color: var(--primary);
-  border: 1px solid rgba(109, 92, 246, 0.3);
-}
-
-[data-dash-card]:hover [data-dash-card-icon] {
-  background: rgba(109, 92, 246, 0.2);
+  margin-bottom: var(--space-5);
 }

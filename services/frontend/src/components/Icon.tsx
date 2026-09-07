@@ -33,7 +33,15 @@ export type IconName =
   | "plus"
   | "check"
   | "alert"
-  | "download";
+  | "download"
+  | "discord"
+  | "server"
+  | "history"
+  | "guild"
+  | "trash"
+  | "filter"
+  | "external"
+  | "arrow-right";
 
 export interface IconProps
   extends Omit<SVGProps<SVGSVGElement>, "name" | "children"> {
@@ -186,12 +194,73 @@ const PATHS: Record<IconName, () => JSX.Element> = {
       <path d="M12 17.5h.01" />
     </>
   ),
+  // Discord mark (filled).
+  discord: () => (
+    <path
+      fill="currentColor"
+      stroke="none"
+      d="M18.9 6.3A15 15 0 0 0 15.2 5l-.5.9a14 14 0 0 0-5.4 0L8.8 5a15 15 0 0 0-3.7 1.3C2.8 9.8 2.2 13.2 2.5 16.5a15 15 0 0 0 4.6 2.3l1-1.5a9 9 0 0 1-1.5-.7l.4-.3a10.6 10.6 0 0 0 10 0l.4.3-1.5.7 1 1.5a15 15 0 0 0 4.6-2.3c.4-3.8-.6-7.2-2.6-10.2ZM9.2 14.5c-.9 0-1.6-.8-1.6-1.8s.7-1.8 1.6-1.8 1.7.8 1.6 1.8c0 1-.7 1.8-1.6 1.8Zm5.6 0c-.9 0-1.6-.8-1.6-1.8s.7-1.8 1.6-1.8 1.7.8 1.6 1.8c0 1-.7 1.8-1.6 1.8Z"
+    />
+  ),
   // Arrow into a tray.
   download: () => (
     <>
       <path d="M12 4v11" />
       <path d="m7.5 10.5 4.5 4.5 4.5-4.5" />
       <path d="M4 16.5v2A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5v-2" />
+    </>
+  ),
+  // Server rack (two bays with a status light each).
+  server: () => (
+    <>
+      <rect x="3" y="4" width="18" height="6.5" rx="2" />
+      <rect x="3" y="13.5" width="18" height="6.5" rx="2" />
+      <path d="M7 7.25h.01" />
+      <path d="M7 16.75h.01" />
+      <path d="M11 7.25h6" />
+      <path d="M11 16.75h6" />
+    </>
+  ),
+  // Clock with a counter-clockwise arrow (history).
+  history: () => (
+    <>
+      <path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1" />
+      <path d="M3.5 3.5V8h4.5" />
+      <path d="M12 8v4.5l3 2" />
+    </>
+  ),
+  // Shield with a check (guild / server admin).
+  guild: () => (
+    <>
+      <path d="M12 3 5 5.8v5.4c0 4.4 3 7.9 7 9.3 4-1.4 7-4.9 7-9.3V5.8L12 3Z" />
+      <path d="m9.5 12 1.8 1.8 3.5-3.8" />
+    </>
+  ),
+  // Trash can.
+  trash: () => (
+    <>
+      <path d="M4.5 7h15" />
+      <path d="M9.5 7V5a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v2" />
+      <path d="m6.5 7 .8 11.2a2 2 0 0 0 2 1.8h5.4a2 2 0 0 0 2-1.8L17.5 7" />
+      <path d="M10 11v5" />
+      <path d="M14 11v5" />
+    </>
+  ),
+  // Funnel.
+  filter: () => <path d="M4 5h16l-6.2 7.2V18l-3.6 2v-7.8L4 5Z" />,
+  // Arrow leaving a box (external link).
+  external: () => (
+    <>
+      <path d="M14 4h6v6" />
+      <path d="M20 4 10.5 13.5" />
+      <path d="M18 13.5V18a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4.5" />
+    </>
+  ),
+  // Right arrow.
+  "arrow-right": () => (
+    <>
+      <path d="M4.5 12h15" />
+      <path d="m13 5.5 6.5 6.5-6.5 6.5" />
     </>
   ),
 };

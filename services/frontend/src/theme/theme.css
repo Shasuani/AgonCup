@@ -49,6 +49,7 @@
   --primary-softer: rgba(88, 72, 229, 0.05);
   --primary-line: rgba(88, 72, 229, 0.3);
   --brand-gradient: linear-gradient(135deg, var(--primary), var(--accent));
+  --row-hover: rgba(88, 72, 229, 0.07);
 
   /* Shadows — softer/cooler on a light surface than the heavy dark elevations. */
   --shadow-xs: 0 1px 2px rgba(20, 24, 38, 0.08);
@@ -160,8 +161,15 @@
 }
 
 /* Modal scrim — keep a light-appropriate dim instead of near-black. */
-:root[data-theme="light"] [data-modal-overlay] {
+:root[data-theme="light"] [data-modal-overlay],
+:root[data-theme="light"] [data-drawer-overlay] {
   background: rgba(20, 24, 38, 0.4);
+}
+
+/* Ghost danger hover uses the dark danger alphas. */
+:root[data-theme="light"] :is(button, a)[data-variant="ghost"][data-tone="danger"]:hover:not(:disabled) {
+  background: rgba(212, 69, 63, 0.09);
+  border-color: rgba(212, 69, 63, 0.35);
 }
 
 /* Secondary button hover used hardcoded dark hex in global.css. */
@@ -295,4 +303,23 @@
 
 :root[data-theme="light"] [data-bracket-slot][data-winner] {
   background: rgba(15, 157, 107, 0.1);
+}
+
+/* Dashboard feeds: the attention/result tints use the dark colour-family
+   alphas; re-bind them so the chips keep AA text on white. */
+:root[data-theme="light"] [data-attention-item][data-tone="danger"] [data-attention-icon] {
+  background: rgba(212, 69, 63, 0.1);
+  border-color: rgba(212, 69, 63, 0.3);
+}
+
+:root[data-theme="light"] [data-attention-item][data-tone="warning"] [data-attention-icon] {
+  background: rgba(181, 121, 10, 0.12);
+  border-color: rgba(181, 121, 10, 0.35);
+}
+
+:root[data-theme="light"] [data-attention-item][data-tone="success"] [data-attention-icon],
+:root[data-theme="light"] [data-attention-clear-icon],
+:root[data-theme="light"] [data-result-outcome] {
+  background: rgba(15, 157, 107, 0.11);
+  border-color: rgba(15, 157, 107, 0.32);
 }

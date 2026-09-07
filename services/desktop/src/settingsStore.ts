@@ -28,6 +28,10 @@ export interface PersistedSettings {
   /** "May this client create/invite/accept lobbies?" — the automation toggle.
    * Absent/false ⇒ writes stay gated (PLAN.md §3.3 explicit opt-in). */
   readonly automationOptIn?: boolean;
+  /** Last summoner icon / level read from the League client, so the profile
+   * still renders while League is closed. Display only, never identity. */
+  readonly profileIconId?: number;
+  readonly summonerLevel?: number;
 }
 
 export interface SettingsStoreConfig {
@@ -44,9 +48,15 @@ function parseSettings(raw: unknown): PersistedSettings {
     return {};
   }
   const rec = raw as Record<string, unknown>;
-  const out: { automationOptIn?: boolean } = {};
+  const out: { automationOptIn?: boolean; profileIconId?: number; summonerLevel?: number } = {};
   if (typeof rec["automationOptIn"] === "boolean") {
     out.automationOptIn = rec["automationOptIn"];
+  }
+  if (typeof rec["profileIconId"] === "number" && Number.isFinite(rec["profileIconId"])) {
+    out.profileIconId = rec["profileIconId"];
+  }
+  if (typeof rec["summonerLevel"] === "number" && Number.isFinite(rec["summonerLevel"])) {
+    out.summonerLevel = rec["summonerLevel"];
   }
   return out;
 }

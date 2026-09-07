@@ -204,8 +204,8 @@ export default function AccountsScreen(): JSX.Element {
       ) : null}
 
       {rows !== null && rows.length > 0 ? (
-        <div data-roster-toolbar>
-          <div data-roster-search>
+        <div data-roster-toolbar data-toolbar>
+          <div data-roster-search data-toolbar-search>
             <Icon name="search" size={16} />
             <input
               type="search"
@@ -216,12 +216,13 @@ export default function AccountsScreen(): JSX.Element {
             />
           </div>
 
-          <div data-roster-filters role="group" aria-label="Filter by verification status">
+          <div data-roster-filters data-segmented role="group" aria-label="Filter by verification status">
             {STATUS_FILTERS.map((f) => (
               <button
                 key={f.id}
                 type="button"
                 data-roster-filter
+                data-segmented-option
                 data-active={status === f.id ? "true" : undefined}
                 aria-pressed={status === f.id}
                 onClick={() => setStatus(f.id)}
@@ -231,7 +232,7 @@ export default function AccountsScreen(): JSX.Element {
             ))}
           </div>
 
-          <p data-roster-count>
+          <p data-roster-count data-toolbar-count>
             {filtered !== null && filtered.length === rows.length
               ? `${rows.length} ${rows.length === 1 ? "player" : "players"}`
               : `${filtered?.length ?? 0} of ${rows.length} players`}

@@ -10,7 +10,7 @@
 // (the creator becomes captain and gets a join code to share, PLAN.md §3.1), so
 // the admin SPA only observes and manages existing rosters.
 
-import { useCallback, useState, type FormEvent } from "react";
+import { useCallback, useMemo, useState, type FormEvent } from "react";
 import { useApi } from "../../api/ApiProvider";
 import { useAsyncAction, useAsyncData } from "../../api/useAsync";
 import {
@@ -23,6 +23,10 @@ import {
   ScreenHeader,
   Spinner,
   TextInput,
+  Toolbar,
+  ToolbarCount,
+  ToolbarSearch,
+  countLabel,
   type Column,
 } from "../../components";
 import { TEAM_ROLE_LABELS, label as labelFor } from "../../lib/labels";
@@ -69,6 +73,19 @@ export default function TeamsScreen(): JSX.Element {
   }, []);
 
   const teams = teamsQuery.data ?? [];
+
+  // Find-a-team over the loaded list: by team name or by who leads it.
+  const [query, setQuery] = useState("");
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (needle === "") return teams;
+    return teams.filter(
+      (t) =>
+        t.name.toLowerCase().includes(needle) ||
+        (t.captain_name ?? "").toLowerCase().includes(needle),
+    );
+  }, [teams, query]);
+  const filtering = filtered.length !== teams.length;
 
   const columns: ReadonlyArray<Column<TeamResponse>> = [
     { id: "name", header: "Name", cell: (t) => <span data-team-name>{t.name}</span> },
@@ -130,15 +147,38 @@ export default function TeamsScreen(): JSX.Element {
 
       <ErrorBanner error={teamsQuery.error} onRetry={teamsQuery.reload} />
 
+      {teams.length > 0 ? (
+        <Toolbar>
+          <ToolbarSearch
+            label="Search teams by name or leader"
+            placeholder="Search teams by name or leader…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          <ToolbarCount>{countLabel(filtered.length, teams.length, "team")}</ToolbarCount>
+        </Toolbar>
+      ) : null}
+
       <DataTable
         caption="Teams in the acting guild"
         hideCaption
         columns={columns}
-        rows={teams}
+        rows={filtered}
         rowKey={(t) => t.id}
         loading={teamsQuery.loading}
         loadingRows={4}
-        emptyMessage="No teams yet. Players create teams from the desktop client."
+        emptyMessage={
+          filtering
+            ? "No teams match that search."
+            : "No teams yet. Players create teams from the desktop client."
+        }
+        emptyAction={
+          filtering ? (
+            <Button variant="secondary" onClick={() => setQuery("")}>
+              Clear search
+            </Button>
+          ) : null
+        }
         renderExpanded={(t) => <TeamRoster teamId={t.id} />}
         expandedKeys={expanded}
         onToggleExpand={toggleExpanded}

@@ -28,11 +28,22 @@ export interface PersistedSettings {
   /** "May this client create/invite/accept lobbies?" — the automation toggle.
    * Absent/false ⇒ writes stay gated (PLAN.md §3.3 explicit opt-in). */
   readonly automationOptIn?: boolean;
-  /** Last summoner icon / level read from the League client, so the profile
-   * still renders while League is closed. Display only, never identity. */
+  /** The last summoner this device saw signed in to the League client (Riot ID
+   * + region + icon/level), so the profile still renders AS THAT ACCOUNT while
+   * League is closed. Display only, never identity: the backend's linked
+   * accounts remain the source of truth for who the player is. */
+  readonly gameName?: string;
+  readonly tagLine?: string;
+  readonly region?: string;
   readonly profileIconId?: number;
   readonly summonerLevel?: number;
 }
+
+/** The persisted "last seen summoner" slice of {@link PersistedSettings}. */
+export type LastSeenSummoner = Pick<
+  PersistedSettings,
+  "gameName" | "tagLine" | "region" | "profileIconId" | "summonerLevel"
+>;
 
 export interface SettingsStoreConfig {
   readonly fs: SettingsStoreFs;
@@ -48,9 +59,22 @@ function parseSettings(raw: unknown): PersistedSettings {
     return {};
   }
   const rec = raw as Record<string, unknown>;
-  const out: { automationOptIn?: boolean; profileIconId?: number; summonerLevel?: number } = {};
+  const out: {
+    automationOptIn?: boolean;
+    gameName?: string;
+    tagLine?: string;
+    region?: string;
+    profileIconId?: number;
+    summonerLevel?: number;
+  } = {};
   if (typeof rec["automationOptIn"] === "boolean") {
     out.automationOptIn = rec["automationOptIn"];
+  }
+  for (const key of ["gameName", "tagLine", "region"] as const) {
+    const v = rec[key];
+    if (typeof v === "string" && v.trim() !== "") {
+      out[key] = v;
+    }
   }
   if (typeof rec["profileIconId"] === "number" && Number.isFinite(rec["profileIconId"])) {
     out.profileIconId = rec["profileIconId"];

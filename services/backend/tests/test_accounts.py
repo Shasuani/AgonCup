@@ -21,7 +21,7 @@ from __future__ import annotations
 import operator
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -1089,3 +1089,116 @@ async def test_list_linked_accounts_maps_join_rows() -> None:
 @pytest.mark.asyncio
 async def test_list_linked_accounts_empty() -> None:
     assert await service.list_linked_accounts(_RosterSession([])) == []  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# refresh_account_rank (live rank: the desktop asks when it sees the signed-in account)
+# ---------------------------------------------------------------------------
+def _owned_account(user_id: str, *, checked_at: datetime | None = None) -> RiotAccount:
+    acct = RiotAccount(
+        user_id=user_id,
+        puuid=_CANON,
+        riot_id_game_name="Chama",
+        riot_id_tag_line="Shasu",
+        region="eun1",
+        verified=True,
+        verified_at=datetime.now(tz=UTC),
+        rank_tier="SILVER",
+        rank_division="I",
+        rank_lp=10,
+        rank_queue="RANKED_SOLO_5x5",
+        rank_checked_at=checked_at,
+    )
+    acct.id = uuid.uuid4()
+    return acct
+
+
+@pytest.mark.asyncio
+async def test_refresh_rank_stores_the_live_league_v4_rank() -> None:
+    session = FakeSession()
+    user_id = str(uuid.uuid4())
+    acct = _owned_account(user_id)
+    session.store[RiotAccount].append(acct)
+    client = FakeRiotClient(entries=[_GOLD])
+    now = datetime.now(tz=UTC)
+
+    out = await service.refresh_account_rank(
+        session, user_id=user_id, account_id=str(acct.id), account_client=client, now=now
+    )
+
+    assert client.rank_calls == [(_CANON, PlatformRoute.EUN1)]
+    assert out.rank_text == "Gold II, 45 LP"
+    assert (acct.rank_tier, acct.rank_division, acct.rank_lp) == ("GOLD", "II", 45)
+    assert acct.rank_checked_at == now
+
+
+@pytest.mark.asyncio
+async def test_refresh_rank_is_throttled_when_the_snapshot_is_fresh() -> None:
+    session = FakeSession()
+    user_id = str(uuid.uuid4())
+    now = datetime.now(tz=UTC)
+    acct = _owned_account(user_id, checked_at=now - timedelta(seconds=10))
+    session.store[RiotAccount].append(acct)
+    client = FakeRiotClient(entries=[_GOLD])
+
+    out = await service.refresh_account_rank(
+        session, user_id=user_id, account_id=str(acct.id), account_client=client, now=now
+    )
+
+    assert client.rank_calls == []  # no Riot call inside the window
+    assert out.rank_text == "Silver I, 10 LP"
+    assert acct.rank_tier == "SILVER"
+
+
+@pytest.mark.asyncio
+async def test_refresh_rank_keeps_the_stored_snapshot_when_riot_fails() -> None:
+    session = FakeSession()
+    user_id = str(uuid.uuid4())
+    acct = _owned_account(user_id)
+    session.store[RiotAccount].append(acct)
+    client = FakeRiotClient(rank_raises=RiotApiError("league_entries_by_puuid: 503"))
+
+    out = await service.refresh_account_rank(
+        session, user_id=user_id, account_id=str(acct.id), account_client=client
+    )
+
+    assert out.rank_text == "Silver I, 10 LP"
+    assert acct.rank_tier == "SILVER"
+    assert acct.rank_checked_at is None  # a failed read is not a check
+
+
+@pytest.mark.asyncio
+async def test_refresh_rank_clears_the_snapshot_when_now_unranked() -> None:
+    session = FakeSession()
+    user_id = str(uuid.uuid4())
+    acct = _owned_account(user_id)
+    session.store[RiotAccount].append(acct)
+    client = FakeRiotClient(entries=[])  # 200 [] = fully unranked (season reset)
+    now = datetime.now(tz=UTC)
+
+    out = await service.refresh_account_rank(
+        session, user_id=user_id, account_id=str(acct.id), account_client=client, now=now
+    )
+
+    assert out.rank_text == "Unranked"
+    assert (acct.rank_tier, acct.rank_division, acct.rank_lp, acct.rank_queue) == (
+        None,
+        None,
+        None,
+        None,
+    )
+    assert acct.rank_checked_at == now
+
+
+@pytest.mark.asyncio
+async def test_refresh_rank_is_scoped_to_the_owner() -> None:
+    session = FakeSession()
+    acct = _owned_account(str(uuid.uuid4()))
+    session.store[RiotAccount].append(acct)
+    client = FakeRiotClient(entries=[_GOLD])
+
+    with pytest.raises(service.AccountNotLinked):
+        await service.refresh_account_rank(
+            session, user_id=str(uuid.uuid4()), account_id=str(acct.id), account_client=client
+        )
+    assert client.rank_calls == []

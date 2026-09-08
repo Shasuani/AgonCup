@@ -77,7 +77,7 @@ _only_one() {
 }
 
 DMG="$(_only_one '*.dmg' '.dmg')"
-ZIP="$(_only_one '*-mac.zip' 'mac .zip')"
+ZIP="$(_only_one '*.zip' 'mac .zip')"
 EXE="$(_only_one '*.exe' '.exe')"
 EXE_BLOCKMAP="$EXE.blockmap"
 for f in "$EXE_BLOCKMAP" "$RELEASE/latest.yml" "$RELEASE/latest-mac.yml"; do

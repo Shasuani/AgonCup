@@ -115,6 +115,11 @@ export type UnlinkAccountBridgeResult =
   | { ok: true; account: LinkedAccountBridge }
   | { ok: false; status: number; detail: string };
 
+/** Result of `window.lol.refreshRank(id)`: the account with its LIVE Solo/Duo rank. */
+export type RefreshRankBridgeResult =
+  | { ok: true; account: LinkedAccountBridge }
+  | { ok: false; status: number; detail: string };
+
 /** One tournament in the signed-in user's list / a join result. */
 export interface TournamentBridge {
   id: string;
@@ -298,8 +303,16 @@ export interface HistoryPlayerBridge {
   profileIconId: number | null;
 }
 
-/** The last summoner icon/level this device saw (display only). */
-export type ProfileBridgeResult = { ok: true; profileIconId?: number; summonerLevel?: number };
+/** The last summoner this device saw signed in to League (Riot ID, region,
+ * icon/level) — display only; what the UI shows while League is closed. */
+export type ProfileBridgeResult = {
+  ok: true;
+  gameName?: string;
+  tagLine?: string;
+  region?: string;
+  profileIconId?: number;
+  summonerLevel?: number;
+};
 
 export interface HistoryTeamBridge {
   isWinner: boolean;
@@ -368,6 +381,8 @@ export interface LolBridge {
   listAccounts(): Promise<ListAccountsBridgeResult>;
   /** Unregister one linked Riot account. */
   unlinkAccount(accountId: string): Promise<UnlinkAccountBridgeResult>;
+  /** Re-read one linked account's Solo/Duo rank from Riot (live, throttled server-side). */
+  refreshRank(accountId: string): Promise<RefreshRankBridgeResult>;
   /** Clear the local session (sign out) → next boot / view shows pairing (step 1). */
   signOut(): Promise<{ ok: boolean }>;
   /** The signed-in user's tournaments. */
@@ -479,6 +494,8 @@ const bridge: LolBridge = {
     ipcRenderer.invoke("lol:list-accounts") as Promise<ListAccountsBridgeResult>,
   unlinkAccount: (accountId) =>
     ipcRenderer.invoke("lol:account-unlink", { accountId }) as Promise<UnlinkAccountBridgeResult>,
+  refreshRank: (accountId) =>
+    ipcRenderer.invoke("lol:account-rank-refresh", { accountId }) as Promise<RefreshRankBridgeResult>,
   signOut: () => ipcRenderer.invoke("lol:sign-out") as Promise<{ ok: boolean }>,
   listMyTournaments: () =>
     ipcRenderer.invoke("lol:tournaments-mine") as Promise<ListTournamentsBridgeResult>,

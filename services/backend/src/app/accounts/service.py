@@ -69,6 +69,12 @@ VERIFY_KIND_DESKTOP_CODE = "desktop_code"
 #: League-V4 queue type for the Solo/Duo ranked ladder (the rank we snapshot).
 RANKED_SOLO_QUEUE = "RANKED_SOLO_5x5"
 
+#: Do not ask League-V4 for the same account's rank more often than this. The
+#: desktop refreshes whenever it sees which account is signed in to the League
+#: client (and periodically after), so a flapping LCU / many devices must not be
+#: able to burn the Riot budget on one account.
+RANK_REFRESH_MIN_INTERVAL = timedelta(seconds=60)
+
 #: Attempt lifecycle states (mirror the ``verification_attempts.status`` CHECK).
 STATUS_PENDING = "pending"
 STATUS_VERIFIED = "verified"
@@ -946,6 +952,83 @@ async def list_user_accounts(session: AsyncSession, *, user_id: str) -> list[MyA
         )
         for acct in rows
     ]
+
+
+def _my_account_summary(acct: RiotAccount) -> MyAccountSummary:
+    """Render one owned ``RiotAccount`` row as the self-service summary."""
+    return MyAccountSummary(
+        account_id=str(acct.id),
+        game_name=acct.riot_id_game_name,
+        tag_line=acct.riot_id_tag_line,
+        region=acct.region,
+        verified=acct.verified,
+        verified_at=acct.verified_at,
+        rank_text=format_rank_fields(
+            tier=acct.rank_tier, division=acct.rank_division, league_points=acct.rank_lp
+        ),
+    )
+
+
+async def refresh_account_rank(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    account_id: str,
+    account_client: RiotAccountClient,
+    now: datetime | None = None,
+) -> MyAccountSummary:
+    """Re-read one of the acting user's OWN accounts' Solo/Duo rank from League-V4.
+
+    The desktop calls this the moment it sees which account is signed in to the
+    League client (and periodically after), so the rank the player sees — and the
+    one the roster / Discord show — is LIVE, not the snapshot taken at verify time
+    (PLAN.md §3.5). The fresh rank is STORED on the row, so every other reader
+    (``/accounts/me``, the SPA roster) picks it up too.
+
+    - Scoped to the acting user: a principal can only refresh their own account.
+    - Throttled: a snapshot younger than :data:`RANK_REFRESH_MIN_INTERVAL` is
+      returned as stored, without a Riot call.
+    - Best-effort: a Riot failure (rate-limit / outage / transport) leaves the
+      stored snapshot untouched and is logged, never raised — a stale rank beats
+      no rank. An account with no routable region is returned as stored too.
+    - A ``200`` with no Solo/Duo entry means genuinely UNRANKED (season reset,
+      fresh account): the snapshot is cleared, so an old rank is not shown forever.
+
+    Raises:
+        AccountNotLinked: no account with that id owned by the user (404).
+    """
+    acct = (
+        await session.execute(
+            select(RiotAccount).where(RiotAccount.id == account_id, RiotAccount.user_id == user_id)
+        )
+    ).scalar_one_or_none()
+    if acct is None:
+        raise AccountNotLinked(f"no linked account {account_id}")
+
+    now = now or datetime.now(UTC)
+    if acct.rank_checked_at is not None and now - acct.rank_checked_at < RANK_REFRESH_MIN_INTERVAL:
+        return _my_account_summary(acct)
+
+    try:
+        platform = parse_platform_region(acct.region or "")
+    except InvalidRegion:
+        log.warning("rank_refresh_skipped_no_region", account_id=account_id)
+        return _my_account_summary(acct)
+
+    try:
+        entries = await account_client.get_league_entries_by_puuid(acct.puuid, platform)
+    except Exception as exc:  # best-effort: RiotApiError, transport, parse — never raise
+        log.warning("rank_refresh_failed", account_id=account_id, error=str(exc))
+        return _my_account_summary(acct)
+
+    solo = next((e for e in entries if e.queue_type == RANKED_SOLO_QUEUE), None)
+    acct.rank_tier = solo.tier if solo is not None else None
+    acct.rank_division = (solo.rank or None) if solo is not None else None
+    acct.rank_lp = solo.league_points if solo is not None else None
+    acct.rank_queue = solo.queue_type if solo is not None else None
+    acct.rank_checked_at = now
+    log.info("rank_refreshed", account_id=account_id, ranked=solo is not None)
+    return _my_account_summary(acct)
 
 
 async def unlink_user_account(

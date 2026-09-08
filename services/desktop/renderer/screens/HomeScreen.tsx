@@ -6,6 +6,7 @@ import { RankEmblem, rankParts } from '../emblems';
 import { ChampIcon, ProfileIcon, championSplashUrl, useChampions } from '../champion';
 import { countdown, findMe, kdaRatio, myRecord, myRiotIds, shortWhen, timeAgo, topChampion, useNow } from '../format';
 import { lol, useAsync, errText, type BridgeUser, type Entrant, type HistoryGame, type Tournament } from '../bridge';
+import { useIdentity } from '../identity';
 import { regionShort } from './TournamentsScreen';
 
 type Nav = 'teams' | 'accounts' | 'tournaments' | 'history' | 'match';
@@ -14,7 +15,9 @@ const STATUS_LABEL: Record<string, string> = { running: 'Running', check_in: 'Ch
 
 export default function HomeScreen({ user, onOpenMatch, onNav }: { user: BridgeUser | null; onOpenMatch: () => void; onNav: (s: Nav) => void }) {
   const b = lol();
-  const accounts = useAsync(async () => { const r = await b!.listAccounts(); if (!r.ok) throw new Error(errText(r)); return r.accounts; }, []);
+  // Name, rank, icon and level of the account signed in to League right now
+  // (else the last one seen on this device) — one account, not a mix.
+  const me = useIdentity(user);
   const teams = useAsync(async () => { const r = await b!.myTeams(); if (!r.ok) throw new Error(errText(r)); return r.teams; }, []);
   const tournaments = useAsync(async () => { const r = await b!.listMyTournaments(); if (!r.ok) throw new Error(errText(r)); return r.tournaments; }, [], 15_000);
   const matches = useAsync(async () => { const r = await b!.listMyMatches(); return r.ok ? r.matches : []; }, [], 10_000);
@@ -23,15 +26,9 @@ export default function HomeScreen({ user, onOpenMatch, onNav }: { user: BridgeU
     const r = await b.myHistory();
     return r.ok ? r.games : [];
   }, []);
-  const summoner = useAsync(async () => { const s = b ? await b.readSummoner() : null; return s && s.ok ? s : null; }, []);
-  const profile = useAsync(async () => (b && typeof b.getProfile === 'function' ? await b.getProfile() : { ok: true as const }), []);
-  const profileIconId = summoner.data?.profileIconId ?? profile.data?.profileIconId ?? null;
-  const level = summoner.data?.summonerLevel ?? profile.data?.summonerLevel ?? null;
-
-  const acc = (accounts.data ?? [])[0];
-  const riotId = acc?.gameName && acc?.tagLine ? `${acc.gameName}#${acc.tagLine}` : (user?.displayName ?? 'Summoner');
+  const { profileIconId, level, riotId, account: acc } = me;
   const rank = rankParts(acc?.rankText);
-  const ids = myRiotIds(accounts.data ?? []);
+  const ids = myRiotIds(me.accounts);
   const rec = myRecord(history.data ?? [], ids, user?.displayName ?? null);
   const fav = topChampion(rec);
   const winRate = rec.games > 0 ? Math.round((rec.wins / rec.games) * 100) : null;
@@ -51,7 +48,8 @@ export default function HomeScreen({ user, onOpenMatch, onNav }: { user: BridgeU
     return r.ok ? r.members : [];
   }, [primaryTeam?.teamId]);
 
-  const firstName = (user?.displayName ?? 'summoner').split(/[#\s]/)[0];
+  // Greet the account that is signed in, not the Discord name.
+  const firstName = me.gameName ?? (user?.displayName ?? 'summoner').split(/[#\s]/)[0];
   const recent = (history.data ?? []).slice(0, 5);
 
   return (
@@ -67,12 +65,12 @@ export default function HomeScreen({ user, onOpenMatch, onNav }: { user: BridgeU
           </div>
           <div style={{ minWidth: 0 }}>
             <div className="ll-hero__name" title={riotId}>{riotId}{level !== null && <span className="ll-user__lvl" style={{ fontSize: 11, lineHeight: '18px', marginLeft: 10, verticalAlign: 6 }}>Level {level}</span>}</div>
-            <div className="ll-hero__rank">{rank.label}{rank.lp !== null ? ` · ${rank.lp} LP` : ''}</div>
+            <div className="ll-hero__rank">{acc ? `${rank.label}${rank.lp !== null ? ` · ${rank.lp} LP` : ''}` : 'Not linked'}</div>
             <div className="ll-hero__meta">
-              {acc?.region && <Chip icon="map">{regionShort(acc.region)}</Chip>}
+              {me.region && <Chip icon="map">{regionShort(me.region)}</Chip>}
               {acc && <Chip icon={acc.verified ? 'check' : 'alert'}>{acc.verified ? 'Verified' : 'Pending'}</Chip>}
               {fav !== null && <Chip><ChampIcon id={fav} size={14} ring="none" /> Most played</Chip>}
-              {!acc && !accounts.loading && <LinkButton onClick={() => onNav('accounts')}>Link your Riot account →</LinkButton>}
+              {!acc && !me.accountsLoading && <LinkButton onClick={() => onNav('accounts')}>{me.accounts.length > 0 ? 'Link this account →' : 'Link your Riot account →'}</LinkButton>}
             </div>
           </div>
           <div className="ll-hero__stats">

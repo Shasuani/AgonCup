@@ -41,7 +41,7 @@ function resolveBackendUrl(explicit?: string): string {
   return env !== undefined && env !== "" ? env : "http://localhost:8000";
 }
 
-function asLinkedAccount(raw: unknown): LinkedAccount {
+export function asLinkedAccount(raw: unknown): LinkedAccount {
   const rec = (raw ?? {}) as Record<string, unknown>;
   return {
     accountId: typeof rec["account_id"] === "string" ? rec["account_id"] : "",

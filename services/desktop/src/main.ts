@@ -47,6 +47,7 @@ import { readCurrentSummoner } from "./lcu/readSummoner.js";
 import { verifyDesktop, type VerifyResult } from "./lcu/verify.js";
 import { listMyAccounts, type ListAccountsResult } from "./accounts/listAccounts.js";
 import { unlinkAccount } from "./accounts/unlinkAccount.js";
+import { refreshAccountRank } from "./accounts/refreshRank.js";
 import {
   getBracket,
   hideTournament,
@@ -82,7 +83,7 @@ import {
   type RefreshResult,
 } from "./auth/pairClient.js";
 import { SecureStore, type PersistedSession } from "./secureStore.js";
-import { SettingsStore } from "./settingsStore.js";
+import { type LastSeenSummoner, SettingsStore } from "./settingsStore.js";
 import { LcuStatusPoller, type LcuStatus } from "./lcu/statusPoller.js";
 import { ChampSelectPoller, type ChampSelectView } from "./lcu/champSelectPoller.js";
 import { LiveGamePoller, type LiveGameView } from "./lcu/liveGamePoller.js";
@@ -677,9 +678,12 @@ async function bootstrap(): Promise<void> {
   const adapter = createLcuAdapter();
   // Re-apply the device's remembered automation consent before any orchestration
   // command can arrive (the adapter itself always constructs with writes OFF).
-  let lastProfile: { profileIconId?: number; summonerLevel?: number } = {};
+  let lastProfile: LastSeenSummoner = {};
   void settingsStore.load().then((s) => {
     lastProfile = {
+      ...(s.gameName !== undefined ? { gameName: s.gameName } : {}),
+      ...(s.tagLine !== undefined ? { tagLine: s.tagLine } : {}),
+      ...(s.region !== undefined ? { region: s.region } : {}),
       ...(s.profileIconId !== undefined ? { profileIconId: s.profileIconId } : {}),
       ...(s.summonerLevel !== undefined ? { summonerLevel: s.summonerLevel } : {}),
     };
@@ -856,12 +860,24 @@ async function bootstrap(): Promise<void> {
   ipcMain.handle("lol:read-summoner", async () => {
     const result = await readCurrentSummoner();
     if (result.ok) {
-      // Remember the icon/level so the profile still renders with League closed.
-      if (result.profileIconId !== undefined) {
-        lastProfile = {
-          profileIconId: result.profileIconId,
-          ...(result.summonerLevel !== undefined ? { summonerLevel: result.summonerLevel } : {}),
-        };
+      // Remember WHO was signed in (Riot ID + region) along with the icon/level,
+      // so the profile still renders as that account while League is closed.
+      const seen: LastSeenSummoner = {
+        gameName: result.gameName,
+        tagLine: result.tagLine,
+        ...(result.region !== undefined ? { region: result.region } : {}),
+        ...(result.profileIconId !== undefined ? { profileIconId: result.profileIconId } : {}),
+        ...(result.summonerLevel !== undefined ? { summonerLevel: result.summonerLevel } : {}),
+      };
+      const switched =
+        lastProfile.gameName !== seen.gameName || lastProfile.tagLine !== seen.tagLine;
+      // A different account replaces the memory outright (its icon/level must
+      // not leak onto the new name); the same account only refreshes fields.
+      const next = switched ? seen : { ...lastProfile, ...seen };
+      // The renderer polls this every few seconds: only touch the disk when
+      // something actually changed (a new account, a new icon, a level-up).
+      if (JSON.stringify(next) !== JSON.stringify(lastProfile)) {
+        lastProfile = next;
         void settingsStore.save(lastProfile);
       }
       return {
@@ -1103,6 +1119,17 @@ async function bootstrap(): Promise<void> {
   ipcMain.handle("lol:account-unlink", (_event, args: { accountId: string }) =>
     withSession((t) =>
       unlinkAccount({ accessToken: t, accountId: args.accountId }, { backendUrl: backendBaseUrl() }),
+    ),
+  );
+
+  // Live rank: re-read one linked account's Solo/Duo rank from Riot (the renderer
+  // asks when it sees which account is signed in to League, then periodically).
+  ipcMain.handle("lol:account-rank-refresh", (_event, args: { accountId: string }) =>
+    withSession((t) =>
+      refreshAccountRank(
+        { accessToken: t, accountId: args.accountId },
+        { backendUrl: backendBaseUrl() },
+      ),
     ),
   );
 

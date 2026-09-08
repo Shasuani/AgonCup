@@ -17,6 +17,9 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const srcDir = join(here, "..", "src");
+// The renderer's pure helpers (no React rendering) keep their tests next to
+// the code; the runner discovers them the same way.
+const rendererDir = join(here, "..", "renderer");
 
 /** Recursively collect every `*.test.ts` under `dir`. */
 function findTests(dir) {
@@ -32,7 +35,7 @@ function findTests(dir) {
   return out;
 }
 
-const files = findTests(srcDir);
+const files = [...findTests(srcDir), ...findTests(rendererDir)];
 if (files.length === 0) {
   console.error(`No *.test.ts files found under ${srcDir}`);
   process.exit(1);

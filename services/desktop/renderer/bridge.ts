@@ -54,6 +54,8 @@ export interface UpdateState {
 export interface BridgeUser { userId: string; discordUserId: string; displayName: string }
 export type SessionStatus = 'signed-in' | 'needs-pairing' | 'unavailable';
 export interface SessionState { signedIn: boolean; user: BridgeUser | null; status?: SessionStatus }
+/** The last summoner this device saw signed in to League (display only); what the UI falls back to while League is closed. */
+export interface RememberedSummoner { ok: true; gameName?: string; tagLine?: string; region?: string; profileIconId?: number; summonerLevel?: number }
 export interface ReadSummoner { ok: boolean; puuid?: string; gameName?: string; tagLine?: string; region?: string; profileIconId?: number; summonerLevel?: number; reason?: string; detail?: string }
 export interface LinkedAccount { accountId: string; gameName: string | null; tagLine: string | null; region: string | null; verified: boolean; rankText: string }
 /** A live match of the caller's, with whatever is known about its lobby. */
@@ -99,6 +101,8 @@ export interface LolBridge {
   verify(): Promise<{ ok: boolean; status?: number; detail?: string; rankText?: string; gameName?: string; tagLine?: string }>;
   listAccounts(): Promise<Res<{ accounts: LinkedAccount[] }>>;
   unlinkAccount(accountId: string): Promise<Res<{ account: LinkedAccount }>>;
+  /** Live Solo/Duo rank for one linked account (re-read from Riot; optional on old builds). */
+  refreshRank?(accountId: string): Promise<Res<{ account: LinkedAccount }>>;
   signOut(): Promise<{ ok: boolean }>;
   listMyTournaments(): Promise<Res<{ tournaments: Tournament[] }>>;
   listMyMatches(): Promise<Res<{ matches: MyMatch[] }>>;
@@ -124,7 +128,7 @@ export interface LolBridge {
   /** The signed-in player's recent games; absent on an old main-process build. */
   myHistory?(): Promise<Res<{ games: HistoryGame[] }>>;
   /** The last summoner icon/level this device saw (works with League closed); absent on an old build. */
-  getProfile?(): Promise<{ ok: true; profileIconId?: number; summonerLevel?: number }>;
+  getProfile?(): Promise<RememberedSummoner>;
   /** Self-update state (current version, latest, phase, progress); absent on an old build. */
   getUpdateState?(): Promise<UpdateState>;
   /** "Check for updates": asks the backend now and resolves with the new state. */

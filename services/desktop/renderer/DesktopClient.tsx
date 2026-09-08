@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { chromeStyle, dragRegion, noDrag, isMac, TRAFFIC_LIGHT_INSET, TITLE_BAR_HEIGHT } from './theme';
 import { lol, useAsync, useLcuStatus, useUpdateState, type BridgeUser, type LcuStatus } from './bridge';
+import { useIdentity } from './identity';
 import UpdateBanner, { VersionLine, updateNeedsAttention } from './UpdateBanner';
 import { Icon, BrandMark, type IconName } from './icons';
 import { Button, Dot } from './ui';
@@ -34,22 +35,17 @@ export default function DesktopClient({ user, onSignOut }: { user: BridgeUser | 
   const b = lol();
   const lcu = useLcuStatus();
 
-  const summoner = useAsync(async () => {
-    const s = b ? await b.readSummoner() : null;
-    return s && s.ok ? s : null;
-  }, []);
-  const accounts = useAsync(async () => { const r = b ? await b.listAccounts() : null; return r && r.ok ? r.accounts : []; }, []);
+  // Who am I right now: the account signed in to League (live), else the last
+  // one this device saw, else the first linked account — name, rank, icon and
+  // level all from that ONE account (see identity.ts).
+  const me = useIdentity(user);
   const presence = useAsync(async () => { const r = b ? await b.presence() : null; return r && r.ok ? r.playersInGame : 0; }, [], 15_000);
   // The Live Match tab gets a badge while one of the player's matches is at a
   // phase where their attention is needed (a lobby exists or a game is running).
   const matches = useAsync(async () => { const r = b ? await b.listMyMatches() : null; return r && r.ok ? r.matches : []; }, [], 10_000);
   const liveCount = (matches.data ?? []).filter((m) => m.lobbyState !== null && m.lobbyState !== 'ended' && m.lobbyState !== 'aborted').length;
 
-  // The summoner icon: live from the LCU when League is open, else the last one
-  // this device saw (persisted by the main process), else initials.
-  const profile = useAsync(async () => (b && typeof b.getProfile === 'function' ? await b.getProfile() : { ok: true as const }), []);
-  const profileIconId = summoner.data?.profileIconId ?? profile.data?.profileIconId ?? null;
-  const level = summoner.data?.summonerLevel ?? profile.data?.summonerLevel ?? null;
+  const { profileIconId, level, riotId } = me;
 
   // Self-update: the banner shows whenever the main process says a version is
   // pending; "Later" hides it for that version only (never for a required one).
@@ -57,13 +53,9 @@ export default function DesktopClient({ user, onSignOut }: { user: BridgeUser | 
   const [laterFor, setLaterFor] = useState<string | null>(null);
   const showUpdate = updateNeedsAttention(update) && (update.required || laterFor !== update.latest);
 
-  const acc = (accounts.data ?? [])[0];
-  const riotId = summoner.data?.gameName && summoner.data?.tagLine
-    ? `${summoner.data.gameName}#${summoner.data.tagLine}`
-    : (acc?.gameName && acc?.tagLine ? `${acc.gameName}#${acc.tagLine}` : (user?.displayName ?? 'Summoner'));
-  const regionRaw = summoner.data?.region ?? acc?.region ?? null;
-  const region = regionRaw ? (REGION_SHORT[regionRaw.toLowerCase()] ?? regionRaw.toUpperCase()) : '—';
-  const rank = acc?.rankText || 'Unranked';
+  const region = me.region ? (REGION_SHORT[me.region.toLowerCase()] ?? me.region.toUpperCase()) : '—';
+  // An account that is signed in but not linked has no rank of ours to show.
+  const rank = me.account ? (me.account.rankText || 'Unranked') : (me.accounts.length > 0 ? 'Not linked' : 'Unranked');
 
   async function signOut() {
     if (b) await b.signOut();

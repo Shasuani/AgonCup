@@ -82,3 +82,26 @@ test("a failed write resolves false rather than throwing", async () => {
   const store = new SettingsStore({ fs, filePath: FILE, dirPath: DIR });
   assert.equal(await store.save({ automationOptIn: true }), false);
 });
+
+test("round-trip: the last signed-in summoner (Riot ID + region + icon/level)", async () => {
+  const fs = memFs();
+  const store = new SettingsStore({ fs, filePath: FILE, dirPath: DIR });
+
+  await store.save({ gameName: "Zeta", tagLine: "1234", region: "euw1", profileIconId: 7, summonerLevel: 300 });
+  assert.deepEqual(await store.load(), {
+    gameName: "Zeta",
+    tagLine: "1234",
+    region: "euw1",
+    profileIconId: 7,
+    summonerLevel: 300,
+  });
+});
+
+test("a blank or non-string Riot ID field is dropped on load", async () => {
+  const store = new SettingsStore({
+    fs: memFs({ [FILE]: Buffer.from('{"gameName":"  ","tagLine":42,"region":"eun1"}') }),
+    filePath: FILE,
+    dirPath: DIR,
+  });
+  assert.deepEqual(await store.load(), { region: "eun1" });
+});

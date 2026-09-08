@@ -288,6 +288,73 @@ async def unlink_my_account(
     )
 
 
+@router.post(
+    "/me/{account_id}/rank",
+    response_model=MyAccountResponse,
+    summary="Refresh one of the authenticated user's own accounts' Solo/Duo rank (League-V4)",
+)
+async def refresh_my_account_rank(
+    account_id: str,
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> MyAccountResponse:
+    """Re-read the stored Solo/Duo rank of one of the caller's own accounts from Riot.
+
+    The desktop calls this when it sees which account is signed in to the League
+    client, so the rank shown is live rather than the verify-time snapshot. Scoped
+    to the bearer; throttled and best-effort inside the service (a Riot failure
+    answers 200 with the stored rank, never a 5xx — the client just shows what we
+    have). ``RiotAccount`` is GLOBAL (not guild-RLS), so this runs on a plain
+    ``SessionLocal``.
+    """
+    try:
+        uuid.UUID(account_id)  # malformed id → 404 (never a raw DB cast error/500)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="account not linked"
+        ) from exc
+
+    # League-V4 is platform-routed; look the account's region up first so the
+    # Riot client is built for the right cluster (the service re-checks ownership).
+    async with SessionLocal() as session:
+        mine = await service.list_user_accounts(session, user_id=principal.user_id)
+    target = next((a for a in mine if a.account_id == account_id), None)
+    if target is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="account not linked")
+    try:
+        platform = service.parse_platform_region(target.region or "")
+    except service.InvalidRegion:
+        return _my_account_response(target)  # nothing to route by: stored snapshot
+
+    account_client = RiotAccountClient(settings.riot_api_key, service.continent_for(platform))
+    try:
+        async with SessionLocal() as session, session.begin():
+            fresh = await service.refresh_account_rank(
+                session,
+                user_id=principal.user_id,
+                account_id=account_id,
+                account_client=account_client,
+            )
+    except service.AccountNotLinked as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="account not linked"
+        ) from exc
+    finally:
+        await account_client.aclose()
+    return _my_account_response(fresh)
+
+
+def _my_account_response(a: service.MyAccountSummary) -> MyAccountResponse:
+    return MyAccountResponse(
+        account_id=a.account_id,
+        game_name=a.game_name,
+        tag_line=a.tag_line,
+        region=a.region,
+        verified=a.verified,
+        rank_text=a.rank_text,
+    )
+
+
 @router.get(
     "",
     response_model=list[RosterEntryResponse],

@@ -434,8 +434,11 @@ security:images:
 
         # Desktop installers + the electron-updater feed (latest*.yml), served
         # straight off the edge host from <DEPLOY_PATH>/edge/downloads (mounted
-        # read-only into Caddy). infra/publish-desktop.sh puts the files there;
-        # no image rebuild or redeploy is needed to ship a client version.
+        # read-only into Caddy; created by the mkdir below). The files get
+        # there over SFTP as the chrooted `lolupload` account — a server-side
+        # bind mount of this directory — via infra/publish-desktop.sh or
+        # FileZilla (docs/gitlab-cicd.md §9); no image rebuild or redeploy is
+        # needed to ship a client version.
         handle_path /downloads/* {
           root * /srv/downloads
           file_server

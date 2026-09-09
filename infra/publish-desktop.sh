@@ -1,110 +1,214 @@
 #!/usr/bin/env bash
 #
-# Build the desktop client installers and put them on the website.
+# Build the desktop client installers on a Mac and upload them to the website.
 #
-#     infra/publish-desktop.sh            # build both installers, then upload
-#     infra/publish-desktop.sh --no-build # upload what is already in release/
+#     infra/publish-desktop.sh            # build both installers, then upload them
+#     infra/publish-desktop.sh --no-build # upload what services/desktop/release/ already holds
+#     infra/publish-desktop.sh --list     # just log in and show what the server has now
 #
-# Run it on a Mac (the .dmg can only be built there; the Windows installer
-# cross-builds fine from macOS). Needs Node 22 on PATH and SSH access to the
-# server as the deploy user — the same host/user/port the GitLab deploy job uses
-# (docs/gitlab-cicd.md §"Server access"). Override any of them via env:
+# Nothing about the installers goes through git (release/, *.dmg and *.exe are
+# gitignored) or the pipeline. The upload goes over SFTP as the dedicated
+# `lolupload` account, which is chrooted to the server's downloads folder — the
+# folder Caddy serves at https://lol.gameras.gr/downloads/ (the pipeline only
+# makes sure it exists). FileZilla with the same account (protocol SFTP, port
+# 20002) does the same job by hand; this script is that without the clicking.
 #
-#     DEPLOY_HOST=rust.gameras.gr DEPLOY_USER=loltournament DEPLOY_SSH_PORT=20002
-#     DEPLOY_PATH=/home/$DEPLOY_USER/lol
+# Five files, whose names carry NO version (electron-builder.yml → artifactName),
+# so each release overwrites the previous one and nothing accumulates:
+#     LeagueOfLeagues-Setup.exe   Windows installer (site button + Windows self-update)
+#     LeagueOfLeagues.dmg         macOS installer (site button)
+#     LeagueOfLeagues.zip         what installed macOS clients download to update
+#     latest.yml, latest-mac.yml  tell installed clients a new version exists
+# Each file goes up under a temporary name and is renamed into place (atomic on
+# the server, so nobody ever downloads a half-written installer); installers
+# first and the feeds LAST — a client that reads latest.yml immediately
+# downloads the installer it names, which must already be complete.
 #
-# What happens:
-#   1. `npm run dist:all` in services/desktop -> release/: one universal .dmg,
-#      one universal .zip (what installed Mac clients update from), one Windows
-#      .exe (+ .blockmap), latest.yml and latest-mac.yml.
-#   2. The files are copied to <DEPLOY_PATH>/edge/downloads on the server. Caddy
-#      serves that directory at https://<domain>/downloads/ (the site block in
-#      .gitlab-ci.yml; mounted read-only by infra/docker-compose.edge.yml).
-#      Installers first, the yml feed files LAST — an installed client that reads
-#      latest.yml must find the installer it names already there.
-#   3. The stable names the website's buttons link at — LeagueOfLeagues.dmg and
-#      LeagueOfLeagues-Setup.exe — are hard-linked to the versioned files just
-#      uploaded, so the buttons never need to know a version number.
+# PASSWORD — never stored in the repo. Looked up in this order:
+#   1. $LOL_UPLOAD_PASSWORD in the environment,
+#   2. the macOS Keychain item "lol-desktop-upload" (the script offers to save
+#      it there the first time),
+#   3. otherwise it asks.
+# Needs macOS (for the .dmg), Node 22 on PATH, and `expect` (ships with macOS)
+# to answer the password prompt.
 #
-# Shipping a new version = bump "version" in services/desktop/package.json
-# (`npm version minor --no-git-tag-version` in services/desktop) and run this
-# again. Installed clients ask the backend (`GET /api/v1/desktop/version`, which
-# reads these feed files) at start and every 30 minutes, show an "update
-# available" notification, and install themselves: Windows through electron-
-# updater (latest.yml + the .exe), macOS by downloading the .zip named in
-# latest-mac.yml, verifying its SHA-512 and swapping the bundle — see
-# services/desktop/src/update/. To FORCE old clients to update, set
-# DESKTOP_MINIMUM_VERSION on the backend. Older versioned files are left in
-# place; delete them by hand if disk matters.
+# Release = bump "version" in services/desktop/package.json
+# (`npm version minor --no-git-tag-version` there), run this. Installed clients
+# ask the backend (GET /api/v1/desktop/version, which reads the feeds) at start
+# and every 30 minutes and update only when the version number grew. To force
+# old clients to update, set DESKTOP_MINIMUM_VERSION on the backend.
+#
+# Server (override via env):
+#     UPLOAD_HOST=lol.gameras.gr UPLOAD_PORT=20002 UPLOAD_USER=lolupload UPLOAD_DIR=/downloads
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-DEPLOY_HOST="${DEPLOY_HOST:-rust.gameras.gr}"
-DEPLOY_USER="${DEPLOY_USER:-loltournament}"
-SSH_PORT="${DEPLOY_SSH_PORT:-20002}"
-DEPLOY_ROOT="${DEPLOY_PATH:-/home/$DEPLOY_USER/lol}"
-DEST_DIR="$DEPLOY_ROOT/edge/downloads"
-TARGET="$DEPLOY_USER@$DEPLOY_HOST"
+MODE="${1:-}"
+case "$MODE" in
+    ""|--no-build|--list) ;;
+    *) echo "usage: $0 [--no-build|--list]" >&2; exit 2 ;;
+esac
 
-# Must match src/update/installers.ts (MAC_INSTALLER_FILE / WINDOWS_INSTALLER_FILE),
+UPLOAD_HOST="${UPLOAD_HOST:-lol.gameras.gr}"
+UPLOAD_PORT="${UPLOAD_PORT:-20002}"
+UPLOAD_USER="${UPLOAD_USER:-lolupload}"
+UPLOAD_DIR="${UPLOAD_DIR:-/downloads}"      # as seen from inside the account's chroot
+KEYCHAIN_SERVICE="lol-desktop-upload"
+TARGET="$UPLOAD_USER@$UPLOAD_HOST"
+
+RELEASE="${DESKTOP_RELEASE_DIR:-services/desktop/release}"
+
+# Must match electron-builder.yml (artifactName), src/update/installers.ts,
 # the backend's app/desktop/service.py and the SPA's DownloadClient component.
-MAC_STABLE="LeagueOfLeagues.dmg"
-WIN_STABLE="LeagueOfLeagues-Setup.exe"
+INSTALLERS=(
+    "$RELEASE/LeagueOfLeagues-Setup.exe"
+    "$RELEASE/LeagueOfLeagues.dmg"
+    "$RELEASE/LeagueOfLeagues.zip"
+)
+FEEDS=(
+    "$RELEASE/latest.yml"
+    "$RELEASE/latest-mac.yml"
+)
 
-RELEASE="services/desktop/release"
+_die() { echo "ERROR: $*" >&2; exit 1; }
 
-if [ "${1:-}" != "--no-build" ]; then
+command -v expect >/dev/null 2>&1 || _die "'expect' not found (it ships with macOS; on Linux: apt install expect)."
+
+# -----------------------------------------------------------------------------
+# Build
+# -----------------------------------------------------------------------------
+if [ "$MODE" = "" ]; then
+    if [ "$(uname -s)" != "Darwin" ]; then
+        _die "the .dmg can only be built on macOS — run this on a Mac (--no-build uploads an existing release/)."
+    fi
+    node_major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
+    if [ "$node_major" -lt 22 ]; then
+        _die "Node 22+ is needed on PATH (found: $(node --version 2>/dev/null || echo none))."
+    fi
+    # Old outputs (including versioned names from before the stable-name change)
+    # would otherwise sit next to the new files.
+    rm -f "$RELEASE"/*.exe "$RELEASE"/*.dmg "$RELEASE"/*.zip "$RELEASE"/*.blockmap "$RELEASE"/latest*.yml
     echo "=== building installers (services/desktop: npm run dist:all)"
     (cd services/desktop && npm run dist:all)
 fi
 
-# Exactly one .dmg and one .exe are expected in release/ (the previous build's
-# files are removed by electron-builder only for the same version, so a stale
-# release/ from another version would make the glob ambiguous — fail loudly).
-_only_one() {
-    local pattern="$1" label="$2"
-    local matches=()
-    while IFS= read -r -d '' f; do matches+=("$f"); done < <(find "$RELEASE" -maxdepth 1 -name "$pattern" -print0)
-    if [ "${#matches[@]}" -ne 1 ]; then
-        echo "ERROR: expected exactly one $label in $RELEASE, found ${#matches[@]}:" >&2
-        printf '  %s\n' "${matches[@]}" >&2
-        echo "Clear $RELEASE and rebuild (drop --no-build)." >&2
-        exit 1
+if [ "$MODE" != "--list" ]; then
+    missing=0
+    for f in "${INSTALLERS[@]}" "${FEEDS[@]}"; do
+        if [ ! -f "$f" ]; then
+            echo "ERROR: missing $f" >&2
+            missing=1
+        fi
+    done
+    if [ "$missing" -ne 0 ]; then
+        _die "build first (run without --no-build, on a Mac); latest*.yml need 'publish' in electron-builder.yml."
     fi
-    printf '%s' "${matches[0]}"
+fi
+
+# -----------------------------------------------------------------------------
+# Password
+# -----------------------------------------------------------------------------
+if [ -z "${LOL_UPLOAD_PASSWORD:-}" ] && [ "$(uname -s)" = "Darwin" ]; then
+    LOL_UPLOAD_PASSWORD="$(security find-generic-password -s "$KEYCHAIN_SERVICE" -a "$UPLOAD_USER" -w 2>/dev/null || true)"
+fi
+if [ -z "${LOL_UPLOAD_PASSWORD:-}" ]; then
+    if [ ! -t 0 ]; then
+        _die "no password: set LOL_UPLOAD_PASSWORD, or run this once in a terminal to store it in the Keychain."
+    fi
+    read -rs -p "SFTP password for $TARGET: " LOL_UPLOAD_PASSWORD
+    echo
+    [ -n "$LOL_UPLOAD_PASSWORD" ] || _die "empty password."
+    if [ "$(uname -s)" = "Darwin" ]; then
+        read -r -p "Save it in the macOS Keychain for next time? [y/N] " yn
+        case "$yn" in
+            y|Y)
+                security add-generic-password -U -s "$KEYCHAIN_SERVICE" -a "$UPLOAD_USER" -w "$LOL_UPLOAD_PASSWORD"
+                echo "saved — Keychain Access, item \"$KEYCHAIN_SERVICE\" (delete it there to change it)"
+                ;;
+        esac
+    fi
+fi
+export LOL_UPLOAD_PASSWORD
+
+# -----------------------------------------------------------------------------
+# SSH plumbing: scp/sftp driven by expect, which types the password.
+# -----------------------------------------------------------------------------
+EXPECT_SCRIPT="$(mktemp)"
+trap 'rm -f "$EXPECT_SCRIPT"' EXIT
+cat > "$EXPECT_SCRIPT" <<'EXP'
+# Runs the command given as arguments; answers the password prompt from the
+# environment (never from the command line, so it shows up in no process list).
+set timeout -1
+spawn -noecho {*}$argv
+expect {
+    -re {[Pp]assword: ?$}       { send -- "$env(LOL_UPLOAD_PASSWORD)\r"; exp_continue }
+    -re {\(yes/no[^)]*\)\? ?$}   { send -- "yes\r"; exp_continue }
+    eof
+}
+lassign [wait] pid spawnid oserr code
+exit $code
+EXP
+_run() { expect -f "$EXPECT_SCRIPT" "$@"; }
+
+# The account is password-only and chrooted: don't offer keys (an agent full of
+# them trips "Too many authentication failures"), and use SFTP-mode scp
+# (OpenSSH 9+ default; the legacy protocol needs a shell the account lacks).
+SSH_OPTS=(
+    -P "$UPLOAD_PORT"
+    -o StrictHostKeyChecking=accept-new
+    -o PubkeyAuthentication=no
+    -o PreferredAuthentications=password,keyboard-interactive
+)
+
+# One sftp session running the given batch commands (aborts on the first error).
+_sftp() {
+    local batch
+    batch="$(mktemp)"
+    printf '%s\n' "$@" > "$batch"
+    # -oBatchMode=no must come BEFORE -b (which would otherwise disable the prompt).
+    _run sftp -oBatchMode=no "${SSH_OPTS[@]}" -b "$batch" "$TARGET"
+    local code=$?
+    rm -f "$batch"
+    return $code
 }
 
-DMG="$(_only_one '*.dmg' '.dmg')"
-ZIP="$(_only_one '*.zip' 'mac .zip')"
-EXE="$(_only_one '*.exe' '.exe')"
-EXE_BLOCKMAP="$EXE.blockmap"
-for f in "$EXE_BLOCKMAP" "$RELEASE/latest.yml" "$RELEASE/latest-mac.yml"; do
-    if [ ! -f "$f" ]; then
-        echo "ERROR: missing $f — is 'publish' still set in electron-builder.yml?" >&2
-        exit 1
-    fi
+if [ "$MODE" = "--list" ]; then
+    echo "=== $TARGET:$UPLOAD_DIR"
+    _sftp "ls -l $UPLOAD_DIR"
+    exit 0
+fi
+
+# Upload one local file as <name>.uploading (scp shows a progress meter).
+_put() {
+    local name
+    name="$(basename "$1")"
+    echo "--- $name ($(du -h "$1" | cut -f1 | tr -d ' '))"
+    _run scp "${SSH_OPTS[@]}" "$1" "$TARGET:$UPLOAD_DIR/$name.uploading"
+}
+
+# Rename <name>.uploading -> <name> for every given local file, in one session.
+# sftp's rename uses OpenSSH's posix-rename, i.e. it replaces the old file
+# atomically like rename(2).
+_commit() {
+    local cmds=() f name
+    for f in "$@"; do
+        name="$(basename "$f")"
+        cmds+=("rename $UPLOAD_DIR/$name.uploading $UPLOAD_DIR/$name")
+    done
+    _sftp "${cmds[@]}"
+}
+
+echo "=== uploading to $TARGET:$UPLOAD_DIR"
+for f in "${INSTALLERS[@]}"; do _put "$f"; done
+_commit "${INSTALLERS[@]}"
+for f in "${FEEDS[@]}"; do _put "$f"; done
+_commit "${FEEDS[@]}"
+
+echo "=== published (HTTP status from the site):"
+for f in "${INSTALLERS[@]}" "${FEEDS[@]}"; do
+    url="https://$UPLOAD_HOST/downloads/$(basename "$f")"
+    printf '    %s  %s\n' "$(curl -sI -o /dev/null -w '%{http_code}' "$url" || echo '???')" "$url"
 done
-
-echo "=== uploading to $TARGET:$DEST_DIR (port $SSH_PORT)"
-echo "    $(basename "$DMG")"
-echo "    $(basename "$ZIP")"
-echo "    $(basename "$EXE")"
-ssh -p "$SSH_PORT" "$TARGET" "mkdir -p '$DEST_DIR'"
-# Installers first, feed files last (see the header).
-scp -P "$SSH_PORT" "$DMG" "$ZIP" "$EXE" "$EXE_BLOCKMAP" "$TARGET:$DEST_DIR/"
-scp -P "$SSH_PORT" "$RELEASE/latest.yml" "$RELEASE/latest-mac.yml" "$TARGET:$DEST_DIR/"
-
-echo "=== pointing the stable names at this version"
-ssh -p "$SSH_PORT" "$TARGET" "cd '$DEST_DIR' \
-    && ln -f '$(basename "$DMG")' '$MAC_STABLE' \
-    && ln -f '$(basename "$EXE")' '$WIN_STABLE' \
-    && ls -l"
-
-echo "=== published:"
-echo "    https://lol.gameras.gr/downloads/$MAC_STABLE"
-echo "    https://lol.gameras.gr/downloads/$WIN_STABLE"
-echo "    https://lol.gameras.gr/downloads/latest.yml      (Windows update feed)"
-echo "    https://lol.gameras.gr/downloads/latest-mac.yml  (macOS update feed)"
-echo "    https://lol.gameras.gr/api/v1/desktop/version    (what installed clients ask; cached 5 min)"
+echo "    https://$UPLOAD_HOST/api/v1/desktop/version  (what installed clients ask; cached 5 min)"

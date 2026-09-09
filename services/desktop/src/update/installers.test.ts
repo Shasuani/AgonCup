@@ -71,6 +71,7 @@ function fakeUpdater(feedVersion: string | null) {
   const u = {
     autoDownload: true,
     autoInstallOnAppQuit: false,
+    disableDifferentialDownload: false,
     feed: null as string | null,
     checks: 0,
     downloads: 0,
@@ -109,6 +110,7 @@ test("electronUpdaterInstaller: configures the feed, downloads once, installs si
   assert.equal(u.feed, "https://x/downloads");
   assert.equal(u.autoDownload, false);
   assert.equal(u.autoInstallOnAppQuit, true);
+  assert.equal(u.disableDifferentialDownload, true);
 
   await assert.rejects(inst.install(release()), /not been downloaded/);
 

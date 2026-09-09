@@ -3,7 +3,8 @@
  * behind a single {@link Installer} interface the coordinator drives:
  *
  *   - **Windows** — electron-updater: `checkForUpdates()` against the site's
- *     `/downloads` feed, `downloadUpdate()` (NSIS installer + blockmap delta),
+ *     `/downloads` feed, `downloadUpdate()` (the full NSIS installer — no
+ *     blockmaps are published, so differential download is switched off),
  *     then `quitAndInstall(silent, runAfter)` swaps the install and relaunches.
  *     `autoInstallOnAppQuit` stays on, so a player who chose "Later" still gets
  *     the update when they close the app.
@@ -49,6 +50,7 @@ export interface Installer {
 export interface UpdaterLike {
   autoDownload: boolean;
   autoInstallOnAppQuit: boolean;
+  disableDifferentialDownload: boolean;
   setFeedURL(options: { provider: "generic"; url: string }): void;
   on(event: "download-progress", listener: (progress: { percent: number }) => void): unknown;
   on(event: "error", listener: (error: Error) => void): unknown;
@@ -73,6 +75,10 @@ export function electronUpdaterInstaller(deps: ElectronUpdaterDeps): Installer {
   // a downloaded update still installs on quit if the player never presses Restart.
   updater.autoDownload = false;
   updater.autoInstallOnAppQuit = true;
+  // The installer keeps the same file name across versions (electron-builder.yml)
+  // and no .blockmap is published, so a delta download has nothing to work with:
+  // skip the attempt instead of logging a 404 before every full download.
+  updater.disableDifferentialDownload = true;
   updater.on("error", (error) => log("update_error", { detail: String(error) }));
 
   let downloaded: string | null = null;

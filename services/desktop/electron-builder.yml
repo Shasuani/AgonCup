@@ -1,5 +1,6 @@
 # electron-builder packaging config for the LeagueOfLeagues desktop client.
-# (PLAN.md §3.3 desktop client; CI workflow .github/workflows/desktop-build.yml.)
+# (PLAN.md §3.3 desktop client; built on a Mac with `npm run dist:all` and
+# uploaded by hand to the server's downloads folder — docs/gitlab-cicd.md §9.)
 #
 # Targets macOS (.dmg) + Windows (.exe / NSIS). Output lands in `release/` so it
 # does NOT collide with the TypeScript `dist/` (tsc rootDir output) and matches
@@ -8,10 +9,20 @@
 # AUTO-UPDATE: `publish` below is what makes electron-builder write latest.yml
 # (Windows) and latest-mac.yml (macOS) next to the installers, and bake an
 # app-update.yml into the app so electron-updater knows the feed. The feed is a
-# plain directory on the site — https://lol.gameras.gr/downloads/ — filled by
-# infra/publish-desktop.sh. Nothing is ever uploaded BY electron-builder (the
-# `dist` scripts pass --publish never); the generic provider is read-only.
-# See src/update/ for what each platform does with the feed.
+# plain directory on the site — https://lol.gameras.gr/downloads/ — that the
+# owner fills by hand over SFTP (docs/gitlab-cicd.md §9). Nothing is ever
+# uploaded BY electron-builder (the `dist` scripts pass --publish never); the
+# generic provider is read-only. See src/update/ for what each platform does
+# with the feed.
+#
+# FILE NAMES CARRY NO VERSION on purpose (artifactName below): every release
+# overwrites the same five files on the server — LeagueOfLeagues-Setup.exe,
+# LeagueOfLeagues.dmg, LeagueOfLeagues.zip, latest.yml, latest-mac.yml. The
+# website's buttons, the feed files and the clients' manual-download fallback
+# (src/update/installers.ts, app/desktop/service.py, the SPA's DownloadClient)
+# all name the same files, so nothing has to be renamed or linked after an
+# upload. The version lives INSIDE the files (latest*.yml, the installers'
+# metadata), which is what the update check reads.
 #
 # SIGNING is driven entirely by CI env / secrets — there is NOTHING secret in
 # this file:
@@ -58,7 +69,7 @@ mac:
   # which chip they have. The zip is what latest-mac.yml describes and what an
   # installed Mac client downloads to update itself (src/update/installers.ts
   # verifies its SHA-512 from the feed, unpacks it and swaps the bundle —
-  # Squirrel.Mac would refuse an unsigned one). publish-desktop.sh uploads it.
+  # Squirrel.Mac would refuse an unsigned one).
   target:
     - target: dmg
       arch:
@@ -66,7 +77,8 @@ mac:
     - target: zip
       arch:
         - universal
-  artifactName: ${productName}-${version}-${arch}.${ext}
+  # LeagueOfLeagues.dmg / LeagueOfLeagues.zip — see "FILE NAMES" in the header.
+  artifactName: ${productName}.${ext}
   # Hardened runtime is required for notarization; entitlements live under build/.
   hardenedRuntime: true
   gatekeeperAssess: false
@@ -82,9 +94,10 @@ win:
     - target: nsis
       arch:
         - x64
-  # No spaces (electron-builder's default is "Name Setup 1.0.0.exe"): this name
-  # goes into latest.yml and into URLs.
-  artifactName: ${productName}-Setup-${version}.${ext}
+  # LeagueOfLeagues-Setup.exe — no spaces (electron-builder's default is
+  # "Name Setup 1.0.0.exe"), no version (see "FILE NAMES" in the header). This
+  # exact name goes into latest.yml and into the website's URL.
+  artifactName: ${productName}-Setup.${ext}
 
 nsis:
   oneClick: false

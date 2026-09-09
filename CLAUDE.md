@@ -173,6 +173,14 @@ non-existent `false()` function and breaks `alembic upgrade head`).
   **Account-V1/Riot key is REQUIRED.** `registration_verified` is the **only**
   notification kind carrying `discord_user_id` (DM-routed; exempt from the
   central-feed `_FORBIDDEN_CENTRAL_KEYS` guard).
+- **Desktop installers never touch git or CI** (owner decision 2026-09-09).
+  `infra/publish-desktop.sh` on a Mac = `npm run dist:all` + SFTP upload as the
+  chrooted `lolupload` account (password in the macOS Keychain, never in the
+  repo) of five files whose names carry no version and simply overwrite:
+  `LeagueOfLeagues-Setup.exe`, `LeagueOfLeagues.dmg`, `LeagueOfLeagues.zip`,
+  `latest.yml`, `latest-mac.yml`. Installers first, feeds last, each via a
+  temporary name + rename. Caddy serves the folder at `/downloads/`. See
+  `docs/gitlab-cicd.md §9`.
 - Commits/PRs are configured to carry **no AI attribution** — do not add
   `Co-Authored-By` trailers.
 

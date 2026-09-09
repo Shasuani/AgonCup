@@ -221,6 +221,8 @@ Discord developer portal.
     ├── sites/devel.caddy        # generated; each stack writes only its own
     ├── sites/rust.caddy         # static, from infra/sites/ (devel host only):
     │                            #   legacy rust.gameras.gr -> lol redirect
+    ├── downloads/               # desktop installers + update feed, served at
+    │                            #   /downloads/; YOU upload here over SFTP (§9)
     └── data/caddy/              # CERTIFICATES — losing this re-issues them,
                                  # and Let's Encrypt rate-limits that
 ```
@@ -371,9 +373,10 @@ closed by design.
    verify/pair/refresh limiters over-throttle. It fails *closed*, not open, but
    the fix its docstring calls for — a proxy-set header validated against a known
    proxy allowlist — is worth doing before real traffic.
-2. **The desktop client still defaults to `http://localhost:8000`.** Ship builds
-   with `BACKEND_URL=https://lol.gameras.gr` and
-   `REALTIME_URL=wss://lol.gameras.gr/api/v1/realtime/ws`.
+2. ~~The desktop client still defaults to `http://localhost:8000`.~~ Done: a
+   *packaged* build defaults to `https://lol.gameras.gr`
+   (`services/desktop/src/serverUrls.ts`); only `npm start` dev runs use
+   localhost. `BACKEND_URL` / `REALTIME_URL` still override either.
 3. **The Postgres integration tests are not idempotent.** `test_rls_isolation.py`
    and `test_integration_pg.py` insert fixed `discord_guild_id` values and never
    clean up, so a second run against the same database fails on
@@ -381,3 +384,76 @@ closed by design.
    service) but confusing locally — drop and re-migrate between runs.
 4. **No automated backups.** `data/postgres` is a plain directory and `backups/`
    is mounted into the Postgres container, but nothing schedules a `pg_dump`.
+
+---
+
+## 9. Desktop installers (`/downloads/`)
+
+The desktop client is **built on a Mac and uploaded over SFTP**. Nothing about
+it goes through git (`release/`, `*.dmg`, `*.exe` are gitignored) or the
+pipeline — the pipeline only guarantees the folder exists (every deploy runs
+`mkdir -p` on it) and that Caddy serves it:
+
+```
+served at      : https://lol.gameras.gr/downloads/
+on the server  : /home/loltournament/lol/edge/downloads
+upload account : lolupload — SFTP (SSH), host lol.gameras.gr, port 20002,
+                 chrooted: it lands in /downloads/, which is a bind mount of
+                 the folder above; password-only, no shell
+```
+
+Why: electron-builder can only produce a `.dmg` on macOS, there is no macOS
+runner, and ~500 MB of binaries per version does not belong in git.
+
+### Ship a version
+
+```bash
+cd services/desktop && npm version minor --no-git-tag-version   # bump first (or patch)
+cd ../.. && infra/publish-desktop.sh                            # build both installers, upload them
+```
+
+The first run asks for the `lolupload` password and offers to keep it in the
+macOS Keychain (item `lol-desktop-upload`); after that it needs nothing. Or set
+`LOL_UPLOAD_PASSWORD` in the environment. The password is never written into
+the repo. `--no-build` uploads whatever `release/` already holds; `--list`
+just logs in and shows what the server has now.
+
+Five files ship, and **their names carry no version**
+(`electron-builder.yml` → `artifactName`), so a release simply overwrites the
+previous one — nothing accumulates on the server:
+
+| File | What for |
+|---|---|
+| `LeagueOfLeagues-Setup.exe` | Windows installer — the site's button, and what installed Windows clients download to update |
+| `LeagueOfLeagues.dmg` | macOS installer — the site's button |
+| `LeagueOfLeagues.zip` | what installed macOS clients download to update themselves |
+| `latest.yml`, `latest-mac.yml` | tell installed clients a new version exists (read by `GET /api/v1/desktop/version`) |
+
+The script uploads each file under a temporary name and renames it into place
+(atomic on the server — a player never downloads a half-written installer),
+installers first and the two `.yml` last: a client that reads `latest.yml`
+immediately downloads the installer it names, so that installer must already
+be complete. `release/` also holds `.blockmap` files and `builder-debug.yml`;
+they are not uploaded (the Windows client always downloads the full installer).
+
+### By hand instead (FileZilla, Cyberduck, …)
+
+Protocol **SFTP**, not FTP; host `lol.gameras.gr`, port `20002`, user
+`lolupload`. You land in `/downloads/`. Drop the five files in, **installers
+first, the two `.yml` last**. Overwriting a 200 MB file in place means a player
+downloading it at that moment gets a broken file — the script avoids that with
+the temporary-name trick; by hand, pick a quiet moment.
+
+### After the upload
+
+Nothing to restart. Caddy serves the files as they are; the backend re-reads
+the feeds within 5 minutes (`GET /api/v1/desktop/version` cache). Installed
+clients check at start and every 30 minutes and only update when the **version
+number** grew — so bump `services/desktop/package.json` before building, or
+existing installs will not notice. To force old clients to update, set
+`DESKTOP_MINIMUM_VERSION` on the backend.
+
+Both installers are **unsigned** until a Windows code-signing `.pfx` / Apple
+Developer ID exist (`CSC_LINK` + `CSC_KEY_PASSWORD`, see
+`services/desktop/electron-builder.yml`); the beta gate in
+`docs/compliance-checklist.md` still applies before a signed client ships.

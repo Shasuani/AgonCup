@@ -160,6 +160,9 @@ SSH_OPTS=(
     -o StrictHostKeyChecking=accept-new
     -o PubkeyAuthentication=no
     -o PreferredAuthentications=password,keyboard-interactive
+    # Notice a wedged connection within a minute instead of hanging on it.
+    -o ServerAliveInterval=15
+    -o ServerAliveCountMax=4
 )
 
 # One sftp session running the given batch commands (aborts on the first error).
@@ -180,12 +183,38 @@ if [ "$MODE" = "--list" ]; then
     exit 0
 fi
 
-# Upload one local file as <name>.uploading (scp shows a progress meter).
+# Size of a remote file in bytes (empty when it does not exist).
+_remote_size() {
+    _sftp "ls -l $1" 2>/dev/null | tr -d '\r' | awk -v f="$1" '$NF == f && $1 ~ /^-/ { print $5 }' | tail -1
+}
+
+# Upload one local file as <name>.uploading. Big files over a home uplink stall
+# and get cut ("Connection closed by remote host" mid-file): the first attempt
+# is a plain scp (progress meter), every retry RESUMES the partial file with
+# sftp's reput, and only a remote size equal to the local one counts as done.
 _put() {
-    local name
+    local name remote local_size remote_size attempt=0
     name="$(basename "$1")"
+    remote="$UPLOAD_DIR/$name.uploading"
+    local_size="$(wc -c < "$1" | tr -d ' ')"
     echo "--- $name ($(du -h "$1" | cut -f1 | tr -d ' '))"
-    _run scp "${SSH_OPTS[@]}" "$1" "$TARGET:$UPLOAD_DIR/$name.uploading"
+    while :; do
+        attempt=$((attempt + 1))
+        if [ "$attempt" -eq 1 ]; then
+            _run scp "${SSH_OPTS[@]}" "$1" "$TARGET:$remote" || true
+        else
+            if [ "$attempt" -gt 8 ]; then
+                _die "$name: still incomplete after $((attempt - 1)) attempts (remote has ${remote_size:-0} of $local_size bytes)."
+            fi
+            echo "    connection dropped at ${remote_size:-0}/$local_size bytes — resuming in 10 s (attempt $attempt)"
+            sleep 10
+            _sftp "reput $1 $remote" || true
+        fi
+        remote_size="$(_remote_size "$remote")"
+        if [ "$remote_size" = "$local_size" ]; then
+            return 0
+        fi
+    done
 }
 
 # Rename <name>.uploading -> <name> for every given local file, in one session.

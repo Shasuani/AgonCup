@@ -183,36 +183,50 @@ if [ "$MODE" = "--list" ]; then
     exit 0
 fi
 
-# Size of a remote file in bytes (empty when it does not exist).
+# Size of a remote file in bytes — empty when it does not exist, and ALSO empty
+# when the server could not be asked. That second case is the whole point: this
+# runs right after a transfer, i.e. right after the connection may have died,
+# and under `set -e -o pipefail` a failing sftp here used to abort the script
+# instead of letting _put resume (2026-09-11: a .dmg stalled at 51%, the size
+# check hit "server not responding", exit 255, nothing renamed — but nothing
+# resumed either).
 _remote_size() {
-    _sftp "ls -l $1" 2>/dev/null | tr -d '\r' | awk -v f="$1" '$NF == f && $1 ~ /^-/ { print $5 }' | tail -1
+    { _sftp "ls -l $1" 2>/dev/null || true; } | tr -d '\r' | awk -v f="$1" '$NF == f && $1 ~ /^-/ { print $5 }' | tail -1
 }
 
 # Upload one local file as <name>.uploading. Big files over a home uplink stall
-# and get cut ("Connection closed by remote host" mid-file): the first attempt
-# is a plain scp (progress meter), every retry RESUMES the partial file with
-# sftp's reput, and only a remote size equal to the local one counts as done.
+# and get cut ("Connection closed by remote host" mid-file), so this is a
+# resume loop, not a single transfer: whatever the server already holds under
+# the temporary name is finished with sftp's reput rather than started over —
+# including on a fresh run after a previous one died — and only a remote size
+# equal to the local one counts as done. A temp file LARGER than the local one
+# is a leftover from another build and is replaced from scratch.
 _put() {
     local name remote local_size remote_size attempt=0
     name="$(basename "$1")"
     remote="$UPLOAD_DIR/$name.uploading"
     local_size="$(wc -c < "$1" | tr -d ' ')"
     echo "--- $name ($(du -h "$1" | cut -f1 | tr -d ' '))"
+    remote_size="$(_remote_size "$remote")"
     while :; do
+        if [ "$remote_size" = "$local_size" ]; then
+            [ "$attempt" -eq 0 ] && echo "    already on the server ($remote_size bytes) — skipping"
+            return 0
+        fi
         attempt=$((attempt + 1))
-        if [ "$attempt" -eq 1 ]; then
+        if [ "$attempt" -gt 8 ]; then
+            _die "$name: still incomplete after $((attempt - 1)) attempts (remote has ${remote_size:-0} of $local_size bytes)."
+        fi
+        if [ -z "$remote_size" ] || [ "$remote_size" -eq 0 ] || [ "$remote_size" -gt "$local_size" ]; then
             _run scp "${SSH_OPTS[@]}" "$1" "$TARGET:$remote" || true
         else
-            if [ "$attempt" -gt 8 ]; then
-                _die "$name: still incomplete after $((attempt - 1)) attempts (remote has ${remote_size:-0} of $local_size bytes)."
-            fi
-            echo "    connection dropped at ${remote_size:-0}/$local_size bytes — resuming in 10 s (attempt $attempt)"
-            sleep 10
+            echo "    server has ${remote_size}/$local_size bytes — resuming (attempt $attempt)"
             _sftp "reput $1 $remote" || true
         fi
         remote_size="$(_remote_size "$remote")"
-        if [ "$remote_size" = "$local_size" ]; then
-            return 0
+        if [ "$remote_size" != "$local_size" ]; then
+            echo "    connection dropped at ${remote_size:-0}/$local_size bytes — retrying in 10 s"
+            sleep 10
         fi
     done
 }

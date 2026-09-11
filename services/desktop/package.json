@@ -1,6 +1,6 @@
 {
   "name": "@lol/desktop",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "type": "module",
   "description": "LeagueOfLeagues desktop client (Electron + TypeScript). Autonomous LCU lobby orchestrator + result reporter. Runs natively; built/signed per-OS in CI.",
@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
     "test": "node scripts/run-tests.mjs",
+    "icons": "electron scripts/make-icons.mjs",
     "start": "electron .",
     "dist": "npm run build && electron-builder --config electron-builder.yml --publish never",
     "dist:all": "npm run build && electron-builder --config electron-builder.yml --mac --win --publish never"

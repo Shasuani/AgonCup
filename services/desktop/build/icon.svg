@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  LeagueOfLeagues desktop app icon — SOURCE OF TRUTH.
+
+  The sigil is the renderer's BrandMark (renderer/icons.tsx: the hex + "L" glyph
+  the web console's logo also uses), in the client's hextech palette
+  (renderer/theme.ts: gold #c8aa6e / #f0e6d2 on navy #0a1626 / #010a13).
+
+  1024×1024 on Apple's icon grid: the rounded tile is 824×824 at (100,100) with
+  transparent margins, as macOS expects. `scripts/make-icons.mjs` renders this
+  file into build/icon.icns + icon.ico + icon.png (`npm run icons`); for Windows
+  it crops the viewBox to the tile (full bleed) and drops the mac drop shadow.
+  Elements marked class="fine" (hairlines, glow, shadow) are stripped at 32 px
+  and below, where they only add noise.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="base" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#162b4c"/>
+      <stop offset="0.5" stop-color="#0a1626"/>
+      <stop offset="1" stop-color="#020b15"/>
+    </linearGradient>
+    <radialGradient id="bloom" cx="0.5" cy="0.08" r="0.8">
+      <stop offset="0" stop-color="#c8aa6e" stop-opacity="0.32"/>
+      <stop offset="0.5" stop-color="#c8aa6e" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#c8aa6e" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="frame" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#e2c98c"/>
+      <stop offset="0.5" stop-color="#785a28"/>
+      <stop offset="1" stop-color="#c8aa6e"/>
+    </linearGradient>
+    <!-- userSpaceOnUse (in the sigil's 32-grid): the glyph strokes are straight
+         lines whose bounding box is zero-width, which makes an
+         objectBoundingBox gradient render nothing. -->
+    <linearGradient id="gold" gradientUnits="userSpaceOnUse" x1="4" y1="2" x2="28" y2="30">
+      <stop offset="0" stop-color="#f0e6d2"/>
+      <stop offset="0.5" stop-color="#e2c98c"/>
+      <stop offset="1" stop-color="#c8aa6e"/>
+    </linearGradient>
+    <linearGradient id="hexFill" gradientUnits="userSpaceOnUse" x1="16" y1="2.5" x2="16" y2="29.5">
+      <stop offset="0" stop-color="#11243c"/>
+      <stop offset="1" stop-color="#040d1a"/>
+    </linearGradient>
+    <clipPath id="tile"><rect x="100" y="100" width="824" height="824" rx="185"/></clipPath>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="16"/></filter>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="1.3"/></filter>
+  </defs>
+
+  <!-- macOS-style soft drop shadow under the tile (outside the clip; mac only) -->
+  <rect class="fine mac-shadow" x="104" y="116" width="816" height="816" rx="183" fill="#000" opacity="0.38" filter="url(#shadow)"/>
+
+  <g clip-path="url(#tile)">
+    <rect x="100" y="100" width="824" height="824" fill="url(#base)"/>
+    <rect x="100" y="100" width="824" height="824" fill="url(#bloom)"/>
+    <!-- faint diagonal sheen -->
+    <path d="M100 100H924V330L100 620Z" fill="#ffffff" opacity="0.03"/>
+  </g>
+
+  <!-- hextech frame: a gold hairline and a fainter inner line -->
+  <rect class="fine" x="114" y="114" width="796" height="796" rx="172" fill="none" stroke="url(#frame)" stroke-width="6" opacity="0.85"/>
+  <rect class="fine" x="130" y="130" width="764" height="764" rx="158" fill="none" stroke="#c8aa6e" stroke-width="2" opacity="0.22"/>
+
+  <!-- the sigil: BrandMark geometry (32-grid) scaled ×19.5 and centred -->
+  <g transform="translate(512 512) scale(19.5) translate(-16 -16)">
+    <path class="fine" d="M16 2.5 27.7 9.25v13.5L16 29.5 4.3 22.75V9.25L16 2.5Z" fill="none" stroke="#c8aa6e" stroke-width="2.6" stroke-linejoin="round" opacity="0.45" filter="url(#glow)"/>
+    <path d="M16 2.5 27.7 9.25v13.5L16 29.5 4.3 22.75V9.25L16 2.5Z" fill="url(#hexFill)" stroke="url(#gold)" stroke-width="1.6" stroke-linejoin="round"/>
+    <path d="M11.5 10v12h4.5" fill="none" stroke="url(#gold)" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M20.5 10v12" fill="none" stroke="#c8aa6e" stroke-width="2.1" stroke-linecap="round" opacity="0.5"/>
+    <path d="M16 16h4.5" fill="none" stroke="url(#gold)" stroke-width="2.1" stroke-linecap="round"/>
+  </g>
+</svg>

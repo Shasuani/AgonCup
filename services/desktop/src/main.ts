@@ -1342,6 +1342,19 @@ async function bootstrap(): Promise<void> {
   ipcMain.handle("lol:update-check", () => updates.checkNow("manual"));
   ipcMain.handle("lol:update-install", () => updates.install());
 
+  // App icon for `electron .` runs. A packaged build carries it inside the
+  // bundle/exe (electron-builder.yml mac.icon / win.icon, from build/icon.svg
+  // via `npm run icons`); the bare dev binary would show Electron's atom.
+  // macOS takes it on the dock (below), Windows/Linux on the window itself.
+  const devIconPath = app.isPackaged
+    ? null
+    : path.join(app.getAppPath(), "build", process.platform === "win32" ? "icon.ico" : "icon.png");
+  const devIcon = devIconPath !== null && fs.existsSync(devIconPath) ? devIconPath : null;
+  if (devIcon !== null && process.platform === "darwin") {
+    await app.whenReady();
+    app.dock?.setIcon(devIcon);
+  }
+
   const createWindow = (): import("electron").BrowserWindow => {
     const win = new BrowserWindow({
       width: 1280,
@@ -1350,6 +1363,7 @@ async function bootstrap(): Promise<void> {
       minHeight: 720,
       title: "LeagueOfLeagues — Desktop",
       backgroundColor: "#010a13",
+      ...(devIcon !== null && process.platform !== "darwin" ? { icon: devIcon } : {}),
       // macOS: drop the native grey title bar and let the traffic lights sit
       // inside the renderer's own 44px title bar (which is the drag region —
       // see `dragRegion` in renderer/theme.ts). y = (44 - 12) / 2 centres the

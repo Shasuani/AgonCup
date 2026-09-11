@@ -1,6 +1,6 @@
 {
   "name": "@lol/desktop",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "description": "LeagueOfLeagues desktop client (Electron + TypeScript). Autonomous LCU lobby orchestrator + result reporter. Runs natively; built/signed per-OS in CI.",
@@ -28,7 +28,7 @@
     "@types/ws": "^8.5.10",
     "@vitejs/plugin-react": "^4.3.1",
     "electron": "^43.2.0",
-    "electron-builder": "^24.13.3",
+    "electron-builder": "^26.16.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "tsx": "^4.16.0",

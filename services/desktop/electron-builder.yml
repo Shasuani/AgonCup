@@ -103,6 +103,9 @@ nsis:
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
+  # build/installer.nsh: keep upgrading when the PREVIOUS version's uninstaller
+  # misfires (0.2.0 shipped a broken "app is running" check; see the file).
+  include: build/installer.nsh
 
 # Linux is not a shipped target (the client must reach the native League client);
 # kept out intentionally.

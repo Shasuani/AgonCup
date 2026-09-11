@@ -62,8 +62,12 @@ publish:
   - provider: generic
     url: https://lol.gameras.gr/downloads
 
+# ICONS: build/icon.svg is the source; `npm run icons` (scripts/make-icons.mjs)
+# renders it into the three files below, which are committed — electron-builder
+# reads these, never the SVG.
 mac:
   category: public.app-category.utilities
+  icon: build/icon.icns
   # ONE universal .dmg (Intel + Apple Silicon) instead of one per arch: the
   # website gets a single "Download for Mac" button and no player has to know
   # which chip they have. The zip is what latest-mac.yml describes and what an
@@ -90,6 +94,7 @@ dmg:
 afterSign: null
 
 win:
+  icon: build/icon.ico
   target:
     - target: nsis
       arch:

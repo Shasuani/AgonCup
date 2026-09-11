@@ -214,7 +214,10 @@ _put() {
             return 0
         fi
         attempt=$((attempt + 1))
-        if [ "$attempt" -gt 8 ]; then
+        # Patient on purpose: the link to the server drops for minutes at a
+        # time (2026-09-11: three outages during one release), and each retry
+        # is cheap because it resumes rather than restarts.
+        if [ "$attempt" -gt 30 ]; then
             _die "$name: still incomplete after $((attempt - 1)) attempts (remote has ${remote_size:-0} of $local_size bytes)."
         fi
         if [ -z "$remote_size" ] || [ "$remote_size" -eq 0 ] || [ "$remote_size" -gt "$local_size" ]; then
@@ -225,8 +228,12 @@ _put() {
         fi
         remote_size="$(_remote_size "$remote")"
         if [ "$remote_size" != "$local_size" ]; then
-            echo "    connection dropped at ${remote_size:-0}/$local_size bytes — retrying in 10 s"
-            sleep 10
+            if [ -z "$remote_size" ]; then
+                echo "    server not reachable — retrying in 20 s (attempt $attempt)"
+            else
+                echo "    connection dropped at $remote_size/$local_size bytes — retrying in 20 s (attempt $attempt)"
+            fi
+            sleep 20
         fi
     done
 }

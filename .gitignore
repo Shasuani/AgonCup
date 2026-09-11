@@ -6,6 +6,8 @@ __pycache__/
 *.egg-info/
 .eggs/
 build/
+# electron-builder's buildResources dir (NSIS include, icons) is source, not output.
+!services/desktop/build/
 dist/
 wheels/
 *.so

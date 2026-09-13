@@ -10,10 +10,21 @@
  *                    (src/main.ts createWindow — a packaged build carries the
  *                    icon inside the bundle instead)
  *
+ * ...and, so the website carries the SAME icon, into services/frontend/public/
+ * (services/frontend/index.html links them):
+ *
+ *   favicon.svg           the tile full bleed, fine detail stripped (Chrome/Firefox)
+ *   favicon.ico           16/32/48 px full-bleed tile (Safari ignores SVG favicons)
+ *   apple-touch-icon.png  180² full bleed (iOS rounds the corners itself)
+ *   og-image.png          public/og-image.svg — the social share card, which
+ *                         embeds the same mark — rendered at 1200×630
+ *
  * Every size is rendered from the vector at that exact pixel size (Chromium
  * inside Electron, offscreen, transparent), not downscaled from 1024, so the
- * small taskbar/Finder sizes stay crisp. Run: `npm run icons` — and commit the
- * outputs: electron-builder reads the files, not the SVG.
+ * small taskbar/Finder sizes stay crisp. Run: `npm run icons` (or
+ * `npm run icons -- desktop` / `npm run icons -- web` for one side) — and commit
+ * the outputs: electron-builder, the browsers and the OG scrapers read the
+ * files, not the SVG.
  */
 import { app, BrowserWindow } from "electron";
 import { execFile } from "node:child_process";
@@ -25,6 +36,8 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const buildDir = join(here, "..", "build");
+/** The website's static files (served as-is by vite / nginx). */
+const webDir = join(here, "..", "..", "frontend", "public");
 const execFileP = promisify(execFile);
 
 /** Apple's iconset naming: [file stem, pixel size]. */
@@ -37,6 +50,10 @@ const MAC_ICONSET = [
 ];
 /** Sizes Windows actually picks from an .ico (Explorer, taskbar, alt-tab, title bar). */
 const WIN_SIZES = [256, 128, 64, 48, 40, 32, 24, 20, 16];
+/** favicon.ico: browser tab (16), retina tab / bookmarks (32), Windows site shortcuts (48). */
+const FAVICON_SIZES = [48, 32, 16];
+const APPLE_TOUCH_SIZE = 180;
+const OG_SIZE = { width: 1200, height: 630 };
 
 /** Hairlines, glow and shadow are noise at 32 px and below — strip them. */
 const FINE_DETAIL_MAX = 32;
@@ -62,14 +79,14 @@ function variant(svg, { platform, size }) {
 /** Scratch dir for the per-size HTML wrappers the windows load from disk. */
 let scratch = null;
 
-/** Render an SVG string to a `size`² PNG buffer with a transparent background. */
-async function renderPng(svg, size) {
+/** Render an SVG string to a `width`×`height` PNG buffer with a transparent background. */
+async function renderPng(svg, width, height = width) {
   scratch ??= await mkdtemp(join(tmpdir(), "lol-icons-"));
-  console.log(`render ${size}px`);
+  console.log(height === width ? `render ${width}px` : `render ${width}×${height}px`);
   const win = new BrowserWindow({
     show: false,
-    width: size,
-    height: size,
+    width,
+    height,
     useContentSize: true,
     transparent: true,
     frame: false,
@@ -78,9 +95,9 @@ async function renderPng(svg, size) {
   try {
     const html =
       `<!doctype html><html><head><meta charset="utf-8"><style>` +
-      `html,body{margin:0;padding:0;background:transparent;width:${size}px;height:${size}px;overflow:hidden}` +
+      `html,body{margin:0;padding:0;background:transparent;width:${width}px;height:${height}px;overflow:hidden}` +
       `svg{display:block}</style></head><body>${svg}</body></html>`;
-    const page = join(scratch, `icon-${size}-${Date.now()}.html`);
+    const page = join(scratch, `icon-${width}x${height}-${Date.now()}.html`);
     await writeFile(page, html, "utf8");
     await win.loadFile(page);
     // Offscreen windows emit `paint` per frame; wait for one after load so the
@@ -89,10 +106,10 @@ async function renderPng(svg, size) {
       win.webContents.once("paint", () => resolve());
       win.webContents.invalidate();
     });
-    let image = await win.webContents.capturePage({ x: 0, y: 0, width: size, height: size });
+    let image = await win.webContents.capturePage({ x: 0, y: 0, width, height });
     const got = image.getSize();
-    if (got.width !== size || got.height !== size) {
-      image = image.resize({ width: size, height: size, quality: "best" });
+    if (got.width !== width || got.height !== height) {
+      image = image.resize({ width, height, quality: "best" });
     }
     return image.toPNG();
   } finally {
@@ -127,8 +144,46 @@ function packIco(entries) {
   return Buffer.concat([header, dir, ...entries.map((e) => e.png)]);
 }
 
+/** The website's icons + share card, from the same master SVG (see the header). */
+async function web(svg) {
+  // The vector favicon is the 32 px Windows variant verbatim: full bleed, no
+  // hairlines/glow (noise at tab size) — browsers scale it to whatever they need.
+  const favSvg = variant(svg, { platform: "win", size: 32 }).replace(
+    "<svg ",
+    '<svg role="img" aria-label="LeagueOfLeagues" ',
+  );
+  await writeFile(join(webDir, "favicon.svg"), `${favSvg}\n`, "utf8");
+  console.log("wrote frontend/public/favicon.svg");
+
+  const favEntries = [];
+  for (const size of FAVICON_SIZES) {
+    favEntries.push({ size, png: await renderPng(variant(svg, { platform: "win", size }), size) });
+  }
+  await writeFile(join(webDir, "favicon.ico"), packIco(favEntries));
+  console.log(`wrote frontend/public/favicon.ico (${FAVICON_SIZES.join(", ")} px)`);
+
+  await writeFile(
+    join(webDir, "apple-touch-icon.png"),
+    await renderPng(variant(svg, { platform: "win", size: APPLE_TOUCH_SIZE }), APPLE_TOUCH_SIZE),
+  );
+  console.log(`wrote frontend/public/apple-touch-icon.png (${APPLE_TOUCH_SIZE} px)`);
+
+  const og = await readFile(join(webDir, "og-image.svg"), "utf8");
+  await writeFile(join(webDir, "og-image.png"), await renderPng(og, OG_SIZE.width, OG_SIZE.height));
+  console.log(`wrote frontend/public/og-image.png (${OG_SIZE.width}×${OG_SIZE.height} px)`);
+}
+
 async function main() {
   const svg = await readFile(join(buildDir, "icon.svg"), "utf8");
+  // `npm run icons -- web` / `-- desktop` renders one side; no argument = both.
+  const picked = process.argv.filter((a) => a === "desktop" || a === "web");
+  const want = (side) => picked.length === 0 || picked.includes(side);
+
+  if (want("web")) await web(svg);
+  if (!want("desktop")) {
+    if (scratch !== null) await rm(scratch, { recursive: true, force: true });
+    return;
+  }
 
   // macOS: iconset -> icns. Sizes that appear twice (32, 256, 512) are rendered once.
   const iconset = join(buildDir, "icon.iconset");

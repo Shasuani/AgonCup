@@ -632,7 +632,8 @@ function backendBaseUrl(): string {
  */
 async function bootstrap(): Promise<void> {
   // Imported lazily so `electron` is never required during a unit-test import.
-  const { app, BrowserWindow, ipcMain, Notification, safeStorage, shell } = await import("electron");
+  const { app, BrowserWindow, Menu, ipcMain, Notification, safeStorage, shell } =
+    await import("electron");
   const path = await import("node:path");
   const fsp = await import("node:fs/promises");
   const fs = await import("node:fs");
@@ -1355,6 +1356,13 @@ async function bootstrap(): Promise<void> {
     app.dock?.setIcon(devIcon);
   }
 
+  // Windows/Linux: Electron's default application menu ("File / Edit / View /
+  // Window / Help") is drawn as a bar INSIDE the window. The renderer has its own
+  // title bar and navigation, so that bar is just clutter — drop it entirely.
+  // macOS keeps the default menu: it lives in the system menu bar (not the
+  // window) and is what makes Cmd+C / Cmd+V / Cmd+Q work.
+  if (process.platform !== "darwin") Menu.setApplicationMenu(null);
+
   const createWindow = (): import("electron").BrowserWindow => {
     const win = new BrowserWindow({
       width: 1280,
@@ -1370,7 +1378,7 @@ async function bootstrap(): Promise<void> {
       // 12px buttons vertically. Windows/Linux keep their native frame.
       ...(process.platform === "darwin"
         ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: { x: 18, y: 16 } }
-        : {}),
+        : { autoHideMenuBar: true }),
       webPreferences: {
         contextIsolation: true,
         nodeIntegration: false,

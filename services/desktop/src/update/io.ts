@@ -1,10 +1,11 @@
 /**
- * The three pieces of real IO the macOS swap installer needs, kept out of the
- * pure modules so they stay unit-testable: a streaming download with progress,
- * a streaming SHA-512, and "run this command and wait". Node-only (no Electron).
+ * The pieces of real IO the macOS swap installer needs, kept out of the pure
+ * modules so they stay unit-testable: a streaming download with progress, a
+ * streaming SHA-512, and "run this command and wait" (with or without its
+ * output). Node-only (no Electron).
  */
 
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
 import { Readable, Transform } from "node:stream";
@@ -43,6 +44,16 @@ export async function sha512Base64(file: string): Promise<string> {
   const hash = createHash("sha512");
   await pipeline(createReadStream(file), hash);
   return hash.digest("base64");
+}
+
+/** Run `cmd args…` and resolve with its stdout on exit code 0. */
+export function runForOutput(cmd: string, args: readonly string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(cmd, [...args], { encoding: "utf8", maxBuffer: 1024 * 1024 }, (err, stdout) => {
+      if (err !== null) reject(err);
+      else resolve(stdout);
+    });
+  });
 }
 
 /** Run `cmd args…` and resolve on exit code 0. */

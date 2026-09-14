@@ -1271,6 +1271,14 @@ async function bootstrap(): Promise<void> {
     const bundle = appBundleFromExecPath(process.execPath);
     if (bundle !== null) {
       const { spawn } = await import("node:child_process");
+      // Electron's patched `fs` presents every `*.asar` as a directory, so a
+      // recursive `fs.rm` over a staged bundle deletes everything EXCEPT its
+      // Contents/Resources/app.asar and then dies on `rmdir Resources` with
+      // ENOTEMPTY — and the client is stuck on "Update failed" for good, since
+      // every retry starts by clearing the staging dir. Any download the player
+      // postponed with "Later" and never installed leaves such a bundle behind.
+      // `original-fs` is the unpatched module Electron ships for exactly this.
+      const originalFs = await import("node:original-fs");
       installer = macSwapInstaller({
         appBundlePath: bundle,
         stagingDir: path.join(userData, "updates"),
@@ -1293,7 +1301,7 @@ async function bootstrap(): Promise<void> {
         },
         writeFile: (p, text) => fsp.writeFile(p, text, "utf8"),
         chmod: (p, mode) => fsp.chmod(p, mode),
-        rm: (p) => fsp.rm(p, { recursive: true, force: true }),
+        rm: (p) => originalFs.promises.rm(p, { recursive: true, force: true }),
         mkdir: async (p) => {
           await fsp.mkdir(p, { recursive: true });
         },

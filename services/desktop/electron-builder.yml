@@ -109,7 +109,9 @@ nsis:
   perMachine: false
   allowToChangeInstallationDirectory: true
   # build/installer.nsh: keep upgrading when the PREVIOUS version's uninstaller
-  # misfires (0.2.0 shipped a broken "app is running" check; see the file).
+  # misfires (0.2.0 shipped a broken "app is running" check), and never ask
+  # "for all users / only for me" — new installs are per-user so self-updates
+  # need no admin prompt (see the file).
   include: build/installer.nsh
 
 # Linux is not a shipped target (the client must reach the native League client);

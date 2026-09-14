@@ -272,6 +272,14 @@ export interface CurrentLobby {
    * — the backend owns the name, so a match against the spec means "ours".
    */
   readonly customLobbyName?: string;
+  /**
+   * Best-effort summonerIds of everyone in the lobby — `members[]` plus a custom
+   * game's `gameConfig.customTeam100` / `customTeam200` (`RE`, may drift). Lets
+   * the host tell the backend who has joined, so the match can move on from
+   * "invites are going out" to "players are joining" / "everyone is in". Empty
+   * when unreadable; never a reason to doubt the lobby exists.
+   */
+  readonly memberSummonerIds?: readonly SummonerId[];
 }
 
 // ---------------------------------------------------------------------------
@@ -345,6 +353,47 @@ export interface LiveClientEventCapture {
   readonly events: readonly LiveClientKillEvent[];
   /** Stamp of the pinned contract this capture was parsed under. */
   readonly schemaVersion: LcuSchemaVersion;
+}
+
+// ---------------------------------------------------------------------------
+// Live scoreboard snapshot (Documented :2999 allgamedata) — display-only
+// ---------------------------------------------------------------------------
+
+/**
+ * One player on the live scoreboard — exactly what every player sees on TAB.
+ * Deliberately no gold (only the local player's is readable, and it is not
+ * scoreboard information) and no map position.
+ */
+export interface LiveGamePlayer {
+  /** `Name#TAG` (falls back to the summoner name). Mapped to a display name server-side. */
+  readonly riotId: string;
+  /** Data Dragon champion key, e.g. `MissFortune` (from `rawChampionName`). */
+  readonly championKey: string;
+  readonly championName: string;
+  /** `ORDER` (blue side) or `CHAOS` (red side). */
+  readonly team: string;
+  readonly level: number;
+  readonly isDead: boolean;
+  /** Seconds until respawn while dead, else 0. */
+  readonly respawnTimer: number;
+  /** Item ids by slot 0..6 (0 = empty; slot 6 is the trinket). */
+  readonly items: readonly number[];
+  readonly kills: number;
+  readonly deaths: number;
+  readonly assists: number;
+  readonly creepScore: number;
+  readonly wardScore: number;
+  /** Data Dragon summoner-spell keys, e.g. `SummonerFlash`. */
+  readonly spell1Key?: string;
+  readonly spell2Key?: string;
+}
+
+/** The whole live scoreboard at one moment of the game. */
+export interface LiveGameSnapshot {
+  /** Seconds since the game started (`gameData.gameTime`). */
+  readonly gameTime: number;
+  readonly gameMode: string;
+  readonly players: readonly LiveGamePlayer[];
 }
 
 // ---------------------------------------------------------------------------
@@ -571,6 +620,14 @@ export interface LcuAdapter {
   captureLiveClientEvents(): Promise<LiveClientEventCapture>;
 
   /**
+   * `Documented` — read the live scoreboard from
+   * `https://127.0.0.1:2999/liveclientdata/allgamedata`: champion, level, items,
+   * K/D/A, CS and spells for all ten players (what TAB shows). READ-ONLY,
+   * display-only, valid only while `gameflow-phase = InProgress`.
+   */
+  captureLiveGameSnapshot(): Promise<LiveGameSnapshot>;
+
+  /**
    * `RE` + `Documented` — build a MID-GAME report for a mode decided before the
    * nexus falls (the 1v1 first-blood duel, §3.6.4). Keys the bundled kill stream
    * by the RUNNING game's platform id (`GET /lol-gameflow/v1/session` →
@@ -710,6 +767,10 @@ export class LcuAdapterSkeleton implements LcuAdapter {
     throw new Error(NOT_IMPLEMENTED);
   }
 
+  captureLiveGameSnapshot(): Promise<LiveGameSnapshot> {
+    throw new Error(NOT_IMPLEMENTED);
+  }
+
   captureLiveClientReport(
     _reporterPuuid?: Puuid,
     _liveClientEvents?: LiveClientEventCapture,
@@ -727,6 +788,9 @@ const LIVE_CLIENT_ORIGIN = 'https://127.0.0.1:2999' as const;
 
 /** `Documented` Live Client Data path for the kill stream (§3.6.4). */
 const LIVE_CLIENT_EVENTDATA_PATH = '/liveclientdata/eventdata' as const;
+
+/** `Documented` Live Client Data path for the full live scoreboard. */
+const LIVE_CLIENT_ALLGAMEDATA_PATH = '/liveclientdata/allgamedata' as const;
 
 /** `RE` LCU paths, pinned here as the single fix-point (§3.6). */
 const LCU_PATHS = {
@@ -846,6 +910,15 @@ function asNumber(value: unknown, fallback = 0): number {
 
 function asOptString<T extends string>(value: unknown): T | undefined {
   return typeof value === 'string' ? (value as T) : undefined;
+}
+
+/**
+ * `GeneratedTip_SummonerSpell_SummonerFlash_DisplayName` → `SummonerFlash`, the
+ * Data Dragon key. The localized `displayName` is not a key, so it is not used.
+ */
+function liveSpellKey(value: unknown): string | undefined {
+  const raw = asOptString<string>(asRecord(value)['rawDisplayName']);
+  return raw?.match(/SummonerSpell_(\w+?)_DisplayName/)?.[1];
 }
 
 /**
@@ -1135,10 +1208,22 @@ export class LcuAdapterImpl implements LcuAdapter {
     }
     const gameConfig = asRecord(rec['gameConfig']);
     const customLobbyName = asOptString(gameConfig['customLobbyName']);
+    const memberSummonerIds = new Set<SummonerId>();
+    for (const member of [
+      ...asArray(rec['members']),
+      ...asArray(gameConfig['customTeam100']),
+      ...asArray(gameConfig['customTeam200']),
+    ]) {
+      const raw = asRecord(member)['summonerId'];
+      if ((typeof raw === 'number' && raw > 0) || (typeof raw === 'string' && raw !== '')) {
+        memberSummonerIds.add(String(raw) as SummonerId);
+      }
+    }
     return {
       lobbyId,
       isCustom: gameConfig['isCustom'] === true,
       ...(customLobbyName === undefined ? {} : { customLobbyName }),
+      memberSummonerIds: [...memberSummonerIds],
     };
   }
 
@@ -1633,6 +1718,77 @@ export class LcuAdapterImpl implements LcuAdapter {
       source: 'liveClientData',
       events,
       schemaVersion: this.#config.schemaVersion,
+    };
+  }
+
+  // -- captureLiveGameSnapshot ----------------------------------------------
+
+  /**
+   * `Documented` — the live scoreboard (see {@link LcuAdapter}). Parses only the
+   * whitelisted TAB fields of `allPlayers[]`; `activePlayer` (gold, stats, runes)
+   * and the event list are never read.
+   */
+  async captureLiveGameSnapshot(): Promise<LiveGameSnapshot> {
+    const res = await this.#rt.http.request({
+      method: 'GET',
+      url: `${LIVE_CLIENT_ORIGIN}${LIVE_CLIENT_ALLGAMEDATA_PATH}`,
+      headers: { Accept: 'application/json' },
+    });
+    if (res.status < 200 || res.status >= 300) {
+      throw new LcuResponseError(`captureLiveGameSnapshot failed: HTTP ${res.status}`, res.status);
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(res.body);
+    } catch {
+      throw new LcuResponseError('captureLiveGameSnapshot: non-JSON response', res.status);
+    }
+    const root = asRecord(parsed);
+    const gameData = asRecord(root['gameData']);
+    const players = asArray(root['allPlayers']).map((raw): LiveGamePlayer => {
+      const p = asRecord(raw);
+      const scores = asRecord(p['scores']);
+      const spells = asRecord(p['summonerSpells']);
+      const items: number[] = [0, 0, 0, 0, 0, 0, 0];
+      for (const it of asArray(p['items'])) {
+        const item = asRecord(it);
+        const slot = asNumber(item['slot'], -1);
+        if (slot >= 0 && slot < items.length) items[slot] = asNumber(item['itemID']);
+      }
+      const gameName = asOptString<string>(p['riotIdGameName']);
+      const tagLine = asOptString<string>(p['riotIdTagLine']);
+      const riotId =
+        asOptString<string>(p['riotId']) ??
+        (gameName !== undefined && tagLine !== undefined ? `${gameName}#${tagLine}` : undefined) ??
+        asOptString<string>(p['summonerName']) ??
+        '';
+      const spell1Key = liveSpellKey(spells['summonerSpellOne']);
+      const spell2Key = liveSpellKey(spells['summonerSpellTwo']);
+      return {
+        riotId,
+        championKey: (asOptString<string>(p['rawChampionName']) ?? '').replace(
+          /^game_character_displayname_/,
+          '',
+        ),
+        championName: asOptString<string>(p['championName']) ?? '',
+        team: asOptString<string>(p['team']) ?? '',
+        level: asNumber(p['level']),
+        isDead: p['isDead'] === true,
+        respawnTimer: p['isDead'] === true ? Math.max(0, asNumber(p['respawnTimer'])) : 0,
+        items,
+        kills: asNumber(scores['kills']),
+        deaths: asNumber(scores['deaths']),
+        assists: asNumber(scores['assists']),
+        creepScore: asNumber(scores['creepScore']),
+        wardScore: asNumber(scores['wardScore']),
+        ...(spell1Key !== undefined ? { spell1Key } : {}),
+        ...(spell2Key !== undefined ? { spell2Key } : {}),
+      };
+    });
+    return {
+      gameTime: asNumber(gameData['gameTime']),
+      gameMode: asOptString<string>(gameData['gameMode']) ?? '',
+      players,
     };
   }
 

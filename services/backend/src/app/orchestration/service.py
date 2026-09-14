@@ -48,10 +48,12 @@ import hmac
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from hashlib import sha256
 from typing import Any, cast
 
 from lol_core import (
+    TERMINAL_PHASES,
     Decision,
     FailoverAction,
     IllegalTransitionError,
@@ -59,6 +61,8 @@ from lol_core import (
     RosterMember,
     decide_failover,
     decide_transition,
+    events_toward,
+    lobby_phase_from_gameflow,
     next_successor,
     reject_stale_ack,
     seed_host_succession,
@@ -1634,6 +1638,118 @@ async def ingest_lobby_state(
     return IngestResult(accepted=True, host_epoch=lobby.host_epoch, state=lobby.state)
 
 
+#: Where host heartbeats may move a lobby from: the custom game exists (the host
+#: acked it) and the game has not been closed by a result yet.
+_HOST_PROGRESS_STATES = frozenset(
+    {LobbyPhase.LOBBY_OPEN, LobbyPhase.FILLING, LobbyPhase.READY, LobbyPhase.STARTING}
+)
+
+
+async def ingest_host_progress(
+    session: AsyncSession,
+    *,
+    match_id: uuid.UUID,
+    host_epoch: int,
+    reporter_puuid: str | None,
+    gameflow_phase: str | None,
+    lobby_member_summoner_ids: Sequence[str] = (),
+) -> LobbyPhase | None:
+    """Advance the lobby from what the HOST's League client reports (PLAN.md §3.6.1).
+
+    Before this nothing moved a lobby past ``LOBBY_OPEN``: the Live Match stepper
+    never reached *Players* or *In game*, the "now live" feed post and the in-game
+    presence never fired, and — because ``LOBBY_OPEN`` is a failover phase — a host
+    whose app closed mid-game (or simply stopped heartbeating after its report)
+    left the watchdog free to "re-create" a lobby for a game already being played.
+
+    The evidence is the host heartbeat's raw gameflow phase plus, while in the
+    lobby, the summonerIds it sees there. Only the socket whose SERVER-stamped
+    identity is the designated host counts (``isHost`` on the frame is
+    self-declared), the epoch is fenced, the walk is forward-only and every edge
+    goes through :func:`decide_transition` (:func:`lol_core.events_toward`).
+
+    Returns the new state when it moved, else ``None``.
+    """
+    lobby = await _get_lobby(session, match_id)
+    if reporter_puuid is None or reporter_puuid != lobby.host_puuid:
+        return None
+    if reject_stale_ack(host_epoch, lobby.host_epoch) or lobby.state not in _HOST_PROGRESS_STATES:
+        return None
+
+    members_present = 0
+    full_lobby = 0
+    if gameflow_phase == "Lobby" and lobby_member_summoner_ids:
+        if lobby.state is not LobbyPhase.LOBBY_OPEN and lobby.state is not LobbyPhase.FILLING:
+            return None  # already READY or beyond: the lobby cannot prove anything new
+        roster = await _checked_in_sessions(session, match_id)
+        roster_ids = set(
+            (await _summoner_ids_for(session, puuids=[s.puuid for s in roster])).values()
+        )
+        members_present = len(roster_ids.intersection(lobby_member_summoner_ids))
+        full_lobby = (await _game_mode_for_match_id(session, match_id)).total_participants
+
+    target = lobby_phase_from_gameflow(
+        gameflow_phase, members_present=members_present, full_lobby=full_lobby
+    )
+    events = events_toward(lobby.state, target) if target is not None else ()
+    if not events:
+        return None
+    before = lobby.state
+    try:
+        for event in events:
+            lobby.state = decide_transition(lobby.state, event)
+    except IllegalTransitionError as exc:  # unreachable by construction; never corrupt state
+        lobby.state = before
+        raise InvalidStateError(str(exc)) from exc
+    await session.flush()
+    logger.info(
+        "orchestration.host_progress",
+        match_id=str(match_id),
+        gameflow_phase=gameflow_phase,
+        members_present=members_present,
+        before=before.value,
+        state=lobby.state.value,
+    )
+    await _sync_presence(session, match_id=match_id, state=lobby.state)
+    await _announce_phase(session, match_id=match_id, state=lobby.state)
+    return lobby.state
+
+
+async def end_lobby_for_decided_match(
+    session: AsyncSession, *, match_id: uuid.UUID
+) -> LobbyPhase | None:
+    """A decided match's lobby is over: close it and take the game off presence.
+
+    Nothing ever moved a lobby to ``ENDED``, so presence — cleared only on a
+    terminal state — kept listing every finished game until its 90-minute TTL:
+    "N in game" counted people long gone, and Watch live offered games that were
+    over. Called when the result is recorded (quorum or admin override).
+
+    The walk goes through the happy path to ``RESULT_PENDING`` and then
+    ``RESULT_FINALIZED`` (each edge via :func:`decide_transition`): a result is
+    recorded however far the lobby got — an admin can decide a game nobody's client
+    followed. A lobby already terminal (aborted / hand-made) keeps its state; the
+    presence entry is dropped either way. Returns the lobby's state, or ``None``
+    when the match never had a lobby.
+    """
+    lobby = (
+        await session.execute(select(MatchLobby).where(MatchLobby.match_id == match_id))
+    ).scalar_one_or_none()
+    if lobby is None:
+        return None
+    if lobby.state not in TERMINAL_PHASES:
+        before = lobby.state
+        for event in (
+            *events_toward(lobby.state, LobbyPhase.RESULT_PENDING),
+            LobbyEvent.RESULT_FINALIZED,
+        ):
+            lobby.state = decide_transition(lobby.state, event)
+        await session.flush()
+        logger.info("orchestration.lobby_ended", match_id=str(match_id), before=before.value)
+    await _sync_presence(session, match_id=match_id, state=LobbyPhase.ENDED)
+    return lobby.state
+
+
 #: Terminal lobby states that should drop a match from the live-presence feed.
 _PRESENCE_CLEAR_STATES = frozenset({LobbyPhase.ENDED, LobbyPhase.ABORTED, LobbyPhase.HOST_LOST})
 
@@ -1699,7 +1815,10 @@ async def _sync_presence(session: AsyncSession, *, match_id: uuid.UUID, state: L
 
     redis = get_redis()
     if state is LobbyPhase.IN_GAME:
-        await presence_service.refresh_presence_for_match(session, redis, match_id=match_id)
+        # Stamped here, once, as the game goes live: presence lists newest first.
+        await presence_service.refresh_presence_for_match(
+            session, redis, match_id=match_id, started_at=datetime.now(UTC)
+        )
     else:
         await presence_service.clear_presence_for_match(redis, match_id=match_id)
 

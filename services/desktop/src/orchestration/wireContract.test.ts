@@ -59,6 +59,7 @@ function harness() {
     },
     async sendHeartbeat(_h: HostHeartbeat) {},
     async sendReport(_r: ResultReportMessage) {},
+    async sendLiveSnapshot() {},
   };
   const scheduler: Scheduler = { every: () => () => {} };
   const adapter = {

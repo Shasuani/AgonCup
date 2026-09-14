@@ -20,6 +20,7 @@ import type {
   GameflowPhase,
   HostEpoch,
   LcuLobbyId,
+  LiveGameSnapshot,
   SummonerId,
 } from "@lol/lcu";
 
@@ -185,6 +186,22 @@ export interface HostHeartbeat {
   readonly phase: GameflowPhase;
   readonly isHost: boolean;
   readonly sentAtMs: number;
+  /**
+   * Host only, while its client sits in the lobby: the summonerIds it sees there.
+   * The backend intersects them with the roster to move the match to FILLING /
+   * READY — nothing else can see who has actually joined a custom game.
+   */
+  readonly lobbyMemberSummonerIds?: readonly string[];
+}
+
+/**
+ * Client->server live scoreboard (display-only): what TAB shows, sent every few
+ * seconds while the game runs so other players can watch it in their client.
+ * Ephemeral — a snapshot that cannot be sent right now is simply dropped.
+ */
+export interface LiveSnapshotMessage {
+  readonly matchId: string;
+  readonly snapshot: LiveGameSnapshot;
 }
 
 /** Client->server end-of-game report (one of the 10 corroboration inputs). */
@@ -205,6 +222,7 @@ export interface BackendTransport {
   sendAck(ack: LobbyAck): Promise<void>;
   sendHeartbeat(heartbeat: HostHeartbeat): Promise<void>;
   sendReport(report: ResultReportMessage): Promise<void>;
+  sendLiveSnapshot(message: LiveSnapshotMessage): Promise<void>;
 }
 
 /** Injectable periodic scheduler (real impl wraps setInterval; tests fake it). */

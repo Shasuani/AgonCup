@@ -42,6 +42,7 @@ import type {
   HostHeartbeat,
   LobbyAck,
   LobbyCommand,
+  LiveSnapshotMessage,
   ResultReportMessage,
 } from "../orchestration/protocol.js";
 
@@ -152,7 +153,8 @@ type ServerFrame =
 type OutboundFrame =
   | { readonly type: "ack"; readonly ack: LobbyAck }
   | { readonly type: "report"; readonly report: ResultReportMessage }
-  | { readonly type: "heartbeat"; readonly heartbeat: HostHeartbeat };
+  | { readonly type: "heartbeat"; readonly heartbeat: HostHeartbeat }
+  | { readonly type: "live"; readonly live: LiveSnapshotMessage };
 
 /**
  * WebSocket-backed {@link BackendTransport}. Construct it (no IO), register
@@ -209,6 +211,14 @@ export class WsBackendTransport implements BackendTransport {
     }
     // Last-write-wins: only the freshest heartbeat survives a disconnect.
     this.#pendingHeartbeat = heartbeat;
+  }
+
+  async sendLiveSnapshot(message: LiveSnapshotMessage): Promise<void> {
+    // Ephemeral: a live scoreboard is stale by the next one, so it is never
+    // queued across a disconnect — only sent while subscribed.
+    if (this.#canSend()) {
+      this.#rawSend({ type: "live", live: message });
+    }
   }
 
   // --- lifecycle ----------------------------------------------------------- //

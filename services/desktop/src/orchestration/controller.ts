@@ -51,6 +51,8 @@ export interface ControllerConfig {
 const TERMINAL_PHASE: GameflowPhase = "EndOfGame";
 /** Live-Client Data (`:2999`) is only up while the game is actually running. */
 const IN_PROGRESS_PHASE: GameflowPhase = "InProgress";
+/** The host sits in the custom lobby while it fills. */
+const LOBBY_PHASE: GameflowPhase = "Lobby";
 
 /**
  * How long this client keeps watching for a lobby a PLAYER is making by hand
@@ -62,6 +64,9 @@ const IN_PROGRESS_PHASE: GameflowPhase = "InProgress";
  * everybody walked away from.
  */
 const MANUAL_LOBBY_WAIT_MS = 15 * 60_000;
+
+/** How often an in-game client shares the live scoreboard (display-only). */
+const LIVE_SNAPSHOT_EVERY_MS = 5_000;
 
 /**
  * Commands only the designated host acts on.
@@ -123,6 +128,8 @@ export class OrchestrationController {
    * port dies on game exit, so we keep the freshest snapshot seen while in-game.
    */
   #liveClientEvents: LiveClientEventCapture | null = null;
+  /** When the live scoreboard was last read (throttle for {@link #shareLiveSnapshot}). */
+  #lastLiveSnapshotMs: number | null = null;
   /**
    * An invite we were told to send before any lobby existed to send it into —
    * the manual-fallback path, where a player creates the custom game by hand.
@@ -396,6 +403,20 @@ export class OrchestrationController {
   }
 
   // --- heartbeat + reporting --------------------------------------------- //
+  /**
+   * Who the host's client sees in the lobby — the only evidence of the lobby
+   * filling up, so the backend can move on from "invites are going out".
+   * Best-effort: an unreadable lobby just leaves the beat without it.
+   */
+  async #lobbyMembers(): Promise<string[]> {
+    try {
+      const lobby = await this.#adapter.getCurrentLobby();
+      return [...(lobby?.memberSummonerIds ?? [])];
+    } catch {
+      return [];
+    }
+  }
+
   async #tick(): Promise<void> {
     let phase: GameflowPhase;
     try {
@@ -406,6 +427,7 @@ export class OrchestrationController {
       await this.#resumePendingInvite();
       return;
     }
+    const members = this.#isHost && phase === LOBBY_PHASE ? await this.#lobbyMembers() : [];
     await this.#safe(() =>
       this.#transport.sendHeartbeat({
         matchId: this.#matchId,
@@ -413,11 +435,13 @@ export class OrchestrationController {
         phase,
         isHost: this.#isHost,
         sentAtMs: this.#clock.nowMs(),
+        ...(members.length > 0 ? { lobbyMemberSummonerIds: members } : {}),
       }),
     );
     await this.#resumePendingInvite();
     if (phase === IN_PROGRESS_PHASE) {
       await this.#captureLiveEvents();
+      await this.#shareLiveSnapshot();
       // A first-blood mode is DECIDED mid-game (§3.6.4): report the moment the
       // deciding event shows up instead of waiting for an eog block that may
       // never exist. #reported is the same single-shot guard the eog path uses,
@@ -441,6 +465,27 @@ export class OrchestrationController {
       this.#liveClientEvents = await this.#adapter.captureLiveClientEvents();
     } catch {
       // Port not up yet / already gone — keep the last good capture, stay alive.
+    }
+  }
+
+  /**
+   * Share the live scoreboard so other players can watch the game in their
+   * client. Throttled to one read + send per {@link LIVE_SNAPSHOT_EVERY_MS};
+   * display-only and soft-fail — it never touches reporting or the tick loop.
+   */
+  async #shareLiveSnapshot(): Promise<void> {
+    const now = this.#clock.nowMs();
+    if (this.#lastLiveSnapshotMs !== null && now - this.#lastLiveSnapshotMs < LIVE_SNAPSHOT_EVERY_MS) {
+      return;
+    }
+    this.#lastLiveSnapshotMs = now;
+    try {
+      const snapshot = await this.#adapter.captureLiveGameSnapshot();
+      if (snapshot.players.length > 0) {
+        await this.#transport.sendLiveSnapshot({ matchId: this.#matchId, snapshot });
+      }
+    } catch {
+      // :2999 not up yet / already gone — the next window tries again.
     }
   }
 

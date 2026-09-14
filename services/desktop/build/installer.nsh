@@ -27,3 +27,23 @@
 !macro customUnInstallCheckCurrentUser
   !insertmacro customUnInstallCheck
 !macroend
+
+; Never show the "Anyone who uses this computer / Only for me" page.
+;
+; "Anyone" installs under Program Files, and every self-update of such a copy
+; then stops on a Windows admin (UAC) prompt — a player should press Update and
+; be done. So a new install is always per-user (%LOCALAPPDATA%\Programs, no admin
+; needed, silent updates). A PC that already has a per-machine copy (and no
+; per-user one) keeps upgrading that copy in place, as before; installing a
+; second, per-user copy next to it would leave two apps and two shortcuts.
+; $hasPerMachineInstallation / $hasPerUserInstallation come from the registry
+; (assistedInstaller.nsh initMultiUser). Silent updates never reach this page:
+; they keep whichever mode the installed copy has.
+!macro customInstallMode
+  ${if} $hasPerMachineInstallation == "1"
+  ${andIf} $hasPerUserInstallation == "0"
+    StrCpy $isForceMachineInstall "1"
+  ${else}
+    StrCpy $isForceCurrentInstall "1"
+  ${endIf}
+!macroend

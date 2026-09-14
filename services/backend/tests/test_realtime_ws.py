@@ -568,6 +568,96 @@ async def test_guest_heartbeat_does_not_stamp_host_liveness() -> None:
 
 
 @pytest.mark.asyncio
+async def test_host_heartbeat_phase_advances_the_lobby() -> None:
+    """The host's raw gameflow phase is the only witness of champ select / the game;
+    before, nothing moved a lobby past LOBBY_OPEN."""
+    match_id = uuid.uuid4()
+    lobby = _lobby(match_id, host_epoch=0, state=LobbyPhase.LOBBY_OPEN)
+    store = _store(_participant(match_id), lobby)  # the participant (puuid-1) IS the host
+    ws = FakeWebSocket(
+        token=_token(),
+        inbound=[
+            json.dumps({"type": "subscribe", "matchId": str(match_id)}),
+            json.dumps(
+                {
+                    "type": "heartbeat",
+                    "heartbeat": {"hostEpoch": 0, "phase": "ChampSelect", "isHost": True},
+                }
+            ),
+        ],
+    )
+    await hub.serve(
+        ws, session_factory=_session_factory(store), pubsub_factory=lambda: FakePubSub()
+    )
+    assert lobby.state == LobbyPhase.STARTING
+
+
+@pytest.mark.asyncio
+async def test_a_guest_claiming_host_cannot_advance_the_lobby() -> None:
+    match_id = uuid.uuid4()
+    lobby = _lobby(match_id, host_epoch=0, state=LobbyPhase.LOBBY_OPEN)
+    lobby.host_puuid = "somebody-else"  # this socket's server-stamped puuid-1 is a guest
+    store = _store(_participant(match_id), lobby)
+    ws = FakeWebSocket(
+        token=_token(),
+        inbound=[
+            json.dumps({"type": "subscribe", "matchId": str(match_id)}),
+            json.dumps(
+                {
+                    "type": "heartbeat",
+                    "heartbeat": {"hostEpoch": 0, "phase": "ChampSelect", "isHost": True},
+                }
+            ),
+        ],
+    )
+    await hub.serve(
+        ws, session_factory=_session_factory(store), pubsub_factory=lambda: FakePubSub()
+    )
+    assert lobby.state == LobbyPhase.LOBBY_OPEN
+
+
+@pytest.mark.asyncio
+async def test_inbound_live_frame_routes_to_the_live_scoreboard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A live scoreboard reaches app.presence.live for THIS subscription's match, and a
+    failure there never costs the socket the frames that follow."""
+    from app.realtime import redis_client
+
+    match_id = uuid.uuid4()
+    lobby = _lobby(match_id, host_epoch=0, state=LobbyPhase.AWAITING_CREATE)
+    store = _store(_participant(match_id), lobby)
+    seen: list[tuple[uuid.UUID, Any]] = []
+
+    async def ingest(session: Any, redis: Any, *, match_id: uuid.UUID, raw: Any) -> bool:
+        seen.append((match_id, raw))
+        raise RuntimeError("redis down")
+
+    monkeypatch.setattr(hub.live_board, "ingest_live_snapshot", ingest)
+    monkeypatch.setattr(redis_client, "get_redis", lambda: object())
+    snapshot = {"gameTime": 60, "gameMode": "CLASSIC", "players": []}
+    ws = FakeWebSocket(
+        token=_token(),
+        inbound=[
+            json.dumps({"type": "subscribe", "matchId": str(match_id)}),
+            # a client cannot aim its scoreboard at another match
+            json.dumps({"type": "live", "live": {"matchId": "other", "snapshot": snapshot}}),
+            json.dumps(
+                {
+                    "type": "ack",
+                    "ack": {"commandId": "c", "hostEpoch": 0, "ok": True, "lcuLobbyId": "l"},
+                }
+            ),
+        ],
+    )
+    await hub.serve(
+        ws, session_factory=_session_factory(store), pubsub_factory=lambda: FakePubSub()
+    )
+    assert seen == [(match_id, snapshot)]
+    assert lobby.state == LobbyPhase.LOBBY_OPEN  # the next frame was still served
+
+
+@pytest.mark.asyncio
 async def test_inbound_ack_routes_to_ingest_lobby_state_lobby_created() -> None:
     match_id = uuid.uuid4()
     lobby = _lobby(match_id, host_epoch=0, state=LobbyPhase.AWAITING_CREATE)

@@ -106,6 +106,20 @@ export function useChampions(): Registry | null {
   return reg;
 }
 
+/** Numeric champion id for a Data Dragon key (`MissFortune` → 21); 0 when unknown. */
+export function championIdByKey(reg: Registry | null, key: string): number {
+  if (!reg || !key) return 0;
+  for (const [id, info] of reg.champions) if (info.key === key) return id;
+  return 0;
+}
+
+/** Numeric summoner-spell id for a Data Dragon key (`SummonerFlash` → 4); null when unknown. */
+export function spellIdByKey(reg: Registry | null, key: string | null): number | null {
+  if (!reg || !key) return null;
+  for (const [id, info] of reg.spells) if (info.key === key) return id;
+  return null;
+}
+
 export function championName(reg: Registry | null, id: number): string | null {
   return reg?.champions.get(id)?.name ?? null;
 }

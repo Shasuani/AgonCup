@@ -73,7 +73,7 @@ import {
   rejectJoinRequest,
   removeMember,
 } from "./teams/teams.js";
-import { getPresence } from "./presence/presence.js";
+import { getLiveBoard, getPresence } from "./presence/presence.js";
 import { listMyHistory } from "./results/history.js";
 import {
   pairDesktop,
@@ -93,10 +93,12 @@ import { createUpdates } from "./update/coordinator.js";
 import {
   appBundleFromExecPath,
   electronUpdaterInstaller,
+  isTranslocated,
   macSwapInstaller,
+  originalBundleFromMounts,
   type Installer,
 } from "./update/installers.js";
-import { downloadToFile, run, sha512Base64 } from "./update/io.js";
+import { downloadToFile, run, runForOutput, sha512Base64 } from "./update/io.js";
 
 /** Default heartbeat cadence while pre-game/in-game (PLAN.md §3.6.1 ~2-3s). */
 const DEFAULT_HEARTBEAT_MS = 2_500;
@@ -1155,6 +1157,12 @@ async function bootstrap(): Promise<void> {
   ipcMain.handle("lol:presence", () =>
     withSession((t) => getPresence({ accessToken: t }, { backendUrl: backendBaseUrl() })),
   );
+  // The live scoreboard of one game in progress (the Watch screen).
+  ipcMain.handle("lol:live-board", (_event, args: { matchId: string }) =>
+    withSession((t) =>
+      getLiveBoard({ accessToken: t, matchId: String(args?.matchId ?? "") }, { backendUrl: backendBaseUrl() }),
+    ),
+  );
   // The player's own recent games (per-game scoreboards) — the Home strip and
   // the Match history screen. Read-only, display-only (see results/history.ts).
   ipcMain.handle("lol:history-mine", () =>
@@ -1198,6 +1206,10 @@ async function bootstrap(): Promise<void> {
       log("lcu_status", { status });
     },
   });
+  // Pull complement: the poller only pushes on a CHANGE, and its first answer
+  // lands before the renderer is listening — so with League already open the
+  // badge sat on "Looking for League…" until League was closed and reopened.
+  ipcMain.handle("lol:lcu-status-get", () => poller.status);
 
   // --- champ-select board poller -> renderer live status -------------------- //
   // Read-only spectator surface: each client renders the full board from its
@@ -1261,16 +1273,41 @@ async function bootstrap(): Promise<void> {
       error: (m: unknown) => log("updater", { error: String(m) }),
       debug: () => {},
     };
+    // electron-updater keeps the installer it ran in
+    // %LOCALAPPDATA%\<updaterCacheDirName>\pending; the name is baked into
+    // resources/app-update.yml by electron-builder (from package.json's name).
+    let updaterCacheDir: string | null = null;
+    try {
+      const yml = await fsp.readFile(path.join(process.resourcesPath, "app-update.yml"), "utf8");
+      const name = /^updaterCacheDirName:\s*['"]?([^'"\r\n]+?)['"]?\s*$/m.exec(yml)?.[1];
+      const localAppData = process.env["LOCALAPPDATA"] ?? path.join(app.getPath("home"), "AppData", "Local");
+      if (name !== undefined && name !== "") updaterCacheDir = path.join(localAppData, name);
+    } catch (err) {
+      log("update_cache_dir_unknown", { detail: String(err) });
+    }
     installer = electronUpdaterInstaller({
       updater: autoUpdater,
       feedUrl: urls.downloadsUrl,
       currentVersion: app.getVersion(),
+      cacheDir: updaterCacheDir,
+      rm: (p) => fsp.rm(p, { recursive: true, force: true }),
       log,
     });
   } else if (app.isPackaged && process.platform === "darwin") {
     const bundle = appBundleFromExecPath(process.execPath);
     if (bundle !== null) {
       const { spawn } = await import("node:child_process");
+      // Started from the opened .dmg (or never moved by Finder), macOS runs the
+      // app from a read-only translocated mirror; the swap needs the real place.
+      let originalBundlePath: string | null = null;
+      if (isTranslocated(bundle)) {
+        try {
+          originalBundlePath = originalBundleFromMounts(bundle, await runForOutput("/sbin/mount", []));
+        } catch (err) {
+          log("update_translocation_unresolved", { detail: String(err) });
+        }
+        log("update_translocated", { bundle, originalBundlePath });
+      }
       // Electron's patched `fs` presents every `*.asar` as a directory, so a
       // recursive `fs.rm` over a staged bundle deletes everything EXCEPT its
       // Contents/Resources/app.asar and then dies on `rmdir Resources` with
@@ -1281,6 +1318,8 @@ async function bootstrap(): Promise<void> {
       const originalFs = await import("node:original-fs");
       installer = macSwapInstaller({
         appBundlePath: bundle,
+        originalBundlePath,
+        applicationsDirs: ["/Applications", path.join(app.getPath("home"), "Applications")],
         stagingDir: path.join(userData, "updates"),
         pid: process.pid,
         download: (url, dest, onProgress) => downloadToFile(url, dest, onProgress),
@@ -1290,16 +1329,33 @@ async function bootstrap(): Promise<void> {
           const name = (await fsp.readdir(dir)).find((n) => n.endsWith(".app"));
           return name === undefined ? null : path.join(dir, name);
         },
-        isWritable: async (p) => {
+        canReplace: async (p) => {
+          const code = (err: unknown): unknown => (err as { code?: unknown }).code;
           try {
             await fsp.access(p, fs.constants.W_OK);
-            await fsp.access(path.dirname(p), fs.constants.W_OK);
-            return true;
-          } catch {
-            return false;
+          } catch (err) {
+            if (code(err) !== "ENOENT") return false;
+          }
+          // The nearest existing folder above it (~/Applications may not exist yet).
+          for (let dir = path.dirname(p); ; ) {
+            try {
+              await fsp.access(dir, fs.constants.W_OK);
+              return true;
+            } catch (err) {
+              const up = path.dirname(dir);
+              if (code(err) !== "ENOENT" || up === dir) return false;
+              dir = up;
+            }
           }
         },
         writeFile: (p, text) => fsp.writeFile(p, text, "utf8"),
+        readText: async (p) => {
+          try {
+            return await fsp.readFile(p, "utf8");
+          } catch {
+            return null;
+          }
+        },
         chmod: (p, mode) => fsp.chmod(p, mode),
         rm: (p) => originalFs.promises.rm(p, { recursive: true, force: true }),
         mkdir: async (p) => {
@@ -1316,6 +1372,8 @@ async function bootstrap(): Promise<void> {
       log("update_no_bundle", { execPath: process.execPath });
     }
   }
+  // What the previous update left on disk (never throws; nothing is staged yet).
+  if (installer !== null) void installer.cleanup();
   const updates = createUpdates({
     currentVersion: app.getVersion(),
     platform: process.platform,

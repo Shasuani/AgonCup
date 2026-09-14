@@ -51,6 +51,9 @@ __all__ = [
     "LobbyEvent",
     "IllegalTransitionError",
     "decide_transition",
+    # host-observed progress
+    "lobby_phase_from_gameflow",
+    "events_toward",
     # failover
     "FailoverAction",
     "Decision",
@@ -305,6 +308,76 @@ def decide_transition(current: LobbyPhase, event: LobbyEvent) -> LobbyPhase:
     if nxt is None:
         raise IllegalTransitionError(current, event)
     return nxt
+
+
+# --------------------------------------------------------------------------- #
+# Host-observed progress: gameflow phase -> lobby phase (PLAN.md §3.6.1)
+# --------------------------------------------------------------------------- #
+
+#: The event that ENTERS each happy-path phase — the edge the walk takes to reach it.
+_ENTERING_EVENT: dict[LobbyPhase, LobbyEvent] = {
+    LobbyPhase.AWAITING_CREATE: LobbyEvent.HOST_DESIGNATED,
+    LobbyPhase.LOBBY_OPEN: LobbyEvent.LOBBY_CREATED,
+    LobbyPhase.FILLING: LobbyEvent.INVITES_SENT,
+    LobbyPhase.READY: LobbyEvent.ALL_MEMBERS_PRESENT,
+    LobbyPhase.STARTING: LobbyEvent.CHAMP_SELECT_STARTED,
+    LobbyPhase.IN_GAME: LobbyEvent.GAME_STARTED,
+    LobbyPhase.RESULT_PENDING: LobbyEvent.GAME_ENDED,
+}
+
+#: Raw LCU gameflow phases (`RE`) that prove the game itself is underway or over.
+#: Deliberately capped at ``IN_GAME``: closing the game (``GAME_ENDED``) belongs to
+#: the result report, which is what actually carries the outcome.
+_IN_GAME_GAMEFLOW: frozenset[str] = frozenset(
+    {"GameStart", "InProgress", "Reconnect", "WaitingForStats", "PreEndOfGame", "EndOfGame"}
+)
+
+
+def lobby_phase_from_gameflow(
+    gameflow_phase: str | None, *, members_present: int, full_lobby: int
+) -> LobbyPhase | None:
+    """The lobby phase the HOST's own League client proves has been reached.
+
+    Nothing else in the backend ever fired ``INVITES_SENT`` .. ``GAME_STARTED``:
+    the host ack moved a lobby to ``LOBBY_OPEN`` and it stayed there through
+    champion select, the game and its result. The host already reports the raw
+    gameflow phase on every heartbeat, and (while in the lobby) who is in it, so
+    this reads that evidence:
+
+    * ``ChampSelect`` -> ``STARTING``; a running / finished game -> ``IN_GAME``.
+    * ``Lobby`` with every one of ``full_lobby`` roster players present ->
+      ``READY``; with at least one roster player besides the host -> ``FILLING``.
+
+    ``members_present`` counts ROSTER players only (the caller intersects the
+    lobby with the match roster), so a stranger holding the password cannot make
+    a lobby look full. Returns ``None`` when the evidence proves nothing.
+    """
+    if gameflow_phase == "ChampSelect":
+        return LobbyPhase.STARTING
+    if gameflow_phase in _IN_GAME_GAMEFLOW:
+        return LobbyPhase.IN_GAME
+    if gameflow_phase == "Lobby":
+        if full_lobby > 0 and members_present >= full_lobby:
+            return LobbyPhase.READY
+        if members_present >= 2:
+            return LobbyPhase.FILLING
+    return None
+
+
+def events_toward(current: LobbyPhase, target: LobbyPhase) -> tuple[LobbyEvent, ...]:
+    """The happy-path events that walk ``current`` forward to ``target``.
+
+    Evidence can skip steps — a host whose client first reports ``ChampSelect``
+    proves the lobby filled even though nobody saw it fill — so the walk applies
+    every intermediate edge in order (each still checked by
+    :func:`decide_transition`). Forward only: an equal or earlier ``target`` (a
+    dodge back to the lobby, a player leaving) and any phase off the happy path
+    (terminal, ``HOST_LOST``) yield no events, never a step backwards.
+    """
+    if current not in HAPPY_PATH or target not in HAPPY_PATH:
+        return ()
+    start, end = HAPPY_PATH.index(current), HAPPY_PATH.index(target)
+    return tuple(_ENTERING_EVENT[phase] for phase in HAPPY_PATH[start + 1 : end + 1])
 
 
 # --------------------------------------------------------------------------- #

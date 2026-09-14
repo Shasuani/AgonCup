@@ -101,3 +101,114 @@ export async function getPresence(
     detail: detailOf(json, `Could not load live presence (HTTP ${res.status}).`),
   };
 }
+
+/** One row of a live scoreboard — a display name, never a Riot ID. */
+export interface LiveBoardPlayer {
+  readonly name: string;
+  /** Data Dragon champion key, e.g. `MissFortune`. */
+  readonly championKey: string;
+  readonly championName: string;
+  /** `ORDER` (blue side) or `CHAOS` (red side). */
+  readonly team: string;
+  readonly level: number;
+  readonly isDead: boolean;
+  readonly respawnTimer: number;
+  /** Item ids by slot 0..6 (0 = empty; 6 = trinket). */
+  readonly items: number[];
+  readonly kills: number;
+  readonly deaths: number;
+  readonly assists: number;
+  readonly creepScore: number;
+  readonly wardScore: number;
+  readonly spell1Key: string | null;
+  readonly spell2Key: string | null;
+}
+
+/** The latest live scoreboard of one game in progress. */
+export interface LiveBoard {
+  readonly matchId: string;
+  /** Seconds since the game started. */
+  readonly gameTime: number;
+  readonly gameMode: string;
+  readonly updatedAt: string;
+  readonly players: LiveBoardPlayer[];
+}
+
+export type LiveBoardResult =
+  | { readonly ok: true; readonly board: LiveBoard }
+  | { readonly ok: false; readonly status: number; readonly detail: string };
+
+const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+const str = (v: unknown): string => (typeof v === "string" ? v : "");
+const optStr = (v: unknown): string | null => (typeof v === "string" && v !== "" ? v : null);
+
+function asLivePlayer(raw: unknown): LiveBoardPlayer {
+  const rec = (raw ?? {}) as Record<string, unknown>;
+  const items = Array.isArray(rec["items"]) ? (rec["items"] as unknown[]).map(num) : [];
+  return {
+    name: str(rec["name"]),
+    championKey: str(rec["champion_key"]),
+    championName: str(rec["champion_name"]),
+    team: str(rec["team"]),
+    level: num(rec["level"]),
+    isDead: rec["is_dead"] === true,
+    respawnTimer: num(rec["respawn_timer"]),
+    items,
+    kills: num(rec["kills"]),
+    deaths: num(rec["deaths"]),
+    assists: num(rec["assists"]),
+    creepScore: num(rec["creep_score"]),
+    wardScore: num(rec["ward_score"]),
+    spell1Key: optStr(rec["spell1_key"]),
+    spell2Key: optStr(rec["spell2_key"]),
+  };
+}
+
+/**
+ * The live scoreboard of a game in progress (`GET /api/v1/presence/live/{matchId}`).
+ * Same audience as {@link getPresence}. `404` = not live, or no board sent yet.
+ */
+export async function getLiveBoard(
+  args: AuthedArgs & { readonly matchId: string },
+  deps: HttpDeps = {},
+): Promise<LiveBoardResult> {
+  const doFetch = deps.fetch ?? fetch;
+  const backendUrl = resolveBackendUrl(deps.backendUrl);
+
+  let res: Response;
+  try {
+    res = await doFetch(`${backendUrl}/api/v1/presence/live/${encodeURIComponent(args.matchId)}`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${args.accessToken}` },
+    });
+  } catch (err) {
+    return { ok: false, status: 0, detail: `Backend unreachable: ${String(err)}` };
+  }
+
+  let json: unknown;
+  try {
+    json = await res.json();
+  } catch {
+    json = undefined;
+  }
+
+  if (res.ok) {
+    const rec = (json ?? {}) as Record<string, unknown>;
+    const players = Array.isArray(rec["players"]) ? rec["players"].map(asLivePlayer) : [];
+    return {
+      ok: true,
+      board: {
+        matchId: str(rec["match_id"]),
+        gameTime: num(rec["game_time"]),
+        gameMode: str(rec["game_mode"]),
+        updatedAt: str(rec["updated_at"]),
+        players,
+      },
+    };
+  }
+  return {
+    ok: false,
+    status: res.status,
+    detail: detailOf(json, `Could not load the live scoreboard (HTTP ${res.status}).`),
+  };
+}

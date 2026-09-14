@@ -337,6 +337,13 @@ async def record_winner(
 
     await session.flush()
 
+    # The game is decided, so its lobby is over and it is no longer "in game".
+    from app.orchestration.service import (
+        end_lobby_for_decided_match,  # noqa: PLC0415 - avoids a cycle
+    )
+
+    await end_lobby_for_decided_match(session, match_id=match_id)
+
     # (c) Advance the winner into the next round's placeholder (idempotent).
     await _advance_from(session, match)
     await session.flush()

@@ -216,6 +216,21 @@ test("heartbeats are last-write-wins while disconnected (only the freshest flush
   assert.equal(beats[0].heartbeat.sentAtMs, 2);
 });
 
+test("a live scoreboard goes out only while subscribed — never queued across a disconnect", async () => {
+  const { transport, sockets } = makeTransport();
+  transport.connect();
+  const live = { matchId: "match-1", snapshot: { gameTime: 60, gameMode: "CLASSIC", players: [] } };
+  await transport.sendLiveSnapshot(live); // not subscribed: dropped
+  const sock = sockets[0]!;
+  sock.fireOpen();
+  sock.fireMessage({ type: "subscribed" });
+  assert.deepEqual(sock.sent.map((s) => JSON.parse(s).type), ["subscribe"]);
+  await transport.sendLiveSnapshot(live);
+  const frames = sock.sent.map((s) => JSON.parse(s)).filter((f) => f.type === "live");
+  assert.equal(frames.length, 1);
+  assert.equal(frames[0].live.snapshot.gameTime, 60);
+});
+
 test("reconnects on drop and re-subscribes", () => {
   const { transport, sockets, fire, hasPending } = makeTransport();
   transport.connect();

@@ -34,8 +34,10 @@ from lol_core.orchestration import (
     apply_heartbeat,
     decide_failover,
     decide_transition,
+    events_toward,
     heartbeat_is_stale,
     is_epoch_current,
+    lobby_phase_from_gameflow,
     next_successor,
     reject_stale_ack,
     seed_host_succession,
@@ -467,3 +469,65 @@ def test_heartbeat_drives_failover_end_to_end() -> None:
     )
     assert d.action == FailoverAction.RECREATE
     assert d.new_epoch == 2
+
+
+# --------------------------------------------------------------------------- #
+# Host-observed progress (gameflow phase -> lobby phase, forward walk)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("gameflow", "present", "full", "expected"),
+    [
+        ("ChampSelect", 0, 10, LobbyPhase.STARTING),
+        ("InProgress", 0, 10, LobbyPhase.IN_GAME),
+        ("GameStart", 0, 2, LobbyPhase.IN_GAME),
+        ("Reconnect", 0, 10, LobbyPhase.IN_GAME),
+        ("EndOfGame", 0, 10, LobbyPhase.IN_GAME),  # closing the game is the report's job
+        ("Lobby", 10, 10, LobbyPhase.READY),
+        ("Lobby", 2, 2, LobbyPhase.READY),  # 1v1: host + opponent is a full lobby
+        ("Lobby", 9, 10, LobbyPhase.FILLING),
+        ("Lobby", 2, 10, LobbyPhase.FILLING),
+        ("Lobby", 1, 10, None),  # only the host — nobody has joined yet
+        ("Lobby", 0, 10, None),
+        ("None", 10, 10, None),
+        (None, 10, 10, None),
+        ("Matchmaking", 10, 10, None),
+    ],
+)
+def test_lobby_phase_from_gameflow(
+    gameflow: str | None, present: int, full: int, expected: LobbyPhase | None
+) -> None:
+    assert lobby_phase_from_gameflow(gameflow, members_present=present, full_lobby=full) == expected
+
+
+def test_events_toward_walks_every_intermediate_edge_legally() -> None:
+    events = events_toward(LobbyPhase.LOBBY_OPEN, LobbyPhase.IN_GAME)
+    assert events == (
+        LobbyEvent.INVITES_SENT,
+        LobbyEvent.ALL_MEMBERS_PRESENT,
+        LobbyEvent.CHAMP_SELECT_STARTED,
+        LobbyEvent.GAME_STARTED,
+    )
+    state = LobbyPhase.LOBBY_OPEN
+    for event in events:
+        state = decide_transition(state, event)
+    assert state == LobbyPhase.IN_GAME
+
+
+@pytest.mark.parametrize(("current", "target"), list(itertools.product(HAPPY_PATH, HAPPY_PATH)))
+def test_events_toward_is_legal_and_forward_only(current: LobbyPhase, target: LobbyPhase) -> None:
+    events = events_toward(current, target)
+    if HAPPY_PATH.index(target) <= HAPPY_PATH.index(current):
+        assert events == ()
+        return
+    state = current
+    for event in events:
+        state = decide_transition(state, event)
+    assert state == target
+
+
+@pytest.mark.parametrize("off_path", sorted(TERMINAL_PHASES))
+def test_events_toward_never_leaves_a_terminal_phase(off_path: LobbyPhase) -> None:
+    assert events_toward(off_path, LobbyPhase.IN_GAME) == ()
+    assert events_toward(LobbyPhase.LOBBY_OPEN, off_path) == ()

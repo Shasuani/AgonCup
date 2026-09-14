@@ -139,6 +139,11 @@ export interface MacSwapDeps {
   readonly isWritable: (path: string) => Promise<boolean>;
   readonly writeFile: (path: string, text: string) => Promise<void>;
   readonly chmod: (path: string, mode: number) => Promise<void>;
+  /**
+   * Recursive, force delete. MUST see through Electron's asar virtualisation
+   * (`original-fs`, not `fs`): the staging dir holds a whole app bundle whose
+   * `app.asar` the patched `fs.rm` skips, which then fails with ENOTEMPTY.
+   */
   readonly rm: (path: string) => Promise<void>;
   readonly mkdir: (path: string) => Promise<void>;
   /** Start the swap script detached from this process (it outlives us). */

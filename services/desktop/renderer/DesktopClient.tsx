@@ -12,12 +12,14 @@ import TournamentsScreen from './screens/TournamentsScreen';
 import TeamsScreen from './screens/TeamsScreen';
 import AccountsScreen from './screens/AccountsScreen';
 import HistoryScreen from './screens/HistoryScreen';
+import WatchScreen from './screens/WatchScreen';
 
-type Screen = 'home' | 'match' | 'tournaments' | 'teams' | 'history' | 'accounts';
+type Screen = 'home' | 'match' | 'watch' | 'tournaments' | 'teams' | 'history' | 'accounts';
 
 const NAV: { key: Screen; label: string; icon: IconName }[] = [
   { key: 'home', label: 'Home', icon: 'home' },
   { key: 'match', label: 'Live Match', icon: 'swords' },
+  { key: 'watch', label: 'Watch live', icon: 'eye' },
   { key: 'tournaments', label: 'Tournaments', icon: 'trophy' },
   { key: 'teams', label: 'Teams', icon: 'users' },
   { key: 'history', label: 'Match history', icon: 'clock' },
@@ -39,7 +41,8 @@ export default function DesktopClient({ user, onSignOut }: { user: BridgeUser | 
   // one this device saw, else the first linked account — name, rank, icon and
   // level all from that ONE account (see identity.ts).
   const me = useIdentity(user);
-  const presence = useAsync(async () => { const r = b ? await b.presence() : null; return r && r.ok ? r.playersInGame : 0; }, [], 15_000);
+  const presence = useAsync(async () => { const r = b ? await b.presence() : null; return r && r.ok ? { players: r.playersInGame, games: r.entries.length } : { players: 0, games: 0 }; }, [], 15_000);
+  const inGame = presence.data?.players ?? 0;
   // The Live Match tab gets a badge while one of the player's matches is at a
   // phase where their attention is needed (a lobby exists or a game is running).
   const matches = useAsync(async () => { const r = b ? await b.listMyMatches() : null; return r && r.ok ? r.matches : []; }, [], 10_000);
@@ -91,7 +94,8 @@ export default function DesktopClient({ user, onSignOut }: { user: BridgeUser | 
           <nav className="ll-nav" aria-label="Primary">
             {NAV.map((item) => {
               const active = screen === item.key;
-              const badge = item.key === 'match' && liveCount > 0 ? liveCount : null;
+              const games = presence.data?.games ?? 0;
+              const badge = item.key === 'match' && liveCount > 0 ? liveCount : item.key === 'watch' && games > 0 ? games : null;
               return (
                 <button key={item.key} type="button" onClick={() => setScreen(item.key)} className={`ll-nav__item${active ? ' is-active' : ''}`} aria-current={active ? 'page' : undefined}>
                   <Icon name={item.icon} size={18} />
@@ -105,9 +109,9 @@ export default function DesktopClient({ user, onSignOut }: { user: BridgeUser | 
           <div className="ll-sidebar__foot">
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
               <span className="ll-cap">Presence</span>
-              <span style={{ fontSize: 12, color: '#0ac8b9', display: 'inline-flex', alignItems: 'center', gap: 7 }}>
-                <Dot tone="teal" size={6} pulse={(presence.data ?? 0) > 0} /> {presence.data ?? 0} in game
-              </span>
+              <button type="button" className="ll-link" onClick={() => setScreen('watch')} title="Watch the games on now" style={{ fontSize: 12, color: '#0ac8b9', display: 'inline-flex', alignItems: 'center', gap: 7, cursor: 'pointer' }}>
+                <Dot tone="teal" size={6} pulse={inGame > 0} /> {inGame} in game
+              </button>
             </div>
             <VersionLine state={update} onShowUpdate={() => setLaterFor(null)} />
             <Button size="sm" block icon="logout" onClick={signOut}>Sign out</Button>
@@ -119,6 +123,7 @@ export default function DesktopClient({ user, onSignOut }: { user: BridgeUser | 
           <div className="ll-page" key={screen}>
             {screen === 'home' && <HomeScreen user={user} onOpenMatch={() => setScreen('match')} onNav={setScreen} />}
             {screen === 'match' && <LiveMatchScreen lcu={lcu} />}
+            {screen === 'watch' && <WatchScreen />}
             {screen === 'tournaments' && <TournamentsScreen />}
             {screen === 'teams' && <TeamsScreen />}
             {screen === 'history' && <HistoryScreen user={user} />}

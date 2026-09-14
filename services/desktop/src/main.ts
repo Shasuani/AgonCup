@@ -73,7 +73,7 @@ import {
   rejectJoinRequest,
   removeMember,
 } from "./teams/teams.js";
-import { getPresence } from "./presence/presence.js";
+import { getLiveBoard, getPresence } from "./presence/presence.js";
 import { listMyHistory } from "./results/history.js";
 import {
   pairDesktop,
@@ -1157,6 +1157,12 @@ async function bootstrap(): Promise<void> {
   ipcMain.handle("lol:presence", () =>
     withSession((t) => getPresence({ accessToken: t }, { backendUrl: backendBaseUrl() })),
   );
+  // The live scoreboard of one game in progress (the Watch screen).
+  ipcMain.handle("lol:live-board", (_event, args: { matchId: string }) =>
+    withSession((t) =>
+      getLiveBoard({ accessToken: t, matchId: String(args?.matchId ?? "") }, { backendUrl: backendBaseUrl() }),
+    ),
+  );
   // The player's own recent games (per-game scoreboards) — the Home strip and
   // the Match history screen. Read-only, display-only (see results/history.ts).
   ipcMain.handle("lol:history-mine", () =>
@@ -1200,6 +1206,10 @@ async function bootstrap(): Promise<void> {
       log("lcu_status", { status });
     },
   });
+  // Pull complement: the poller only pushes on a CHANGE, and its first answer
+  // lands before the renderer is listening — so with League already open the
+  // badge sat on "Looking for League…" until League was closed and reopened.
+  ipcMain.handle("lol:lcu-status-get", () => poller.status);
 
   // --- champ-select board poller -> renderer live status -------------------- //
   // Read-only spectator surface: each client renders the full board from its

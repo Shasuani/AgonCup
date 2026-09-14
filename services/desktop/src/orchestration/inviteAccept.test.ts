@@ -316,3 +316,87 @@ test("an unreadable lobby name falls back to isCustom and reuses (drift bias)", 
   assert.equal(handle.lobbyId, "party-9");
   assert.equal(requests.filter((r) => r.method === "POST").length, 0);
 });
+
+test("the real adapter reads who is in the custom lobby (members + both custom teams, deduped)", async () => {
+  const adapter = adapterWith({
+    respond: (req) =>
+      req.url.endsWith("/lol-lobby/v2/lobby")
+        ? {
+            status: 200,
+            body: JSON.stringify({
+              partyId: "party-1",
+              gameConfig: {
+                isCustom: true,
+                customLobbyName: "LoL-abc",
+                customTeam100: [{ summonerId: 777 }, { summonerId: 101 }],
+                customTeam200: [{ summonerId: 202 }, { summonerId: 0 }],
+              },
+              members: [{ summonerId: 777 }, { summonerId: "303" }, { puuid: "no-id" }],
+            }),
+          }
+        : { status: 404, body: "{}" },
+  });
+  const lobby = await adapter.getCurrentLobby();
+  assert.deepEqual([...(lobby?.memberSummonerIds ?? [])].sort(), ["101", "202", "303", "777"]);
+});
+
+test("the real adapter reads the live scoreboard — TAB fields only, items by slot, Data Dragon keys", async () => {
+  const adapter = adapterWith({
+    respond: (req) =>
+      req.url === "https://127.0.0.1:2999/liveclientdata/allgamedata"
+        ? {
+            status: 200,
+            body: JSON.stringify({
+              activePlayer: { currentGold: 1234, riotId: "Me#EUW" },
+              gameData: { gameMode: "CLASSIC", gameTime: 754.2 },
+              allPlayers: [
+                {
+                  riotId: "Faker#KR1",
+                  championName: "Miss Fortune",
+                  rawChampionName: "game_character_displayname_MissFortune",
+                  team: "CHAOS",
+                  level: 9,
+                  isDead: true,
+                  respawnTimer: 17.5,
+                  items: [
+                    { itemID: 3340, slot: 6 },
+                    { itemID: 1055, slot: 0 },
+                    { itemID: 3006, slot: 2 },
+                  ],
+                  scores: { kills: 4, deaths: 2, assists: 7, creepScore: 110, wardScore: 6.4 },
+                  summonerSpells: {
+                    summonerSpellOne: { displayName: "Flash", rawDisplayName: "GeneratedTip_SummonerSpell_SummonerFlash_DisplayName" },
+                    summonerSpellTwo: { displayName: "Heal", rawDisplayName: "GeneratedTip_SummonerSpell_SummonerHeal_DisplayName" },
+                  },
+                },
+                { riotIdGameName: "Solo", riotIdTagLine: "EUNE", team: "ORDER", isDead: false, respawnTimer: 9 },
+              ],
+            }),
+          }
+        : { status: 404, body: "{}" },
+  });
+  const snap = await adapter.captureLiveGameSnapshot();
+  assert.equal(snap.gameTime, 754.2);
+  assert.equal(snap.gameMode, "CLASSIC");
+  assert.equal("currentGold" in (snap as object), false);
+  const [mf, solo] = snap.players;
+  assert.deepEqual(mf, {
+    riotId: "Faker#KR1",
+    championKey: "MissFortune",
+    championName: "Miss Fortune",
+    team: "CHAOS",
+    level: 9,
+    isDead: true,
+    respawnTimer: 17.5,
+    items: [1055, 0, 3006, 0, 0, 0, 3340],
+    kills: 4,
+    deaths: 2,
+    assists: 7,
+    creepScore: 110,
+    wardScore: 6.4,
+    spell1Key: "SummonerFlash",
+    spell2Key: "SummonerHeal",
+  });
+  assert.equal(solo?.riotId, "Solo#EUNE");
+  assert.equal(solo?.respawnTimer, 0, "a living player has no respawn timer");
+});

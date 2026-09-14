@@ -278,6 +278,32 @@ export interface PresenceEntryBridge {
   players: string[];
 }
 
+/** One row of a live scoreboard (display name, never a Riot ID). */
+export interface LiveBoardPlayerBridge {
+  name: string;
+  championKey: string;
+  championName: string;
+  team: string;
+  level: number;
+  isDead: boolean;
+  respawnTimer: number;
+  items: number[];
+  kills: number;
+  deaths: number;
+  assists: number;
+  creepScore: number;
+  wardScore: number;
+  spell1Key: string | null;
+  spell2Key: string | null;
+}
+
+export type LiveBoardBridgeResult =
+  | {
+      ok: true;
+      board: { matchId: string; gameTime: number; gameMode: string; updatedAt: string; players: LiveBoardPlayerBridge[] };
+    }
+  | { ok: false; status: number; detail: string };
+
 export type PresenceBridgeResult =
   | { ok: true; playersInGame: number; entries: PresenceEntryBridge[] }
   | { ok: false; status: number; detail: string };
@@ -427,6 +453,8 @@ export interface LolBridge {
   deleteTeam(teamId: string): Promise<ActOnRequestBridgeResult>;
   /** Global live presence (who is in a game + which server). */
   presence(): Promise<PresenceBridgeResult>;
+  /** The live scoreboard of a game in progress (404 until a client sent one). */
+  liveBoard(matchId: string): Promise<LiveBoardBridgeResult>;
   /** The signed-in player's recent games (per-game scoreboards). */
   myHistory(): Promise<HistoryBridgeResult>;
   /** The last summoner icon/level this device saw (works with League closed). */
@@ -448,6 +476,8 @@ export interface LolBridge {
   readSummoner(): Promise<ReadSummonerBridgeResult>;
   /** Subscribe to LCU badge updates. Returns an unsubscribe function. */
   onLcuStatus(callback: (status: LcuStatusBridge) => void): () => void;
+  /** The current badge state (`null` before the first probe), for a screen that mounts after the last push. */
+  getLcuStatus(): Promise<LcuStatusBridge | null>;
   /** Subscribe to live champ-select board updates (`null` = not in select). */
   onChampSelect(callback: (board: ChampSelectBridge | null) => void): () => void;
   /** Subscribe to live-game winner-banner updates (`null` = nothing to show). */
@@ -539,6 +569,7 @@ const bridge: LolBridge = {
   deleteTeam: (teamId) =>
     ipcRenderer.invoke("lol:team-delete", { teamId }) as Promise<ActOnRequestBridgeResult>,
   presence: () => ipcRenderer.invoke("lol:presence") as Promise<PresenceBridgeResult>,
+  liveBoard: (matchId) => ipcRenderer.invoke("lol:live-board", { matchId }) as Promise<LiveBoardBridgeResult>,
   myHistory: () => ipcRenderer.invoke("lol:history-mine") as Promise<HistoryBridgeResult>,
   getProfile: () => ipcRenderer.invoke("lol:profile-get") as Promise<ProfileBridgeResult>,
   getUpdateState: () => ipcRenderer.invoke("lol:update-state") as Promise<UpdateStateBridge>,
@@ -560,6 +591,7 @@ const bridge: LolBridge = {
     ipcRenderer.on("lol:lcu-status", listener);
     return () => ipcRenderer.removeListener("lol:lcu-status", listener);
   },
+  getLcuStatus: () => ipcRenderer.invoke("lol:lcu-status-get") as Promise<LcuStatusBridge | null>,
   onChampSelect: (callback) => {
     const listener = (_event: unknown, board: ChampSelectBridge | null): void => callback(board);
     ipcRenderer.on("lol:champ-select", listener);

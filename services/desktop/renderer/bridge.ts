@@ -79,6 +79,9 @@ export interface Tournament { id: string; name: string; status: string; format: 
 export interface MyTeam { teamId: string; name: string; role: string; status: string }
 export interface TeamMember { teamId: string; userId: string; role: string; displayName: string }
 export interface JoinRequest { teamId: string; teamName: string; userId: string; displayName: string }
+/** One row of a live scoreboard — a display name, never a Riot ID. */
+export interface LiveBoardPlayer { name: string; championKey: string; championName: string; team: string; level: number; isDead: boolean; respawnTimer: number; items: number[]; kills: number; deaths: number; assists: number; creepScore: number; wardScore: number; spell1Key: string | null; spell2Key: string | null }
+export interface LiveBoard { matchId: string; gameTime: number; gameMode: string; updatedAt: string; players: LiveBoardPlayer[] }
 export interface PresenceEntry { matchId: string; guildName: string; tournamentName: string; gameMode: string; startedAt: string | null; players: string[] }
 export interface BracketMatch { id: string; round: number; slot: number; teamAName: string | null; teamBName: string | null; winnerTeamId: string | null; teamAId: string | null; teamBId: string | null; status: string; readyDeadlineAt: string | null; teamAReady: boolean; teamBReady: boolean }
 
@@ -125,6 +128,8 @@ export interface LolBridge {
   leaveTeam(teamId: string): Promise<Res<Record<string, never>>>;
   deleteTeam(teamId: string): Promise<Res<Record<string, never>>>;
   presence(): Promise<Res<{ playersInGame: number; entries: PresenceEntry[] }>>;
+  /** The live scoreboard of a game in progress; absent on an old main-process build. */
+  liveBoard?(matchId: string): Promise<Res<{ board: LiveBoard }>>;
   /** The signed-in player's recent games; absent on an old main-process build. */
   myHistory?(): Promise<Res<{ games: HistoryGame[] }>>;
   /** The last summoner icon/level this device saw (works with League closed); absent on an old build. */
@@ -145,6 +150,7 @@ export interface LolBridge {
   setAutomation(enabled: boolean): Promise<{ ok: true; enabled: boolean }>;
   readSummoner(): Promise<ReadSummoner>;
   onLcuStatus(cb: (s: LcuStatus) => void): () => void;
+  getLcuStatus?(): Promise<LcuStatus | null>;
   onChampSelect?(cb: (board: ChampSelectBoard | null) => void): () => void;
   onLiveGame?(cb: (view: LiveGame | null) => void): () => void;
   getLiveGame?(): Promise<LiveGame | null>;
@@ -195,7 +201,13 @@ export function useLcuStatus(): LcuStatus {
   useEffect(() => {
     const b = lol();
     if (!b) return;
-    return b.onLcuStatus(setStatus);
+    // Pull as well as listen: pushes only come on a change, so a badge that
+    // mounts after the last one (League already open) would never hear it. A
+    // push that beats the pull is newer, so the pull must not overwrite it.
+    let pushed = false;
+    const off = b.onLcuStatus((s) => { pushed = true; setStatus(s); });
+    b.getLcuStatus?.().then((s) => { if (s !== null && !pushed) setStatus(s); }, () => undefined);
+    return off;
   }, []);
   return status;
 }

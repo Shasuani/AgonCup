@@ -13,6 +13,7 @@ import type {
   BackendTransport,
   HostHeartbeat,
   LobbyAck,
+  LiveSnapshotMessage,
   LobbyCommand,
   ResultReportMessage,
   Scheduler,
@@ -24,6 +25,7 @@ function makeTransport() {
   const acks: LobbyAck[] = [];
   const heartbeats: HostHeartbeat[] = [];
   const reports: ResultReportMessage[] = [];
+  const lives: LiveSnapshotMessage[] = [];
   let handler: ((c: LobbyCommand) => void) | null = null;
   const transport: BackendTransport = {
     onCommand(h) {
@@ -41,12 +43,16 @@ function makeTransport() {
     async sendReport(r) {
       reports.push(r);
     },
+    async sendLiveSnapshot(m) {
+      lives.push(m);
+    },
   };
   return {
     transport,
     acks,
     heartbeats,
     reports,
+    lives,
     emit: (c: LobbyCommand) => handler?.(c),
   };
 }
@@ -89,7 +95,11 @@ function makeAdapter(over: Partial<Record<string, unknown>> = {}) {
         return { lobbyId: "lobby-made-by-hand", isCustom: true } as never;
       }
       if (over.noLobby) return null;
-      return { lobbyId: "lobby-xyz", isCustom: true } as never;
+      return {
+        lobbyId: "lobby-xyz",
+        isCustom: true,
+        ...(Array.isArray(over.lobbyMembers) ? { memberSummonerIds: over.lobbyMembers } : {}),
+      } as never;
     },
     async invite(ids: readonly unknown[]) {
       calls.push(`invite:${ids.length}`);
@@ -126,6 +136,15 @@ function makeAdapter(over: Partial<Record<string, unknown>> = {}) {
         events: (over.liveEvents as unknown[]) ?? [
           { eventId: 1, eventName: "ChampionKill", eventTime: 12.3 },
         ],
+      } as never;
+    },
+    async captureLiveGameSnapshot() {
+      calls.push("captureLiveGameSnapshot");
+      if (over.snapshotThrows) throw new Error(":2999 not up");
+      return {
+        gameTime: 61,
+        gameMode: "CLASSIC",
+        players: [{ riotId: "A#1", championKey: "Ahri", championName: "Ahri", team: "ORDER", level: 3, isDead: false, respawnTimer: 0, items: [1056, 0, 0, 0, 0, 0, 3340], kills: 1, deaths: 0, assists: 0, creepScore: 12, wardScore: 0 }],
       } as never;
     },
     async captureLiveClientReport(_reporterPuuid?: unknown, liveClientEvents?: unknown) {
@@ -691,4 +710,85 @@ test("a flaky phase read does not stall the parked manual-path invite", async ()
   await runTickAsync(s); // phase read throws; lobby appears on this retry's read
   assert.ok(a.calls.includes("invite:2"));
   assert.equal(t.acks[0]?.ok, true);
+});
+
+test("the host's lobby heartbeat carries who is in the lobby", async () => {
+  // The only evidence the backend has of the custom game filling up: without it
+  // the match sat at "invites are going out" until the result came in.
+  const t = makeTransport();
+  const a = makeAdapter({ phase: "Lobby", lobbyMembers: ["s-host", "s1", "s2"] });
+  const s = makeScheduler();
+  makeController(t, a, s).start();
+
+  await runTickAsync(s); // not the host yet: nothing created
+  assert.equal(t.heartbeats.at(-1)?.lobbyMemberSummonerIds, undefined);
+
+  t.emit(createCmd());
+  await tickMicrotasks();
+  await runTickAsync(s);
+  assert.equal(t.heartbeats.at(-1)?.isHost, true);
+  assert.deepEqual(t.heartbeats.at(-1)?.lobbyMemberSummonerIds, ["s-host", "s1", "s2"]);
+});
+
+test("a guest's heartbeat never reads or sends the lobby roster", async () => {
+  const t = makeTransport();
+  const a = makeAdapter({ phase: "Lobby", lobbyMembers: ["s-host", "s1"] });
+  const s = makeScheduler();
+  const c = makeController(t, a, s);
+  c.setAssignedHost(false);
+  c.start();
+  await runTickAsync(s);
+  assert.equal(t.heartbeats.at(-1)?.lobbyMemberSummonerIds, undefined);
+  assert.equal(a.calls.includes("getCurrentLobby"), false);
+});
+
+test("the host sends no roster outside the lobby, or when the lobby is unreadable", async () => {
+  const t = makeTransport();
+  const a = makeAdapter({ phases: ["Lobby", "ChampSelect"], noLobby: true });
+  const s = makeScheduler();
+  makeController(t, a, s).start();
+  t.emit(createCmd());
+  await tickMicrotasks();
+  await runTickAsync(s); // Lobby, but no lobby readable
+  assert.equal(t.heartbeats.at(-1)?.lobbyMemberSummonerIds, undefined);
+  await runTickAsync(s); // ChampSelect
+  assert.equal(t.heartbeats.at(-1)?.phase, "ChampSelect");
+  assert.equal(t.heartbeats.at(-1)?.lobbyMemberSummonerIds, undefined);
+});
+
+test("while the game runs the client shares the live scoreboard, at most every 5s", async () => {
+  const t = makeTransport();
+  const a = makeAdapter({ phase: "InProgress" });
+  const s = makeScheduler();
+  let now = 10_000;
+  makeController(t, a, s, 2000, { nowMs: () => now }).start();
+
+  await runTickAsync(s);
+  assert.equal(t.lives.length, 1);
+  assert.equal(t.lives[0]?.matchId, MATCH);
+  assert.deepEqual(t.lives[0]?.snapshot.players[0]?.items, [1056, 0, 0, 0, 0, 0, 3340]);
+
+  now += 2000; // next heartbeat, inside the window: no extra :2999 read
+  await runTickAsync(s);
+  assert.equal(t.lives.length, 1);
+  assert.equal(a.calls.filter((c) => c === "captureLiveGameSnapshot").length, 1);
+
+  now += 3000;
+  await runTickAsync(s);
+  assert.equal(t.lives.length, 2);
+});
+
+test("no live scoreboard outside the game, and a dead :2999 never breaks the tick", async () => {
+  const lobby = makeTransport();
+  const s1 = makeScheduler();
+  makeController(lobby, makeAdapter({ phase: "Lobby" }), s1).start();
+  await runTickAsync(s1);
+  assert.equal(lobby.lives.length, 0);
+
+  const t = makeTransport();
+  const s2 = makeScheduler();
+  makeController(t, makeAdapter({ phase: "InProgress", snapshotThrows: true }), s2).start();
+  await runTickAsync(s2);
+  assert.equal(t.lives.length, 0);
+  assert.ok(t.heartbeats.length >= 1, "the heartbeat still went out");
 });

@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
-from lol_core import FailoverAction, LobbyEvent
+from lol_core import PRE_GAME_PHASES, FailoverAction, LobbyEvent
 from lol_realtime import AutoAcceptCommand, CreateLobbyCommand, PromoteHostCommand
 from lol_schemas.enums import LobbyPhase
 
@@ -42,6 +42,7 @@ from app.orchestration.service import (
     default_lobby_credentials,
     derive_server_seed,
     ingest_heartbeat,
+    ingest_host_progress,
     ingest_lobby_state,
     initialize_lobby,
     redesignate_host,
@@ -957,3 +958,200 @@ async def test_a_notification_failure_never_fails_a_created_lobby(monkeypatch) -
     )
 
     assert result.state == LobbyPhase.AWAITING_CREATE
+
+
+# ---------------------------------------------------------------------------
+# Host-observed progress: the host heartbeat walks the lobby past LOBBY_OPEN
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def side_effects(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, LobbyPhase]]:
+    """Record the presence/feed side effects instead of reaching Redis."""
+    calls: list[tuple[str, LobbyPhase]] = []
+
+    async def presence(session: Any, *, match_id: uuid.UUID, state: LobbyPhase) -> None:
+        calls.append(("presence", state))
+
+    async def announce(session: Any, *, match_id: uuid.UUID, state: LobbyPhase) -> None:
+        calls.append(("announce", state))
+
+    monkeypatch.setattr(service, "_sync_presence", presence)
+    monkeypatch.setattr(service, "_announce_phase", announce)
+    return calls
+
+
+def _progress_session(
+    state: LobbyPhase, *, roster: int = 10
+) -> tuple[FakeSession, uuid.UUID, MatchLobby]:
+    """A 5v5 match (no Tournament row -> the 5v5 default) whose host is puuid-0."""
+    session, match_id, _ = _seeded_session(opt_ins=roster)
+    lobby = _lobby(
+        match_id, host_puuid="puuid-0", succession=["puuid-0"], host_epoch=1, state=state
+    )
+    session.store[MatchLobby].append(lobby)
+    return session, match_id, lobby
+
+
+@pytest.mark.asyncio
+async def test_host_champ_select_walks_an_open_lobby_to_starting(
+    side_effects: list[tuple[str, LobbyPhase]],
+) -> None:
+    session, match_id, lobby = _progress_session(LobbyPhase.LOBBY_OPEN)
+    moved = await ingest_host_progress(
+        session,
+        match_id=match_id,
+        host_epoch=1,
+        reporter_puuid="puuid-0",
+        gameflow_phase="ChampSelect",
+    )
+    assert moved == LobbyPhase.STARTING
+    assert lobby.state == LobbyPhase.STARTING
+
+
+@pytest.mark.asyncio
+async def test_host_in_progress_reaches_in_game_and_announces_it(
+    side_effects: list[tuple[str, LobbyPhase]],
+) -> None:
+    session, match_id, lobby = _progress_session(LobbyPhase.STARTING)
+    moved = await ingest_host_progress(
+        session,
+        match_id=match_id,
+        host_epoch=1,
+        reporter_puuid="puuid-0",
+        gameflow_phase="InProgress",
+    )
+    assert moved == LobbyPhase.IN_GAME
+    # the "now live" feed post and the in-game presence finally fire
+    assert side_effects == [("presence", LobbyPhase.IN_GAME), ("announce", LobbyPhase.IN_GAME)]
+    # ...and the watchdog now treats the lobby as a hard no-op instead of re-creating it
+    assert lobby.state not in PRE_GAME_PHASES
+
+
+@pytest.mark.asyncio
+async def test_lobby_members_move_open_to_filling_then_ready(
+    side_effects: list[tuple[str, LobbyPhase]],
+) -> None:
+    session, match_id, lobby = _progress_session(LobbyPhase.LOBBY_OPEN)
+    kw: dict[str, Any] = {"match_id": match_id, "host_epoch": 1, "reporter_puuid": "puuid-0"}
+
+    # host alone: nothing proven yet
+    assert (
+        await ingest_host_progress(
+            session, **kw, gameflow_phase="Lobby", lobby_member_summoner_ids=["sid-0"]
+        )
+        is None
+    )
+    # one roster player joined
+    assert (
+        await ingest_host_progress(
+            session, **kw, gameflow_phase="Lobby", lobby_member_summoner_ids=["sid-0", "sid-3"]
+        )
+        == LobbyPhase.FILLING
+    )
+    # nine roster players + a stranger who knows the password is NOT a full lobby
+    nine = [f"sid-{i}" for i in range(9)]
+    assert (
+        await ingest_host_progress(
+            session, **kw, gameflow_phase="Lobby", lobby_member_summoner_ids=[*nine, "stranger"]
+        )
+        is None
+    )
+    assert lobby.state == LobbyPhase.FILLING
+    # all ten roster players
+    ten = [f"sid-{i}" for i in range(10)]
+    assert (
+        await ingest_host_progress(
+            session, **kw, gameflow_phase="Lobby", lobby_member_summoner_ids=ten
+        )
+        == LobbyPhase.READY
+    )
+    # a player leaving never walks it back
+    assert (
+        await ingest_host_progress(
+            session, **kw, gameflow_phase="Lobby", lobby_member_summoner_ids=nine
+        )
+        is None
+    )
+    assert lobby.state == LobbyPhase.READY
+
+
+@pytest.mark.asyncio
+async def test_host_progress_ignores_non_hosts_stale_epochs_and_unopened_lobbies(
+    side_effects: list[tuple[str, LobbyPhase]],
+) -> None:
+    session, match_id, lobby = _progress_session(LobbyPhase.LOBBY_OPEN)
+    # a guest whose frame claims isHost: the server-stamped identity is not the host
+    assert (
+        await ingest_host_progress(
+            session,
+            match_id=match_id,
+            host_epoch=1,
+            reporter_puuid="puuid-4",
+            gameflow_phase="InProgress",
+        )
+        is None
+    )
+    assert (
+        await ingest_host_progress(
+            session,
+            match_id=match_id,
+            host_epoch=1,
+            reporter_puuid=None,
+            gameflow_phase="InProgress",
+        )
+        is None
+    )
+    # a deposed host at an old epoch
+    assert (
+        await ingest_host_progress(
+            session,
+            match_id=match_id,
+            host_epoch=0,
+            reporter_puuid="puuid-0",
+            gameflow_phase="InProgress",
+        )
+        is None
+    )
+    assert lobby.state == LobbyPhase.LOBBY_OPEN
+
+    # before the host acked the lobby into existence, and once the manual path took over
+    for state in (LobbyPhase.AWAITING_CREATE, LobbyPhase.HOST_LOST, LobbyPhase.IN_GAME):
+        lobby.state = state
+        assert (
+            await ingest_host_progress(
+                session,
+                match_id=match_id,
+                host_epoch=1,
+                reporter_puuid="puuid-0",
+                gameflow_phase="InProgress",
+            )
+            is None
+        )
+        assert lobby.state == state
+    assert side_effects == []
+
+
+@pytest.mark.asyncio
+async def test_a_decided_match_ends_its_lobby_and_leaves_presence(
+    side_effects: list[tuple[str, LobbyPhase]],
+) -> None:
+    # however far the lobby got — in game, or never past the host being picked
+    for state in (LobbyPhase.IN_GAME, LobbyPhase.RESULT_PENDING, LobbyPhase.ASSIGNED_HOST):
+        side_effects.clear()
+        session, match_id, lobby = _progress_session(state)
+        assert await service.end_lobby_for_decided_match(session, match_id=match_id) == (
+            LobbyPhase.ENDED
+        )
+        assert lobby.state == LobbyPhase.ENDED
+        assert side_effects == [("presence", LobbyPhase.ENDED)]
+
+    # a hand-made (terminal) lobby keeps its state but still leaves presence
+    side_effects.clear()
+    session, match_id, lobby = _progress_session(LobbyPhase.HOST_LOST)
+    assert await service.end_lobby_for_decided_match(session, match_id=match_id) == (
+        LobbyPhase.HOST_LOST
+    )
+    assert side_effects == [("presence", LobbyPhase.ENDED)]
+
+    # a match that never had a lobby (a bye, an admin-decided no-show)
+    empty, other, _ = _seeded_session(opt_ins=2)
+    assert await service.end_lobby_for_decided_match(empty, match_id=other) is None

@@ -30,6 +30,9 @@ log = get_logger("app.presence")
 
 #: Redis key namespace for one in-game match's presence entry.
 PRESENCE_KEY_PREFIX = "lol:presence:match:"
+#: Redis key namespace for a live game's scoreboard (see :mod:`app.presence.live`);
+#: it lives and dies with the presence entry, so it is defined next to it.
+LIVE_KEY_PREFIX = "lol:live:match:"
 #: Default TTL: a League game rarely exceeds ~90 min; a stale entry self-expires
 #: even if the "game ended" clear is lost (best-effort orchestration).
 DEFAULT_TTL_S = 5400
@@ -56,8 +59,9 @@ async def publish_presence(redis: Any, *, entry: PresenceEntry, ttl_s: int = DEF
 
 
 async def clear_presence(redis: Any, *, match_id: str) -> None:
-    """Remove a match's presence entry (game ended/aborted)."""
+    """Remove a match's presence entry and live scoreboard (game ended/aborted)."""
     await redis.delete(_key(match_id))
+    await redis.delete(f"{LIVE_KEY_PREFIX}{match_id}")
 
 
 async def list_presence(redis: Any) -> list[PresenceEntry]:

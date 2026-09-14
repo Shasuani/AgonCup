@@ -10,11 +10,12 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from app.auth.deps import Principal, get_current_principal
-from app.presence import service
+from app.presence import live, service
+from app.presence.live import LiveBoard
 from app.presence.service import PresenceEntry
 
 router = APIRouter(prefix="/presence", tags=["presence"])
@@ -42,3 +43,23 @@ async def get_presence(
         players_in_game=sum(len(e.players) for e in entries),
         entries=entries,
     )
+
+
+@router.get(
+    "/live/{match_id}",
+    response_model=LiveBoard,
+    summary="The live scoreboard of a game in progress (global, display-only)",
+)
+async def get_live_board(
+    match_id: str,
+    _principal: Annotated[Principal, Depends(get_current_principal)],
+    redis: Annotated[Any, Depends(get_presence_redis)],
+) -> LiveBoard:
+    """Same audience as ``GET /presence``: any signed-in player can watch a game
+    presence lists. 404 until a client has sent a board, and once it expires."""
+    if await redis.get(f"{service.PRESENCE_KEY_PREFIX}{match_id}") is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="game is not live")
+    board = await live.get_live_board(redis, match_id=match_id)
+    if board is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="no live scoreboard yet")
+    return board

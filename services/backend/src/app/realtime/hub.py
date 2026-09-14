@@ -28,7 +28,8 @@ Wire contract (backend <-> desktop, PLAN.md §3.6.1 / §5)
   ``{"type":"command","command": <LobbyCommand JSON>}`` to the subscribed client.
 * **CLIENT->SERVER** — ``{"type":"ack"|"heartbeat"|"report", ...}`` is routed to
   the :mod:`app.orchestration.service` ingestion functions (epoch-fenced
-  server-side; we REUSE them, never reimplement the fence).
+  server-side; we REUSE them, never reimplement the fence). ``{"type":"live"}``
+  carries the display-only live scoreboard to :mod:`app.presence.live`.
 * **Framing** — JSON text frames; one Redis subscription per connection; a
   malformed frame is logged + skipped, never fatal; clean teardown on disconnect.
 """
@@ -54,6 +55,7 @@ from app.auth.jwt import InvalidAccessToken, verify_access_token
 from app.logging import get_logger
 from app.models import ClientSession, ResultReport
 from app.orchestration import service
+from app.presence import live as live_board
 from app.results import corroboration
 
 logger = get_logger(__name__)
@@ -304,6 +306,8 @@ async def route_inbound(
     elif kind == "report":
         await _route_report(session, subscription=subscription, frame=frame)
         return subscription.match_id
+    elif kind == "live":
+        await _route_live(session, subscription=subscription, frame=frame)
     else:
         logger.warning("realtime.inbound.unknown_type", type=kind)
     return None
@@ -330,6 +334,24 @@ async def _route_heartbeat(
         )
     except (KeyError, ValueError, service.OrchestrationError) as exc:
         logger.warning("realtime.inbound.heartbeat_dropped", error=str(exc))
+        return
+    # The same beat is the only witness of how far the game got: the raw phase and,
+    # while in the lobby, who the host's client sees in it. The service re-checks
+    # that this socket really IS the host — `isHost` above is the client's word.
+    raw_members = body.get("lobbyMemberSummonerIds")
+    members = [str(m) for m in raw_members] if isinstance(raw_members, list) else []
+    phase = body.get("phase")
+    try:
+        await service.ingest_host_progress(
+            session,
+            match_id=subscription.match_id,
+            host_epoch=int(body["hostEpoch"]),
+            reporter_puuid=subscription.reporter_puuid,
+            gameflow_phase=phase if isinstance(phase, str) else None,
+            lobby_member_summoner_ids=members,
+        )
+    except (KeyError, ValueError, service.OrchestrationError) as exc:
+        logger.warning("realtime.inbound.host_progress_dropped", error=str(exc))
 
 
 async def _route_ack(
@@ -353,6 +375,23 @@ async def _route_ack(
         )
     except (KeyError, ValueError, service.OrchestrationError) as exc:
         logger.warning("realtime.inbound.ack_dropped", error=str(exc))
+
+
+async def _route_live(
+    session: AsyncSession, *, subscription: Subscription, frame: dict[str, Any]
+) -> None:
+    # The live scoreboard (display-only, see app.presence.live). Best-effort in
+    # every way: a bad snapshot or a Redis hiccup is logged and the socket — which
+    # also carries acks and the result report — keeps serving.
+    body = frame.get("live") or {}
+    try:
+        from app.realtime.redis_client import get_redis  # noqa: PLC0415 - deferred, IO-free import
+
+        await live_board.ingest_live_snapshot(
+            session, get_redis(), match_id=subscription.match_id, raw=body.get("snapshot")
+        )
+    except Exception as exc:  # noqa: BLE001 - never let a scoreboard cost the socket
+        logger.warning("realtime.inbound.live_dropped", error=str(exc))
 
 
 async def _route_report(

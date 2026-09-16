@@ -1244,8 +1244,14 @@ def test_session_cookie_round_trips_the_refresh_token() -> None:
 
 def test_session_cookie_rejects_tampering_and_absence() -> None:
     raw = session_cookie.mint_session_cookie(user_id="u1", refresh_token="rt-secret")
+    header, payload, signature = raw.split(".")
+    # Flip the FIRST signature character. The last base64url character carries
+    # only 2 significant bits, so overwriting the tail (e.g. "xw" -> "xy") can
+    # decode to the very same bytes and the "tampered" cookie verifies — a
+    # ~1-in-900 flake that failed CI on 2026-09-16.
+    flipped = ("A" if signature[0] != "A" else "B") + signature[1:]
     with pytest.raises(session_cookie.InvalidSessionCookie):
-        session_cookie.read_session_cookie(raw[:-2] + "xy")  # broken signature
+        session_cookie.read_session_cookie(f"{header}.{payload}.{flipped}")
     with pytest.raises(session_cookie.InvalidSessionCookie):
         session_cookie.read_session_cookie(None)
     with pytest.raises(session_cookie.InvalidSessionCookie):

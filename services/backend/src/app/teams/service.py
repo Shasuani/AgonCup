@@ -34,6 +34,7 @@ from lol_schemas.enums import (
 from sqlalchemy import String, cast, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.tenancy import across_user_guilds, find_across_user_guilds
 from app.joincodes import generate_join_code, normalize_join_code
 from app.logging import get_logger
 from app.models import Registration, Team, TeamMember, Tournament, User
@@ -350,6 +351,34 @@ async def get_team_by_code(session: AsyncSession, *, code: str) -> Team:
     return team
 
 
+async def get_team_by_code_for_user(
+    session: AsyncSession, *, code: str, user_id: uuid.UUID
+) -> Team:
+    """Resolve a team code across every guild the user belongs to (PLAN.md §3.1).
+
+    Same cure as the tournament code: the desktop client sends no ``X-Guild-Id``,
+    so a code minted on a server other than the JWT's default guild read as
+    invalid. Team codes are globally unique, so the user's guilds are tried in
+    turn (acting guild first) and the transaction is LEFT on the team's guild
+    for the membership row written next. A code from a server the user is not a
+    member of is never visited and still reads as invalid.
+    """
+    normalized = normalize_join_code(code)
+    if not normalized:
+        raise InvalidJoinCodeError("empty code")
+
+    async def _find() -> Team | None:
+        try:
+            return await get_team_by_code(session, code=normalized)
+        except InvalidJoinCodeError:
+            return None
+
+    found = await find_across_user_guilds(session, user_id=user_id, find=_find)
+    if found is None:
+        raise InvalidJoinCodeError(normalized)
+    return found
+
+
 async def join_by_code(
     session: AsyncSession, *, code: str, user_id: uuid.UUID
 ) -> tuple[Team, TeamMember]:
@@ -359,9 +388,10 @@ async def join_by_code(
     the captain to approve/reject (PLAN.md §3.1 team-leader approval flow).
     Idempotent — redeeming a code you already hold ANY membership for (pending or
     active) returns the existing row rather than raising :class:`DuplicateMemberError`.
-    Captains keep their (active) captain membership.
+    Captains keep their (active) captain membership. The code is resolved across
+    every guild the caller belongs to (:func:`get_team_by_code_for_user`).
     """
-    team = await get_team_by_code(session, code=code)
+    team = await get_team_by_code_for_user(session, code=code, user_id=user_id)
     existing_role = await _member_role(session, team_id=team.id, user_id=user_id)
     if existing_role is not None:
         member = (
@@ -427,24 +457,40 @@ class MyTeam:
     name: str
     role: TeamMemberRole
     status: TeamMemberStatus
+    #: The team's guild — the list spans every server the caller belongs to.
+    guild_id: uuid.UUID
 
 
 async def list_my_teams(session: AsyncSession, *, user_id: uuid.UUID) -> list[MyTeam]:
-    """Every team the caller is a member of (active OR pending), with their role.
+    """Every team the caller is a member of, across every guild they belong to.
 
     Powers the desktop "My Teams" view — where the user is captain vs plain member,
-    and which requests are still awaiting approval. RLS scopes to the acting guild.
+    and which requests are still awaiting approval. The client has no server
+    picker, so the user's guilds are walked in turn (:mod:`app.auth.tenancy`) and
+    each row names its ``guild_id`` for the follow-up calls.
     """
+    return await across_user_guilds(
+        session,
+        user_id=user_id,
+        read=lambda: _list_my_teams_in_acting_guild(session, user_id=user_id),
+    )
+
+
+async def _list_my_teams_in_acting_guild(
+    session: AsyncSession, *, user_id: uuid.UUID
+) -> list[MyTeam]:
+    """The acting guild's slice of :func:`list_my_teams` (active OR pending)."""
     rows = (
         await session.execute(
-            select(Team.id, Team.name, TeamMember.role, TeamMember.status)
+            select(Team.id, Team.name, TeamMember.role, TeamMember.status, Team.guild_id)
             .join(TeamMember, TeamMember.team_id == Team.id)
             .where(TeamMember.user_id == user_id, Team.is_solo.is_(False))
             .order_by(Team.name)
         )
     ).all()
     return [
-        MyTeam(team_id=tid, name=name, role=role, status=status) for tid, name, role, status in rows
+        MyTeam(team_id=tid, name=name, role=role, status=status, guild_id=gid)
+        for tid, name, role, status, gid in rows
     ]
 
 
@@ -482,6 +528,8 @@ class JoinRequest:
     team_name: str
     user_id: uuid.UUID
     display_name: str
+    #: The team's guild — the captain's feed spans every server they belong to.
+    guild_id: uuid.UUID
 
 
 async def list_join_requests(session: AsyncSession, *, team_id: uuid.UUID) -> list[JoinRequest]:
@@ -499,7 +547,13 @@ async def list_join_requests(session: AsyncSession, *, team_id: uuid.UUID) -> li
         )
     ).all()
     return [
-        JoinRequest(team_id=team.id, team_name=team.name, user_id=uid, display_name=name)
+        JoinRequest(
+            team_id=team.id,
+            team_name=team.name,
+            user_id=uid,
+            display_name=name,
+            guild_id=team.guild_id,
+        )
         for uid, name in rows
     ]
 
@@ -510,8 +564,22 @@ async def list_my_join_requests(
     """All pending requests across teams the caller CAPTAINS (desktop notify feed).
 
     Scoped to teams whose ``captain_user_id`` is the caller — so a captain only ever
-    sees requests for their own teams. RLS already scopes to the acting guild.
+    sees requests for their own teams — and walked across every guild the caller
+    belongs to, since the client has no server picker (:mod:`app.auth.tenancy`).
     """
+    return await across_user_guilds(
+        session,
+        user_id=captain_user_id,
+        read=lambda: _list_my_join_requests_in_acting_guild(
+            session, captain_user_id=captain_user_id
+        ),
+    )
+
+
+async def _list_my_join_requests_in_acting_guild(
+    session: AsyncSession, *, captain_user_id: uuid.UUID
+) -> list[JoinRequest]:
+    """The acting guild's slice of :func:`list_my_join_requests`."""
     rows = (
         await session.execute(
             select(
@@ -519,6 +587,7 @@ async def list_my_join_requests(
                 Team.name,
                 TeamMember.user_id,
                 User.display_name,
+                Team.guild_id,
             )
             .join(TeamMember, TeamMember.team_id == Team.id)
             .join(User, User.id == TeamMember.user_id)
@@ -530,8 +599,8 @@ async def list_my_join_requests(
         )
     ).all()
     return [
-        JoinRequest(team_id=tid, team_name=tname, user_id=uid, display_name=dname)
-        for tid, tname, uid, dname in rows
+        JoinRequest(team_id=tid, team_name=tname, user_id=uid, display_name=dname, guild_id=gid)
+        for tid, tname, uid, dname, gid in rows
     ]
 
 

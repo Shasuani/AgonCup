@@ -491,8 +491,9 @@ async def _persist_result_report(
     The report block is ``body["report"]`` (the desktop ``EogReport``): the
     post-game eog capture (``source: "eogStatsBlock"``), or the MID-GAME
     kill-stream report a first-blood duel sends the moment the deciding kill
-    lands (``source: "liveClientData"`` — §3.6.4; ``teams`` is empty there). A
-    phase-only report (no block) is a no-op. Idempotent on
+    lands (``source: "liveClientData"`` — §3.6.4; ``teams`` is the live scoreboard
+    there, its lines keyed by Riot ID rather than PUUID). A phase-only report (no
+    block) is a no-op. Idempotent on
     ``(lcu_game_id, reporter_puuid, source)`` — first-write-wins, since the
     durable client queue may re-send the same final report across reconnects.
 

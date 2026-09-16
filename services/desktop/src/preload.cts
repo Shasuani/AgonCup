@@ -123,6 +123,8 @@ export type RefreshRankBridgeResult =
 /** One tournament in the signed-in user's list / a join result. */
 export interface TournamentBridge {
   id: string;
+  /** The tournament's server; sent back as `X-Guild-Id` on every per-tournament call. */
+  guildId: string;
   name: string;
   status: string;
   format: string;
@@ -246,6 +248,7 @@ export interface JoinRequestBridge {
   teamName: string;
   userId: string;
   displayName: string;
+  guildId: string;
 }
 
 export type TeamJoinRequestsBridgeResult =
@@ -262,6 +265,8 @@ export interface MyTeamBridge {
   name: string;
   role: string;
   status: string;
+  /** The team's server; sent back as `X-Guild-Id` on every per-team call. */
+  guildId: string;
 }
 
 export type MyTeamsBridgeResult =
@@ -417,40 +422,42 @@ export interface LolBridge {
   listMyMatches(): Promise<unknown>;
   /** Join a tournament by its code. `teamId` picks the captained team for 5v5. */
   joinTournament(code: string, teamId?: string): Promise<JoinTournamentBridgeResult>;
-  /** Clear a FINISHED tournament off this user's own list (per-user, not a delete). */
-  hideTournament(tournamentId: string): Promise<HideTournamentBridgeResult>;
+  /** Clear a FINISHED tournament off this user's own list (per-user, not a delete).
+   *  `guildId` (the row's own server) rides along on this and every per-object
+   *  call below: the lists span every server the user belongs to. */
+  hideTournament(tournamentId: string, guildId?: string): Promise<HideTournamentBridgeResult>;
   /** The tournament's bracket (matches with team names). */
-  tournamentBracket(tournamentId: string): Promise<BracketBridgeResult>;
+  tournamentBracket(tournamentId: string, guildId?: string): Promise<BracketBridgeResult>;
   /** Look up a join code without enrolling (to learn the game mode first). */
   lookupTournament(code: string): Promise<JoinTournamentBridgeResult>;
   /** Who has entered a tournament, and who has locked in. */
-  tournamentEntrants(tournamentId: string): Promise<EntrantsBridgeResult>;
+  tournamentEntrants(tournamentId: string, guildId?: string): Promise<EntrantsBridgeResult>;
   /** Lock in for a tournament. `teamId` only when captaining several teams. */
-  tournamentLockIn(tournamentId: string, teamId?: string): Promise<LockInBridgeResult>;
+  tournamentLockIn(tournamentId: string, teamId?: string, guildId?: string): Promise<LockInBridgeResult>;
   /** Mark the caller's team ready for a match (team captain). */
-  matchReady(matchId: string): Promise<ReadyBridgeResult>;
+  matchReady(matchId: string, guildId?: string): Promise<ReadyBridgeResult>;
   /** Create a team (acting user becomes captain; response carries the join code). */
   createTeam(name: string): Promise<CreateTeamBridgeResult>;
   /** Join a team by its code. */
   joinTeam(code: string): Promise<JoinTeamBridgeResult>;
   /** A team's roster. */
-  teamMembers(teamId: string): Promise<TeamMembersBridgeResult>;
+  teamMembers(teamId: string, guildId?: string): Promise<TeamMembersBridgeResult>;
   /** A team's join code (captain-only). */
-  teamJoinCode(teamId: string): Promise<TeamJoinCodeBridgeResult>;
+  teamJoinCode(teamId: string, guildId?: string): Promise<TeamJoinCodeBridgeResult>;
   /** Pending join requests across every team the signed-in user captains. */
   teamJoinRequests(): Promise<TeamJoinRequestsBridgeResult>;
   /** Approve a pending join request (captain of that team). */
-  approveJoinRequest(teamId: string, userId: string): Promise<ActOnRequestBridgeResult>;
+  approveJoinRequest(teamId: string, userId: string, guildId?: string): Promise<ActOnRequestBridgeResult>;
   /** Reject a pending join request (captain of that team). */
-  rejectJoinRequest(teamId: string, userId: string): Promise<ActOnRequestBridgeResult>;
+  rejectJoinRequest(teamId: string, userId: string, guildId?: string): Promise<ActOnRequestBridgeResult>;
   /** Remove a member from a team (captain of that team). */
-  removeMember(teamId: string, userId: string): Promise<ActOnRequestBridgeResult>;
+  removeMember(teamId: string, userId: string, guildId?: string): Promise<ActOnRequestBridgeResult>;
   /** Teams the signed-in user belongs to (with their role + status). */
   myTeams(): Promise<MyTeamsBridgeResult>;
   /** Leave a team (self-service; captains must transfer/disband first). */
-  leaveTeam(teamId: string): Promise<ActOnRequestBridgeResult>;
+  leaveTeam(teamId: string, guildId?: string): Promise<ActOnRequestBridgeResult>;
   /** Disband a team you captain (deletes the team + its roster). */
-  deleteTeam(teamId: string): Promise<ActOnRequestBridgeResult>;
+  deleteTeam(teamId: string, guildId?: string): Promise<ActOnRequestBridgeResult>;
   /** Global live presence (who is in a game + which server). */
   presence(): Promise<PresenceBridgeResult>;
   /** The live scoreboard of a game in progress (404 until a client sent one). */
@@ -532,42 +539,43 @@ const bridge: LolBridge = {
   listMyMatches: () => ipcRenderer.invoke("lol:matches-mine") as Promise<unknown>,
   joinTournament: (code, teamId) =>
     ipcRenderer.invoke("lol:tournament-join", { code, teamId }) as Promise<JoinTournamentBridgeResult>,
-  hideTournament: (tournamentId) =>
-    ipcRenderer.invoke("lol:tournament-hide", { tournamentId }) as Promise<HideTournamentBridgeResult>,
-  tournamentBracket: (tournamentId) =>
-    ipcRenderer.invoke("lol:tournament-bracket", { tournamentId }) as Promise<BracketBridgeResult>,
+  hideTournament: (tournamentId, guildId) =>
+    ipcRenderer.invoke("lol:tournament-hide", { tournamentId, guildId }) as Promise<HideTournamentBridgeResult>,
+  tournamentBracket: (tournamentId, guildId) =>
+    ipcRenderer.invoke("lol:tournament-bracket", { tournamentId, guildId }) as Promise<BracketBridgeResult>,
   lookupTournament: (code) =>
     ipcRenderer.invoke("lol:tournament-lookup", { code }) as Promise<JoinTournamentBridgeResult>,
-  tournamentEntrants: (tournamentId) =>
-    ipcRenderer.invoke("lol:tournament-entrants", { tournamentId }) as Promise<EntrantsBridgeResult>,
-  tournamentLockIn: (tournamentId, teamId) =>
+  tournamentEntrants: (tournamentId, guildId) =>
+    ipcRenderer.invoke("lol:tournament-entrants", { tournamentId, guildId }) as Promise<EntrantsBridgeResult>,
+  tournamentLockIn: (tournamentId, teamId, guildId) =>
     ipcRenderer.invoke("lol:tournament-lock-in", {
       tournamentId,
       teamId,
+      guildId,
     }) as Promise<LockInBridgeResult>,
-  matchReady: (matchId) =>
-    ipcRenderer.invoke("lol:match-ready", { matchId }) as Promise<ReadyBridgeResult>,
+  matchReady: (matchId, guildId) =>
+    ipcRenderer.invoke("lol:match-ready", { matchId, guildId }) as Promise<ReadyBridgeResult>,
   createTeam: (name) =>
     ipcRenderer.invoke("lol:team-create", { name }) as Promise<CreateTeamBridgeResult>,
   joinTeam: (code) =>
     ipcRenderer.invoke("lol:team-join", { code }) as Promise<JoinTeamBridgeResult>,
-  teamMembers: (teamId) =>
-    ipcRenderer.invoke("lol:team-members", { teamId }) as Promise<TeamMembersBridgeResult>,
-  teamJoinCode: (teamId) =>
-    ipcRenderer.invoke("lol:team-code", { teamId }) as Promise<TeamJoinCodeBridgeResult>,
+  teamMembers: (teamId, guildId) =>
+    ipcRenderer.invoke("lol:team-members", { teamId, guildId }) as Promise<TeamMembersBridgeResult>,
+  teamJoinCode: (teamId, guildId) =>
+    ipcRenderer.invoke("lol:team-code", { teamId, guildId }) as Promise<TeamJoinCodeBridgeResult>,
   teamJoinRequests: () =>
     ipcRenderer.invoke("lol:team-join-requests") as Promise<TeamJoinRequestsBridgeResult>,
-  approveJoinRequest: (teamId, userId) =>
-    ipcRenderer.invoke("lol:team-approve", { teamId, userId }) as Promise<ActOnRequestBridgeResult>,
-  rejectJoinRequest: (teamId, userId) =>
-    ipcRenderer.invoke("lol:team-reject", { teamId, userId }) as Promise<ActOnRequestBridgeResult>,
-  removeMember: (teamId, userId) =>
-    ipcRenderer.invoke("lol:team-remove-member", { teamId, userId }) as Promise<ActOnRequestBridgeResult>,
+  approveJoinRequest: (teamId, userId, guildId) =>
+    ipcRenderer.invoke("lol:team-approve", { teamId, userId, guildId }) as Promise<ActOnRequestBridgeResult>,
+  rejectJoinRequest: (teamId, userId, guildId) =>
+    ipcRenderer.invoke("lol:team-reject", { teamId, userId, guildId }) as Promise<ActOnRequestBridgeResult>,
+  removeMember: (teamId, userId, guildId) =>
+    ipcRenderer.invoke("lol:team-remove-member", { teamId, userId, guildId }) as Promise<ActOnRequestBridgeResult>,
   myTeams: () => ipcRenderer.invoke("lol:teams-mine") as Promise<MyTeamsBridgeResult>,
-  leaveTeam: (teamId) =>
-    ipcRenderer.invoke("lol:team-leave", { teamId }) as Promise<ActOnRequestBridgeResult>,
-  deleteTeam: (teamId) =>
-    ipcRenderer.invoke("lol:team-delete", { teamId }) as Promise<ActOnRequestBridgeResult>,
+  leaveTeam: (teamId, guildId) =>
+    ipcRenderer.invoke("lol:team-leave", { teamId, guildId }) as Promise<ActOnRequestBridgeResult>,
+  deleteTeam: (teamId, guildId) =>
+    ipcRenderer.invoke("lol:team-delete", { teamId, guildId }) as Promise<ActOnRequestBridgeResult>,
   presence: () => ipcRenderer.invoke("lol:presence") as Promise<PresenceBridgeResult>,
   liveBoard: (matchId) => ipcRenderer.invoke("lol:live-board", { matchId }) as Promise<LiveBoardBridgeResult>,
   myHistory: () => ipcRenderer.invoke("lol:history-mine") as Promise<HistoryBridgeResult>,

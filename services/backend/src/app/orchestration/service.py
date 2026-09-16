@@ -84,6 +84,7 @@ from sqlalchemy import CursorResult, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
+from app.auth.tenancy import across_user_guilds
 from app.config import get_settings
 from app.logging import get_logger
 from app.models import (
@@ -1397,12 +1398,31 @@ class MyMatch:
 
 
 async def list_my_matches(session: AsyncSession, *, user_id: uuid.UUID) -> list[MyMatch]:
-    """The caller's live matches, with whatever is known about each lobby.
+    """The caller's live matches across every guild they belong to.
+
+    The desktop client subscribes to exactly the matches this returns. It has no
+    server picker, so a match on any server other than the JWT's default guild
+    used to be invisible here — the client never subscribed, and the lobby
+    commands for it went unheard. The user's guilds are walked in turn
+    (:mod:`app.auth.tenancy`); each row already names its ``guild_id`` for the
+    WebSocket subscribe frame.
+    """
+    return await across_user_guilds(
+        session,
+        user_id=user_id,
+        read=lambda: _list_my_matches_in_acting_guild(session, user_id=user_id),
+    )
+
+
+async def _list_my_matches_in_acting_guild(
+    session: AsyncSession, *, user_id: uuid.UUID
+) -> list[MyMatch]:
+    """The acting guild's slice of :func:`list_my_matches`.
 
     Sourced from the caller's match-bound :class:`ClientSession` rows — the same
     rows :func:`initialize_lobby` builds the lobby from — so a client is told about
     exactly the matches the backend would address commands to, and never about one
-    it could not participate in. RLS scopes it to the acting guild.
+    it could not participate in.
 
     Completed matches are excluded: a client has nothing left to do for them, and
     subscribing would keep a channel open for a match that will never speak again.

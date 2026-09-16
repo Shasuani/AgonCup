@@ -59,6 +59,10 @@ class CreateTournamentRequest(BaseModel):
 
 class TournamentResponse(BaseModel):
     id: str
+    #: The Discord server (tenant) the tournament belongs to. ``/mine`` and the
+    #: join-code routes span every server the caller is a member of, so a client
+    #: needs this to address follow-up calls (``X-Guild-Id``) to the right one.
+    guild_id: str
     name: str
     status: str
     format: str
@@ -94,6 +98,31 @@ class TeamRef(BaseModel):
     team_id: uuid.UUID
 
 
+class ActiveAccountRequest(BaseModel):
+    """The account signed into the caller's League client, as the desktop read it
+    from the local LCU (READ-ONLY ``current-summoner``).
+
+    Advisory: it only re-orders the caller's OWN linked accounts so the lobby
+    invites the one that is actually open (ToDoList #8). Any field may be
+    missing; the Riot ID is the reliable pair, the LCU ids are extra hints.
+    """
+
+    game_name: str | None = Field(default=None, max_length=64)
+    tag_line: str | None = Field(default=None, max_length=16)
+    region: str | None = Field(default=None, max_length=8)
+    lcu_puuid: str | None = Field(default=None, max_length=64)
+    summoner_id: str | None = Field(default=None, max_length=32)
+
+    def to_service(self) -> service.ActiveAccount:
+        return service.ActiveAccount(
+            game_name=self.game_name,
+            tag_line=self.tag_line,
+            region=self.region,
+            lcu_puuid=self.lcu_puuid,
+            summoner_id=self.summoner_id,
+        )
+
+
 class CheckInRequest(BaseModel):
     """Lock-in body. ``team_id`` is optional — a solo (1v1) entrant has no team
     to name, and a captain of exactly one team does not need to repeat it."""
@@ -105,6 +134,10 @@ class CheckInRequest(BaseModel):
     #: in by default. Matches where nobody opted in fall back to the manual
     #: name+password DM rather than going quiet.
     host_opt_in: bool | None = None
+    #: Who is signed into the caller's League client right now — the desktop
+    #: fills it in so the lobby invites THAT account, not another linked one.
+    #: Omitted by clients with no LCU (the website): the old pick applies.
+    active_account: ActiveAccountRequest | None = None
 
 
 class EntrantPlayerResponse(BaseModel):
@@ -169,6 +202,7 @@ def _enum_value(v: object) -> str:
 def _to_response(t: Tournament) -> TournamentResponse:
     return TournamentResponse(
         id=str(t.id),
+        guild_id=str(t.guild_id),
         name=t.name,
         status=_enum_value(t.status),
         format=_enum_value(t.format),
@@ -301,6 +335,7 @@ async def hide_my_tournament(
 )
 async def get_by_code(
     code: str,
+    principal: Annotated[Principal, Depends(get_current_principal)],
     session: Annotated[AsyncSession, Depends(get_tenant_session)],
 ) -> TournamentResponse:
     """Read-only preview of what a join code points at.
@@ -308,10 +343,15 @@ async def get_by_code(
     The client needs the ``game_mode`` **before** it enrols: a 5v5 code has to ask
     a multi-team captain which team is entering, while a 1v1 code must never ask
     that. Enrolling first and recovering from an error would join the wrong team.
-    RLS scopes the lookup, so a foreign guild's code reads as invalid.
+    The code is resolved across every server the caller is a member of (the
+    client has no server picker); a code from any other server reads as invalid.
     """
     try:
-        return _to_response(await service.get_tournament_by_code(session, code=code))
+        return _to_response(
+            await service.get_tournament_by_code_for_user(
+                session, code=code, user_id=uuid.UUID(principal.user_id)
+            )
+        )
     except service.InvalidJoinCodeError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="invalid join code") from exc
 
@@ -520,6 +560,11 @@ async def check_in(
     entrant is an ordinary member), so authorization is enforced here.
     """
     team_id = body.team_id if body is not None else None
+    active_account = (
+        body.active_account.to_service()
+        if body is not None and body.active_account is not None
+        else None
+    )
     try:
         if team_id is None:
             reg = await service.check_in_self(
@@ -527,6 +572,7 @@ async def check_in(
                 tournament_id=tournament_id,
                 user_id=uuid.UUID(principal.user_id),
                 host_opt_in=body.host_opt_in if body is not None else None,
+                active_account=active_account,
             )
         else:
             if UserGuildRoleName.GUILD_ADMIN not in principal.roles:
@@ -541,6 +587,7 @@ async def check_in(
                 team_id=team_id,
                 acting_user_id=uuid.UUID(principal.user_id),
                 host_opt_in=body.host_opt_in if body is not None else None,
+                active_account=active_account,
             )
     except service.NotTeamCaptainError as exc:
         raise HTTPException(

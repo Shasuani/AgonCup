@@ -52,12 +52,18 @@ def _account(
     region: str | None,
     verified: bool = True,
     tag: str = "x",
+    game_name: str | None = None,
+    tag_line: str | None = None,
+    lcu_puuid: str | None = None,
 ) -> RiotAccount:
     account = RiotAccount(
         id=uuid.uuid4(),
         user_id=user_id,
         puuid=f"puuid-{tag}",
         summoner_id=f"sid-{tag}",
+        riot_id_game_name=game_name,
+        riot_id_tag_line=tag_line,
+        lcu_puuid=lcu_puuid,
         region=region,
         verified=verified,
     )
@@ -307,3 +313,143 @@ async def test_presence_without_a_region_still_prefers_the_verified_account() ->
 
     assert row is not None
     assert row.puuid == verified.puuid
+
+
+# ---------------------------------------------------------------------------
+# record_client_presence — the account OPEN in the client wins (ToDoList #8)
+# ---------------------------------------------------------------------------
+def _two_eune_accounts(session: FakeSession, user_id: uuid.UUID) -> tuple[RiotAccount, RiotAccount]:
+    """Two verified accounts on the SAME server; the id tie-break alone would
+    pick whichever sorts first — i.e. possibly the one that is signed out."""
+    main = _account(
+        session,
+        user_id,
+        region="eun1",
+        tag="main",
+        game_name="Shasuani",
+        tag_line="EUNE",
+        lcu_puuid="lcu-main",
+    )
+    smurf = _account(
+        session,
+        user_id,
+        region="eun1",
+        tag="smurf",
+        game_name="Smurfy",
+        tag_line="1234",
+        lcu_puuid="lcu-smurf",
+    )
+    # Force the tie-break to prefer the OTHER account, so a passing test proves
+    # the active-account hint did the work rather than luck of the uuid draw.
+    main.id, smurf.id = sorted((main.id, smurf.id))[1], sorted((main.id, smurf.id))[0]
+    return main, smurf
+
+
+async def test_presence_invites_the_account_signed_into_the_client() -> None:
+    """Two accounts on the tournament's server: the one the desktop saw open in
+    League is the one recorded, matched by Riot ID (case-insensitive)."""
+    guild_id, user_id = uuid.uuid4(), uuid.uuid4()
+    session = FakeSession()
+    session.current_guild = str(guild_id)
+    main, smurf = _two_eune_accounts(session, user_id)
+
+    row = await service.record_client_presence(
+        session,
+        user_id=user_id,
+        region="eun1",
+        active_account=service.ActiveAccount(game_name="shasuani", tag_line="eune"),
+    )
+
+    assert row is not None
+    assert row.puuid == main.puuid
+    assert row.puuid != smurf.puuid
+
+
+async def test_presence_matches_the_open_account_by_lcu_ids_when_the_riot_id_is_missing() -> None:
+    """A renamed account still matches on the LCU puuid / summoner id hints."""
+    guild_id, user_id = uuid.uuid4(), uuid.uuid4()
+    session = FakeSession()
+    session.current_guild = str(guild_id)
+    main, smurf = _two_eune_accounts(session, user_id)
+
+    by_lcu = await service.record_client_presence(
+        session,
+        user_id=user_id,
+        region="eun1",
+        active_account=service.ActiveAccount(lcu_puuid="lcu-main"),
+    )
+    assert by_lcu is not None and by_lcu.puuid == main.puuid
+
+    by_sid = await service.record_client_presence(
+        session,
+        user_id=user_id,
+        region="eun1",
+        active_account=service.ActiveAccount(summoner_id=smurf.summoner_id),
+    )
+    assert by_sid is not None and by_sid.puuid == smurf.puuid
+
+
+async def test_presence_never_lets_the_open_account_override_the_platform() -> None:
+    """Signed into EUW while the tournament is on EUNE: an invite cannot cross
+    servers, so the EUNE account is still the one recorded."""
+    guild_id, user_id = uuid.uuid4(), uuid.uuid4()
+    session = FakeSession()
+    session.current_guild = str(guild_id)
+    euw = _account(session, user_id, region="euw1", tag="euw", game_name="Me", tag_line="EUW")
+    eune = _account(session, user_id, region="eun1", tag="eune", game_name="Me", tag_line="EUNE")
+
+    row = await service.record_client_presence(
+        session,
+        user_id=user_id,
+        region="eun1",
+        active_account=service.ActiveAccount(game_name="Me", tag_line="EUW", region="euw1"),
+    )
+
+    assert row is not None
+    assert row.puuid == eune.puuid
+    assert row.puuid != euw.puuid
+
+
+async def test_presence_falls_back_to_the_old_pick_when_the_open_account_is_not_linked() -> None:
+    """An unknown Riot ID re-orders nothing: verified-first, then the id tie-break."""
+    guild_id, user_id = uuid.uuid4(), uuid.uuid4()
+    session = FakeSession()
+    session.current_guild = str(guild_id)
+    _account(session, user_id, region="eun1", verified=False, tag="pending")
+    verified = _account(session, user_id, region="eun1", verified=True, tag="ok")
+
+    row = await service.record_client_presence(
+        session,
+        user_id=user_id,
+        region="eun1",
+        active_account=service.ActiveAccount(game_name="Nobody", tag_line="0000"),
+    )
+
+    assert row is not None
+    assert row.puuid == verified.puuid
+
+
+async def test_lock_in_records_the_account_open_in_the_client() -> None:
+    """End to end through the lock-in button: the standing ClientSession — the
+    row the lobby roster is built from — carries the OPEN account's PUUID."""
+    guild_id, user_id = uuid.uuid4(), uuid.uuid4()
+    session = FakeSession()
+    session.current_guild = str(guild_id)
+    tournament = _tournament(guild_id=guild_id, region="eun1")
+    session.store[Tournament].append(tournament)
+    session.store[User].append(User(id=user_id, discord_user_id=1, display_name="Giorgos"))
+    main, smurf = _two_eune_accounts(session, user_id)
+    await service.join_by_code(session, code=_CODE, user_id=user_id)
+
+    await service.check_in_self(
+        session,
+        tournament_id=tournament.id,
+        user_id=user_id,
+        active_account=service.ActiveAccount(
+            game_name="Smurfy", tag_line="1234", lcu_puuid="lcu-smurf", summoner_id="sid-smurf"
+        ),
+    )
+
+    standing = [c for c in session.store[ClientSession] if c.match_id is None]
+    assert [c.puuid for c in standing] == [smurf.puuid]
+    assert standing[0].puuid != main.puuid

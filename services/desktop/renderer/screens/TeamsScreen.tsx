@@ -82,13 +82,13 @@ function TeamCard({ team, requests, onChange }: { team: MyTeam; requests: JoinRe
   const b = lol();
   const isCaptain = team.role === 'captain';
   const members = useAsync(async () => {
-    const r = await b!.teamMembers(team.teamId);
+    const r = await b!.teamMembers(team.teamId, team.guildId);
     if (!r.ok) throw new Error(errText(r));
     return r.members;
   }, [team.teamId]);
   const code = useAsync(async () => {
     if (!isCaptain) return null;
-    const r = await b!.teamJoinCode(team.teamId);
+    const r = await b!.teamJoinCode(team.teamId, team.guildId);
     return r.ok ? r.joinCode : null;
   }, [team.teamId]);
   const [busy, setBusy] = useState(false);
@@ -128,7 +128,7 @@ function TeamCard({ team, requests, onChange }: { team: MyTeam; requests: JoinRe
               <span className="ll-row__name">{m.displayName}</span>
               <span className="ll-row__meta" style={m.role === 'captain' ? { color: t.gold } : undefined}>{m.role}</span>
               {isCaptain && m.role !== 'captain' && (
-                <Button size="xs" onClick={() => act(() => b!.removeMember(team.teamId, m.userId))} disabled={busy}>Remove</Button>
+                <Button size="xs" onClick={() => act(() => b!.removeMember(team.teamId, m.userId, team.guildId))} disabled={busy}>Remove</Button>
               )}
             </div>
           ))}
@@ -145,8 +145,8 @@ function TeamCard({ team, requests, onChange }: { team: MyTeam; requests: JoinRe
             <div key={r.userId} className="ll-row" style={{ padding: '8px 0' }}>
               <Avatar name={r.displayName} size="sm" tone="dim" />
               <span className="ll-row__name">{r.displayName}</span>
-              <GhostButton tone="teal" size="sm" icon="check" onClick={() => act(() => b!.approveJoinRequest(team.teamId, r.userId))} disabled={busy}>Approve</GhostButton>
-              <GhostButton tone="danger" size="sm" icon="x" onClick={() => act(() => b!.rejectJoinRequest(team.teamId, r.userId))} disabled={busy}>Reject</GhostButton>
+              <GhostButton tone="teal" size="sm" icon="check" onClick={() => act(() => b!.approveJoinRequest(team.teamId, r.userId, team.guildId))} disabled={busy}>Approve</GhostButton>
+              <GhostButton tone="danger" size="sm" icon="x" onClick={() => act(() => b!.rejectJoinRequest(team.teamId, r.userId, team.guildId))} disabled={busy}>Reject</GhostButton>
             </div>
           ))}
         </div>
@@ -154,8 +154,8 @@ function TeamCard({ team, requests, onChange }: { team: MyTeam; requests: JoinRe
 
       <div style={{ display: 'flex', gap: 10, marginTop: 22, paddingTop: 18, borderTop: `1px solid ${t.lineSoft}` }}>
         {isCaptain
-          ? <GhostButton tone="danger" size="sm" onClick={() => act(() => b!.deleteTeam(team.teamId))} disabled={busy}>Disband team</GhostButton>
-          : <GhostButton tone="danger" size="sm" onClick={() => act(() => b!.leaveTeam(team.teamId))} disabled={busy}>Leave team</GhostButton>}
+          ? <GhostButton tone="danger" size="sm" onClick={() => act(() => b!.deleteTeam(team.teamId, team.guildId))} disabled={busy}>Disband team</GhostButton>
+          : <GhostButton tone="danger" size="sm" onClick={() => act(() => b!.leaveTeam(team.teamId, team.guildId))} disabled={busy}>Leave team</GhostButton>}
         <GhostButton size="sm" disabled title="Transfer captaincy isn't exposed on the desktop bridge yet — do it from the admin app.">Transfer captaincy</GhostButton>
       </div>
     </Panel>

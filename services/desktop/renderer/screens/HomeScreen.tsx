@@ -44,7 +44,7 @@ export default function HomeScreen({ user, onOpenMatch, onNav }: { user: BridgeU
   const primaryTeam = (teams.data ?? []).find((x) => x.role === 'captain') ?? (teams.data ?? [])[0];
   const members = useAsync(async () => {
     if (!primaryTeam) return [];
-    const r = await b!.teamMembers(primaryTeam.teamId);
+    const r = await b!.teamMembers(primaryTeam.teamId, primaryTeam.guildId);
     return r.ok ? r.members : [];
   }, [primaryTeam?.teamId]);
 
@@ -243,7 +243,7 @@ function NextUp({ running, liveState, tournaments, onOpenMatch, onNav }: { runni
 function TournamentRow({ tr }: { tr: Tournament }) {
   const b = lol();
   const entrants = useAsync(async () => {
-    const r = await b!.tournamentEntrants(tr.id);
+    const r = await b!.tournamentEntrants(tr.id, tr.guildId);
     return r.ok ? r.entrants : ([] as Entrant[]);
   }, [tr.id], 15_000);
   const list = entrants.data ?? [];

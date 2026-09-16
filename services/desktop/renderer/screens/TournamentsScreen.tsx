@@ -87,9 +87,13 @@ export default function TournamentsScreen() {
 
       const mine = await b.myTeams();
       if (!mine.ok) { setMsg(errText(mine)); return; }
-      const captained = mine.teams.filter((tm) => tm.role === 'captain' && tm.status === 'active');
+      // Only a team on the tournament's own server can enter it; the list spans
+      // every server the player belongs to, so filter by the code's server.
+      const captained = mine.teams.filter((tm) =>
+        tm.role === 'captain' && tm.status === 'active'
+        && (!preview.tournament.guildId || !tm.guildId || tm.guildId === preview.tournament.guildId));
       if (captained.length === 0) {
-        setMsg('This is a team tournament — create a team first, then join as its captain.');
+        setMsg('This is a team tournament — create a team on this server first, then join as its captain.');
         return;
       }
       if (captained.length === 1) {
@@ -206,7 +210,7 @@ function TournamentCard({ tournament: tr, open, onToggle, onRemoved }: { tournam
   const tone = STATUS_TONE[tr.status] ?? 'dim';
   const featured = tr.status === 'running';
   const entrants = useAsync(async () => {
-    const r = await b!.tournamentEntrants(tr.id);
+    const r = await b!.tournamentEntrants(tr.id, tr.guildId);
     if (!r.ok) throw new Error(errText(r));
     return r.entrants;
   }, [tr.id], 5000);
@@ -222,7 +226,7 @@ function TournamentCard({ tournament: tr, open, onToggle, onRemoved }: { tournam
   async function remove() {
     if (!b) return;
     setRemoving(true); setRemoveError(null);
-    const r = await b.hideTournament(tr.id);
+    const r = await b.hideTournament(tr.id, tr.guildId);
     setRemoving(false);
     setConfirming(false);
     if (!r.ok) { setRemoveError(errText(r)); return; }
@@ -275,6 +279,7 @@ function TournamentCard({ tournament: tr, open, onToggle, onRemoved }: { tournam
         <>
           <EntrantsPanel
             tournamentId={tr.id}
+            guildId={tr.guildId}
             solo={tr.gameMode === 'aram_1v1'}
             maxTeams={tr.maxTeams}
             entrants={entrants.data ?? []}
@@ -282,7 +287,7 @@ function TournamentCard({ tournament: tr, open, onToggle, onRemoved }: { tournam
             error={entrants.error}
             reload={entrants.reload}
           />
-          <BracketDetail tournamentId={tr.id} entrants={entrants.data ?? []} />
+          <BracketDetail tournamentId={tr.id} guildId={tr.guildId} entrants={entrants.data ?? []} />
         </>
       )}
     </Panel>
@@ -294,8 +299,9 @@ function TournamentCard({ tournament: tr, open, onToggle, onRemoved }: { tournam
  * Without this the screen said nothing at all after a successful join — the only
  * detail was the bracket, which does not exist until an admin starts.
  */
-function EntrantsPanel({ tournamentId, solo, maxTeams, entrants: data, loading, error, reload }: {
+function EntrantsPanel({ tournamentId, guildId, solo, maxTeams, entrants: data, loading, error, reload }: {
   tournamentId: string;
+  guildId: string;
   solo: boolean;
   maxTeams: number;
   entrants: Entrant[];
@@ -310,7 +316,7 @@ function EntrantsPanel({ tournamentId, solo, maxTeams, entrants: data, loading, 
   async function lockIn() {
     if (!b) return;
     setBusy(true); setMsg(null);
-    const r = await b.tournamentLockIn(tournamentId);
+    const r = await b.tournamentLockIn(tournamentId, undefined, guildId);
     setBusy(false);
     if (!r.ok) { setMsg(errText(r)); return; }
     reload();
@@ -434,10 +440,10 @@ function EntrantRow({ entrant: e, seed }: { entrant: Entrant; seed: number }) {
   );
 }
 
-function BracketDetail({ tournamentId, entrants }: { tournamentId: string; entrants: Entrant[] }) {
+function BracketDetail({ tournamentId, guildId, entrants }: { tournamentId: string; guildId: string; entrants: Entrant[] }) {
   const b = lol();
   const { data, loading, error } = useAsync(async () => {
-    const r = await b!.tournamentBracket(tournamentId);
+    const r = await b!.tournamentBracket(tournamentId, guildId);
     if (!r.ok) throw new Error(errText(r));
     return r.matches;
   }, [tournamentId], 3000); // live-refresh every 3s while expanded

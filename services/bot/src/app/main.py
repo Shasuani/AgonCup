@@ -40,11 +40,37 @@ from app.notifications import NotificationSubscriber
 log = logging.getLogger("app.bot.main")
 
 
+async def owner_display_name(guild: discord.Guild) -> str | None:
+    """The guild owner's Discord display name, or ``None`` when it cannot be read.
+
+    The bot runs on the ``guilds`` intent only, so the member cache normally holds
+    just the bot itself; when the owner is not cached, fall back to one REST
+    ``fetch_member`` (no privileged intent required). Any failure yields ``None``
+    so the backend leaves the stored name untouched — this must NEVER fall back
+    to ``guild.name``: that is the server's label, not a person's, and writing it
+    as the owner's ``display_name`` made the owner appear as "<server name>" to
+    every other player (ToDoList #7).
+    """
+    owner_id = guild.owner_id
+    if not owner_id:
+        return None
+    member: Any = guild.get_member(owner_id)
+    if member is None:
+        try:
+            member = await guild.fetch_member(owner_id)
+        except Exception as exc:  # never crash the gateway (PLAN.md §3.2)
+            log.debug("owner lookup failed (guild=%s): %s", guild.id, exc)
+            return None
+    name = getattr(member, "display_name", None)
+    return name or None
+
+
 async def onboard_guild(bot: commands.AutoShardedBot, guild: discord.Guild) -> bool:
     """Onboard a guild via the backend bridge on GUILD_JOIN (PLAN.md §3.2).
 
     Reports the guild owner as the admin actor (owners always hold Manage-Guild,
-    so ``is_discord_guild_admin=True`` is faithful). Errors are logged and
+    so ``is_discord_guild_admin=True`` is faithful) under the owner's own Discord
+    display name (see :func:`owner_display_name`). Errors are logged and
     swallowed — a failed onboard must never crash the gateway; the next admin
     action re-onboards (the bridge upsert is idempotent). Returns ``True`` on
     success.
@@ -54,7 +80,7 @@ async def onboard_guild(bot: commands.AutoShardedBot, guild: discord.Guild) -> b
         discord_user_id=guild.owner_id or 0,
         discord_guild_id=guild.id,
         is_discord_guild_admin=True,
-        display_name=guild.name,
+        display_name=await owner_display_name(guild),
     )
     try:
         await backend.onboard_guild(ctx, name=guild.name)
@@ -187,4 +213,12 @@ if __name__ == "__main__":  # pragma: no cover
     run()
 
 
-__all__ = ["bot", "build_bot", "run", "list_command_names", "app_commands", "lifecycle"]
+__all__ = [
+    "bot",
+    "build_bot",
+    "run",
+    "list_command_names",
+    "owner_display_name",
+    "app_commands",
+    "lifecycle",
+]

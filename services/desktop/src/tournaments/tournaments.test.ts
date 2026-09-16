@@ -320,6 +320,53 @@ test("lockIn: the hosting answer rides along, and its absence stays absent", asy
   assert.deepEqual(body, { team_id: "tm7", host_opt_in: false });
 });
 
+test("lockIn: the account open in League rides along, so the invite lands on it", async () => {
+  let body: unknown;
+  const spyFetch: typeof fetch = (async (_url: string, init?: RequestInit) => {
+    body = init?.body ? JSON.parse(init.body as string) : undefined;
+    return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
+  }) as unknown as typeof fetch;
+
+  // A live LCU read carries everything the backend can match on.
+  await lockIn(
+    {
+      accessToken: "jwt",
+      tournamentId: "t1",
+      hostOptIn: false,
+      activeAccount: {
+        gameName: "Shasuani",
+        tagLine: "EUNE",
+        region: "eun1",
+        lcuPuuid: "lcu-uuid",
+        summonerId: "12345",
+      },
+    },
+    { fetch: spyFetch, backendUrl: "http://x" },
+  );
+  assert.deepEqual(body, {
+    host_opt_in: false,
+    active_account: {
+      game_name: "Shasuani",
+      tag_line: "EUNE",
+      region: "eun1",
+      lcu_puuid: "lcu-uuid",
+      summoner_id: "12345",
+    },
+  });
+
+  // The remembered (League closed) account has only the Riot ID: the LCU-only
+  // hints are left out rather than sent as empty strings.
+  await lockIn(
+    { accessToken: "jwt", tournamentId: "t1", activeAccount: { gameName: "Shasuani", tagLine: "EUNE" } },
+    { fetch: spyFetch, backendUrl: "http://x" },
+  );
+  assert.deepEqual(body, { active_account: { game_name: "Shasuani", tag_line: "EUNE" } });
+
+  // No account known at all: the field is absent, not null.
+  await lockIn({ accessToken: "jwt", tournamentId: "t1" }, { fetch: spyFetch, backendUrl: "http://x" });
+  assert.deepEqual(body, {});
+});
+
 test("lockIn: 400 surfaces the backend detail", async () => {
   const spyFetch: typeof fetch = (async () =>
     new Response(JSON.stringify({ detail: "you have not joined this tournament" }), {
@@ -461,4 +508,77 @@ test("hideTournament: url-encodes the tournament id", async () => {
   );
 
   assert.equal(url, "http://x/api/v1/tournaments/a%20b%2Fc/mine");
+});
+
+// --- The row's own server rides along (X-Guild-Id) -------------------------
+// `/mine` and the join-code routes span every server the user belongs to, so a
+// per-tournament call must name the row's server or the backend looks the id
+// up on the user's default server and answers "not found".
+
+function captureHeaders(body: unknown = {}, status = 200) {
+  const seen: { url?: string; headers?: Record<string, string> } = {};
+  const spyFetch: typeof fetch = (async (url: string, init?: RequestInit) => {
+    seen.url = url;
+    seen.headers = (init?.headers ?? {}) as Record<string, string>;
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as unknown as typeof fetch;
+  return { seen, spyFetch };
+}
+
+test("a tournament row carries its guild_id as guildId", async () => {
+  const { spyFetch } = captureHeaders([{ id: "t1", guild_id: "g-friend", name: "Cup" }]);
+
+  const result = await listMyTournaments({ accessToken: "jwt" }, { fetch: spyFetch, backendUrl: "http://x" });
+
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.equal(result.tournaments[0]?.guildId, "g-friend");
+  }
+});
+
+test("a join preview / join result carries guildId too", async () => {
+  const { spyFetch } = captureHeaders({ id: "t1", guild_id: "g-friend", name: "Cup", game_mode: "aram_1v1" });
+
+  const preview = await lookupTournamentByCode({ accessToken: "jwt", code: "ABCD2345" }, { fetch: spyFetch, backendUrl: "http://x" });
+  const joined = await joinTournamentByCode({ accessToken: "jwt", code: "ABCD2345" }, { fetch: spyFetch, backendUrl: "http://x" });
+
+  assert.equal(preview.ok && preview.tournament.guildId, "g-friend");
+  assert.equal(joined.ok && joined.tournament.guildId, "g-friend");
+});
+
+test("per-tournament calls send X-Guild-Id when the row's guildId is known", async () => {
+  const deps = { backendUrl: "http://x" };
+  const cases: Array<[string, (f: typeof fetch) => Promise<unknown>]> = [
+    ["entrants", (f) => listEntrants({ accessToken: "jwt", tournamentId: "t1", guildId: "g-friend" }, { ...deps, fetch: f })],
+    ["lock-in", (f) => lockIn({ accessToken: "jwt", tournamentId: "t1", guildId: "g-friend" }, { ...deps, fetch: f })],
+    ["bracket", (f) => getBracket({ accessToken: "jwt", tournamentId: "t1", guildId: "g-friend" }, { ...deps, fetch: f })],
+    ["hide", (f) => hideTournament({ accessToken: "jwt", tournamentId: "t1", guildId: "g-friend" }, { ...deps, fetch: f })],
+    ["ready", (f) => markReady({ accessToken: "jwt", matchId: "m1", guildId: "g-friend" }, { ...deps, fetch: f })],
+  ];
+  for (const [name, call] of cases) {
+    const { seen, spyFetch } = captureHeaders([]);
+    await call(spyFetch);
+    assert.equal(seen.headers?.["X-Guild-Id"], "g-friend", `${name} must carry the row's server`);
+    assert.equal(seen.headers?.["Authorization"], "Bearer jwt", `${name} keeps the Bearer`);
+  }
+});
+
+test("per-tournament calls send NO X-Guild-Id when guildId is unknown (JWT default)", async () => {
+  const deps = { backendUrl: "http://x" };
+  const cases: Array<(f: typeof fetch) => Promise<unknown>> = [
+    (f) => listEntrants({ accessToken: "jwt", tournamentId: "t1" }, { ...deps, fetch: f }),
+    (f) => listEntrants({ accessToken: "jwt", tournamentId: "t1", guildId: "" }, { ...deps, fetch: f }),
+    (f) => lockIn({ accessToken: "jwt", tournamentId: "t1" }, { ...deps, fetch: f }),
+    (f) => getBracket({ accessToken: "jwt", tournamentId: "t1" }, { ...deps, fetch: f }),
+    (f) => hideTournament({ accessToken: "jwt", tournamentId: "t1" }, { ...deps, fetch: f }),
+    (f) => markReady({ accessToken: "jwt", matchId: "m1" }, { ...deps, fetch: f }),
+  ];
+  for (const call of cases) {
+    const { seen, spyFetch } = captureHeaders([]);
+    await call(spyFetch);
+    assert.equal("X-Guild-Id" in (seen.headers ?? {}), false);
+  }
 });

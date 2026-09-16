@@ -100,6 +100,8 @@ class JoinRequestResponse(BaseModel):
     team_name: str
     user_id: str
     display_name: str
+    #: The team's server — the feed spans every server the caller belongs to.
+    guild_id: str
 
 
 class MyTeamResponse(BaseModel):
@@ -109,6 +111,9 @@ class MyTeamResponse(BaseModel):
     name: str
     role: str
     status: str
+    #: The team's server — ``/mine`` spans every server the caller belongs to, so
+    #: a client addresses follow-up calls (roster, join code) with this.
+    guild_id: str
 
 
 def _enum_value(v: object) -> str:
@@ -135,6 +140,7 @@ def _join_request_response(r: service.JoinRequest) -> JoinRequestResponse:
         team_name=r.team_name,
         user_id=str(r.user_id),
         display_name=r.display_name,
+        guild_id=str(r.guild_id),
     )
 
 
@@ -243,6 +249,7 @@ async def my_teams(
             name=r.name,
             role=_enum_value(r.role),
             status=_enum_value(r.status),
+            guild_id=str(r.guild_id),
         )
         for r in rows
     ]

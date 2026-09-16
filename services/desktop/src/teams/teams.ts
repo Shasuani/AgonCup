@@ -80,6 +80,19 @@ function str(rec: Record<string, unknown>, key: string): string {
   return typeof rec[key] === "string" ? (rec[key] as string) : "";
 }
 
+/** The tenant header for a per-object call.
+ *
+ * The backend pins a request to ONE Discord server: `X-Guild-Id` when sent,
+ * else the server baked into the JWT (where the user holds their highest role).
+ * The lists this client reads span every server the user belongs to, and each
+ * row names its own `guildId`; a follow-up call about that row must carry it,
+ * or a tournament on the friend's server is looked up on the user's own server
+ * and reads as "not found". Empty/undefined sends nothing (the JWT default).
+ */
+function guildHeader(guildId: string | undefined): Record<string, string> {
+  return guildId !== undefined && guildId !== "" ? { "X-Guild-Id": guildId } : {};
+}
+
 function asCreatedTeam(raw: unknown): CreatedTeam {
   const rec = (raw ?? {}) as Record<string, unknown>;
   return {
@@ -190,7 +203,7 @@ export async function joinTeamByCode(
 }
 
 export async function getTeamJoinCode(
-  args: AuthedArgs & { teamId: string },
+  args: AuthedArgs & { teamId: string; guildId?: string | undefined },
   deps: HttpDeps = {},
 ): Promise<JoinCodeResult> {
   const doFetch = deps.fetch ?? fetch;
@@ -202,7 +215,7 @@ export async function getTeamJoinCode(
       `${backendUrl}/api/v1/teams/${encodeURIComponent(args.teamId)}/join-code`,
       {
         method: "GET",
-        headers: { Authorization: `Bearer ${args.accessToken}` },
+        headers: { Authorization: `Bearer ${args.accessToken}`, ...guildHeader(args.guildId) },
       },
     );
   } catch (err) {
@@ -228,7 +241,7 @@ export async function getTeamJoinCode(
 }
 
 export async function listTeamMembers(
-  args: AuthedArgs & { teamId: string },
+  args: AuthedArgs & { teamId: string; guildId?: string | undefined },
   deps: HttpDeps = {},
 ): Promise<ListMembersResult> {
   const doFetch = deps.fetch ?? fetch;
@@ -240,7 +253,7 @@ export async function listTeamMembers(
       `${backendUrl}/api/v1/teams/${encodeURIComponent(args.teamId)}/members`,
       {
         method: "GET",
-        headers: { Authorization: `Bearer ${args.accessToken}` },
+        headers: { Authorization: `Bearer ${args.accessToken}`, ...guildHeader(args.guildId) },
       },
     );
   } catch (err) {
@@ -273,6 +286,8 @@ export interface JoinRequest {
   readonly teamName: string;
   readonly userId: string;
   readonly displayName: string;
+  /** The team's server — the feed spans every server the captain belongs to. */
+  readonly guildId: string;
 }
 
 export type ListJoinRequestsResult =
@@ -290,6 +305,7 @@ function asJoinRequest(rec: unknown): JoinRequest {
     teamName: str(r, "team_name"),
     userId: str(r, "user_id"),
     displayName: str(r, "display_name"),
+    guildId: str(r, "guild_id"),
   };
 }
 
@@ -332,7 +348,7 @@ export async function listMyJoinRequests(
 /** Approve (`approve`) or reject (`reject`) a pending request for one team. */
 async function actOnRequest(
   action: "approve" | "reject",
-  args: AuthedArgs & { teamId: string; userId: string },
+  args: AuthedArgs & { teamId: string; userId: string; guildId?: string | undefined },
   deps: HttpDeps = {},
 ): Promise<ActOnRequestResult> {
   const doFetch = deps.fetch ?? fetch;
@@ -345,7 +361,7 @@ async function actOnRequest(
   try {
     res = await doFetch(path, {
       method: "POST",
-      headers: { Authorization: `Bearer ${args.accessToken}` },
+      headers: { Authorization: `Bearer ${args.accessToken}`, ...guildHeader(args.guildId) },
     });
   } catch (err) {
     return { ok: false, status: 0, detail: `Backend unreachable: ${String(err)}` };
@@ -368,14 +384,14 @@ async function actOnRequest(
 }
 
 export function approveJoinRequest(
-  args: AuthedArgs & { teamId: string; userId: string },
+  args: AuthedArgs & { teamId: string; userId: string; guildId?: string | undefined },
   deps: HttpDeps = {},
 ): Promise<ActOnRequestResult> {
   return actOnRequest("approve", args, deps);
 }
 
 export function rejectJoinRequest(
-  args: AuthedArgs & { teamId: string; userId: string },
+  args: AuthedArgs & { teamId: string; userId: string; guildId?: string | undefined },
   deps: HttpDeps = {},
 ): Promise<ActOnRequestResult> {
   return actOnRequest("reject", args, deps);
@@ -383,7 +399,7 @@ export function rejectJoinRequest(
 
 /** Remove a member from a team (captain of that team). 204 on success. */
 export async function removeMember(
-  args: AuthedArgs & { teamId: string; userId: string },
+  args: AuthedArgs & { teamId: string; userId: string; guildId?: string | undefined },
   deps: HttpDeps = {},
 ): Promise<ActOnRequestResult> {
   const doFetch = deps.fetch ?? fetch;
@@ -396,7 +412,7 @@ export async function removeMember(
   try {
     res = await doFetch(path, {
       method: "DELETE",
-      headers: { Authorization: `Bearer ${args.accessToken}` },
+      headers: { Authorization: `Bearer ${args.accessToken}`, ...guildHeader(args.guildId) },
     });
   } catch (err) {
     return { ok: false, status: 0, detail: `Backend unreachable: ${String(err)}` };
@@ -426,6 +442,9 @@ export interface MyTeam {
   readonly name: string;
   readonly role: string;
   readonly status: string;
+  /** The team's server — `/mine` spans every server the user belongs to; every
+   *  follow-up call about this team (roster, code, approve…) sends it. */
+  readonly guildId: string;
 }
 
 export type ListMyTeamsResult =
@@ -439,6 +458,7 @@ function asMyTeam(raw: unknown): MyTeam {
     name: str(r, "name"),
     role: str(r, "role"),
     status: str(r, "status"),
+    guildId: str(r, "guild_id"),
   };
 }
 
@@ -480,7 +500,7 @@ export async function listMyTeams(
 
 /** Leave a team (self-service; the captain must transfer/disband first → 409). */
 export async function leaveTeam(
-  args: AuthedArgs & { teamId: string },
+  args: AuthedArgs & { teamId: string; guildId?: string | undefined },
   deps: HttpDeps = {},
 ): Promise<ActOnRequestResult> {
   const doFetch = deps.fetch ?? fetch;
@@ -490,7 +510,7 @@ export async function leaveTeam(
   try {
     res = await doFetch(`${backendUrl}/api/v1/teams/${encodeURIComponent(args.teamId)}/leave`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${args.accessToken}` },
+      headers: { Authorization: `Bearer ${args.accessToken}`, ...guildHeader(args.guildId) },
     });
   } catch (err) {
     return { ok: false, status: 0, detail: `Backend unreachable: ${String(err)}` };
@@ -514,7 +534,7 @@ export async function leaveTeam(
 
 /** Disband a team (captain of that team). 204 on success. */
 export async function deleteTeam(
-  args: AuthedArgs & { teamId: string },
+  args: AuthedArgs & { teamId: string; guildId?: string | undefined },
   deps: HttpDeps = {},
 ): Promise<ActOnRequestResult> {
   const doFetch = deps.fetch ?? fetch;
@@ -524,7 +544,7 @@ export async function deleteTeam(
   try {
     res = await doFetch(`${backendUrl}/api/v1/teams/${encodeURIComponent(args.teamId)}`, {
       method: "DELETE",
-      headers: { Authorization: `Bearer ${args.accessToken}` },
+      headers: { Authorization: `Bearer ${args.accessToken}`, ...guildHeader(args.guildId) },
     });
   } catch (err) {
     return { ok: false, status: 0, detail: `Backend unreachable: ${String(err)}` };

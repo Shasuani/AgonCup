@@ -425,14 +425,29 @@ class _HistResult:
     def all(self) -> list[Any]:
         return self._rows
 
+    def scalar_one_or_none(self) -> Any:
+        return self._rows[0] if self._rows else None
+
 
 class _QueuedSession:
-    """Returns pre-baked results in execute() call order (reports, names, meta)."""
+    """Returns pre-baked results in execute() call order (reports, names, meta).
+
+    The tenancy walk (``app.auth.tenancy``) issues GUC ``text()`` statements and a
+    ``user_guild_roles`` read around the history queries; those are answered empty
+    without consuming the queue, so the queued results still line up with the
+    history reads themselves (no guilds -> the read runs once, as before).
+    """
 
     def __init__(self, *results: _HistResult) -> None:
         self._q = list(results)
 
     async def execute(self, statement: Any, params: Any = None) -> Any:
+        if not hasattr(statement, "column_descriptions"):
+            return _HistResult([])
+        from app.models import UserGuildRole
+
+        if statement.column_descriptions[0]["entity"] is UserGuildRole:
+            return _HistResult([])
         return self._q.pop(0)
 
 
@@ -697,6 +712,92 @@ async def test_list_my_match_history_keeps_only_the_callers_games() -> None:
 
     assert [g.lcu_game_id for g in games] == ["100"]
     assert games[0].teams[0].players[0].puuid == "me"
+
+
+@pytest.mark.asyncio
+async def test_list_match_history_resolves_live_client_lines_by_riot_id() -> None:
+    """A duel's only report is the MID-GAME one: its lines carry a Riot ID and no
+    PUUID (the live client exposes none). The Riot ID resolves to the linked
+    account — PUUID and name — so the game renders like any other; an unlinked
+    Riot ID keeps the scoreboard name as the label (ToDoList #9/#10)."""
+    from datetime import UTC, datetime
+
+    match_id, tid = uuid.uuid4(), uuid.uuid4()
+    teams = [
+        {
+            "isWinningTeam": True,
+            "players": [
+                {
+                    "riotId": "ChamaIGN#EUNE",
+                    "championId": 103,
+                    "championName": "Ahri",
+                    "championsKilled": 1,
+                    "numDeaths": 0,
+                    "assists": 0,
+                    "level": 6,
+                    "items": [1056, 3020, 0, 0, 0, 0, 0],
+                }
+            ],
+        },
+        {
+            "isWinningTeam": False,
+            "players": [
+                {
+                    "riotId": "Stranger#0001",
+                    "championId": 21,
+                    "championName": "Miss Fortune",
+                    "championsKilled": 0,
+                    "numDeaths": 1,
+                    "assists": 0,
+                }
+            ],
+        },
+    ]
+    session = _QueuedSession(
+        _HistResult([_report(match_id, "7001", datetime(2026, 9, 16, tzinfo=UTC), teams)]),
+        # Stored casing differs from the scoreboard's: the match is case-insensitive.
+        _HistResult([("p1", "Chama", "chamaign", "eune")]),
+        _HistResult([(match_id, 1, tid, "Duel Night")]),
+    )
+
+    games = await service.list_match_history(session, limit=50)  # type: ignore[arg-type]
+
+    assert len(games) == 1
+    win = games[0].teams[0].players[0]
+    assert (win.puuid, win.display_name, win.riot_id) == ("p1", "Chama", "chamaign#eune")
+    assert win.champion_id == 103
+    assert win.champion_name == "Ahri"
+    assert win.items == (1056, 3020, 0, 0, 0, 0, 0)
+    assert games[0].teams[0].is_winner is True
+    lose = games[0].teams[1].players[0]
+    assert lose.puuid == ""
+    assert lose.display_name is None
+    assert lose.riot_id == "Stranger#0001"
+
+
+@pytest.mark.asyncio
+async def test_list_my_match_history_keeps_a_duel_reported_only_by_riot_id() -> None:
+    """The caller's own duel appears in "your games" although its only report
+    names them by Riot ID: the resolved PUUID is what the filter matches."""
+    from datetime import UTC, datetime
+
+    mine, tid = uuid.uuid4(), uuid.uuid4()
+    duel = [
+        {"isWinningTeam": True, "players": [{"riotId": "ChamaIGN#EUNE", "championId": 103}]},
+        {"isWinningTeam": False, "players": [{"riotId": "Rival#EUW", "championId": 21}]},
+    ]
+    session = _QueuedSession(
+        _HistResult([("p1",)]),  # the caller's linked PUUIDs
+        _HistResult([_report(mine, "7001", datetime(2026, 9, 16, tzinfo=UTC), duel)]),
+        _HistResult([("p1", "Chama", "ChamaIGN", "EUNE")]),
+        _HistResult([(mine, 1, tid, "Duel Night")]),
+    )
+
+    games = await service.list_my_match_history(session, user_id=uuid.uuid4(), limit=20)  # type: ignore[arg-type]
+
+    assert [g.lcu_game_id for g in games] == ["7001"]
+    assert games[0].teams[0].players[0].puuid == "p1"
+    assert games[0].teams[0].players[0].display_name == "Chama"
 
 
 @pytest.mark.asyncio

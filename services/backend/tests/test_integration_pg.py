@@ -612,3 +612,111 @@ async def test_hidden_tournaments_drop_out_of_my_list_per_user_under_rls() -> No
     finally:
         await owner_engine.dispose()
         await app_engine.dispose()
+
+
+async def test_join_code_and_my_list_span_the_callers_guilds_under_rls() -> None:
+    """A join code resolves in whichever of the caller's guilds owns it (PLAN.md §3.1).
+
+    The desktop client sends no ``X-Guild-Id``, so its tenant session sits on the
+    JWT's default guild — where the user holds their most privileged role. The
+    admin of server A who plays in server B's cup redeemed B's code against A and
+    got "invalid join code". ``app.auth.tenancy`` walks the caller's own guilds by
+    re-pointing ``app.current_guild``; only a real Postgres can prove that the
+    ``guild_isolation`` policy hides the row on A and shows it on B, that the
+    ``self_role_read`` policy yields the guild list, and that the enrolment then
+    lands in B. Four things must hold:
+
+      1. B's code, redeemed while acting as A, resolves and enrols the caller in
+         **B** (the participant row is B's, never A's);
+      2. ``/mine`` lists that tournament while acting as A, and hands the
+         transaction back on A afterwards;
+      3. a code from a guild the caller is NOT a member of still reads as invalid
+         (no widening), and the tenant is left where it was;
+      4. a plain ``get_tournament_by_code`` on A still cannot see B's row — the
+         walk, not a policy change, is what makes the code resolve.
+    """
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.auth.tenancy import current_guild_id
+    from app.tournaments.service import (
+        InvalidJoinCodeError,
+        get_tournament_by_code,
+        get_tournament_by_code_for_user,
+        join_by_code,
+        list_my_tournaments,
+    )
+
+    owner_engine = create_async_engine(OWNER_URL)
+    app_engine = create_async_engine(APP_URL)
+    try:
+        async with owner_engine.begin() as owner:
+            g_a = await _seed_guild(owner, 970001)
+            g_b = await _seed_guild(owner, 970002)
+            # A's admin is a plain player on B — the multi-server case.
+            await owner.execute(
+                text("INSERT INTO user_guild_roles (user_id, guild_id, role) VALUES (:u, :g, :r)"),
+                {"u": g_a.admin_user_id, "g": g_b.guild_id, "r": PLAYER},
+            )
+            for code, tournament_id in (
+                ("BBBB2345", g_b.tournament_id),
+                ("AAAA2345", g_a.tournament_id),
+            ):
+                await owner.execute(
+                    text(
+                        "UPDATE tournaments SET join_code = :c, status = 'open', "
+                        "game_mode = 'aram_1v1' WHERE id = :t"
+                    ),
+                    {"c": code, "t": tournament_id},
+                )
+
+        session_factory = async_sessionmaker(app_engine, expire_on_commit=False)
+        async with session_factory() as session:
+            # The client's default tenant is A (guild_admin outranks player).
+            await _set_current_guild(await session.connection(), g_a.guild_id)
+
+            # (4) the guild-scoped lookup alone cannot see B's row from A.
+            with pytest.raises(InvalidJoinCodeError):
+                await get_tournament_by_code(session, code="BBBB2345")
+
+            # (1) the walk finds it and leaves the transaction on B ...
+            found = await get_tournament_by_code_for_user(
+                session, code="bbbb-2345", user_id=g_a.admin_user_id
+            )
+            assert found.id == g_b.tournament_id
+            assert await current_guild_id(session) == str(g_b.guild_id)
+
+            # ... so the enrolment lands in B.
+            await _set_current_guild(await session.connection(), g_a.guild_id)
+            tournament, _ = await join_by_code(session, code="BBBB2345", user_id=g_a.admin_user_id)
+            assert tournament.id == g_b.tournament_id
+            await session.commit()
+
+        async with owner_engine.begin() as owner:
+            rows = (
+                await owner.execute(
+                    text(
+                        "SELECT guild_id FROM tournament_participants "
+                        "WHERE tournament_id = :t AND user_id = :u"
+                    ),
+                    {"t": g_b.tournament_id, "u": g_a.admin_user_id},
+                )
+            ).all()
+            assert [gid for (gid,) in rows] == [g_b.guild_id]
+
+        async with session_factory() as session:
+            # (2) the list spans both guilds and restores the acting tenant.
+            await _set_current_guild(await session.connection(), g_a.guild_id)
+            mine = await list_my_tournaments(session, user_id=g_a.admin_user_id)
+            assert [t.id for t in mine] == [g_b.tournament_id]
+            assert await current_guild_id(session) == str(g_a.guild_id)
+
+            # (3) B's admin is not on A: A's code stays invalid, tenant untouched.
+            await _set_current_guild(await session.connection(), g_b.guild_id)
+            with pytest.raises(InvalidJoinCodeError):
+                await get_tournament_by_code_for_user(
+                    session, code="AAAA2345", user_id=g_b.admin_user_id
+                )
+            assert await current_guild_id(session) == str(g_b.guild_id)
+    finally:
+        await owner_engine.dispose()
+        await app_engine.dispose()

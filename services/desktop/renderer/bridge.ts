@@ -75,10 +75,12 @@ export interface MyMatch {
   gameMode: string;
 }
 
-export interface Tournament { id: string; name: string; status: string; format: string; gameMode: string; bestOf: number; maxTeams: number; isSharedToCentral: boolean; region: string | null; registrationOpensAt: string | null; startAt: string | null }
-export interface MyTeam { teamId: string; name: string; role: string; status: string }
+/** `guildId` is the row's own server: the lists span every server the user belongs to,
+ *  and every per-object call (entrants, lock-in, bracket, hide) sends it back. */
+export interface Tournament { id: string; guildId: string; name: string; status: string; format: string; gameMode: string; bestOf: number; maxTeams: number; isSharedToCentral: boolean; region: string | null; registrationOpensAt: string | null; startAt: string | null }
+export interface MyTeam { teamId: string; name: string; role: string; status: string; guildId: string }
 export interface TeamMember { teamId: string; userId: string; role: string; displayName: string }
-export interface JoinRequest { teamId: string; teamName: string; userId: string; displayName: string }
+export interface JoinRequest { teamId: string; teamName: string; userId: string; displayName: string; guildId: string }
 /** One row of a live scoreboard — a display name, never a Riot ID. */
 export interface LiveBoardPlayer { name: string; championKey: string; championName: string; team: string; level: number; isDead: boolean; respawnTimer: number; items: number[]; kills: number; deaths: number; assists: number; creepScore: number; wardScore: number; spell1Key: string | null; spell2Key: string | null }
 export interface LiveBoard { matchId: string; gameTime: number; gameMode: string; updatedAt: string; players: LiveBoardPlayer[] }
@@ -110,23 +112,23 @@ export interface LolBridge {
   listMyTournaments(): Promise<Res<{ tournaments: Tournament[] }>>;
   listMyMatches(): Promise<Res<{ matches: MyMatch[] }>>;
   joinTournament(code: string, teamId?: string): Promise<Res<{ tournament: Tournament }>>;
-  hideTournament(tournamentId: string): Promise<Res<Record<string, never>>>;
-  tournamentBracket(tournamentId: string): Promise<Res<{ tournament: Tournament; matches: BracketMatch[] }>>;
+  hideTournament(tournamentId: string, guildId?: string): Promise<Res<Record<string, never>>>;
+  tournamentBracket(tournamentId: string, guildId?: string): Promise<Res<{ tournament: Tournament; matches: BracketMatch[] }>>;
   lookupTournament(code: string): Promise<Res<{ tournament: Tournament }>>;
-  tournamentEntrants(tournamentId: string): Promise<Res<{ entrants: Entrant[] }>>;
-  tournamentLockIn(tournamentId: string, teamId?: string): Promise<Res<Record<string, never>>>;
-  matchReady(matchId: string): Promise<Res<{ side: string; bothReady: boolean }>>;
+  tournamentEntrants(tournamentId: string, guildId?: string): Promise<Res<{ entrants: Entrant[] }>>;
+  tournamentLockIn(tournamentId: string, teamId?: string, guildId?: string): Promise<Res<Record<string, never>>>;
+  matchReady(matchId: string, guildId?: string): Promise<Res<{ side: string; bothReady: boolean }>>;
   createTeam(name: string): Promise<Res<{ team: { id: string; name: string; joinCode: string } }>>;
   joinTeam(code: string): Promise<Res<{ team: { id: string; name: string } }>>;
-  teamMembers(teamId: string): Promise<Res<{ members: TeamMember[] }>>;
-  teamJoinCode(teamId: string): Promise<Res<{ teamId: string; joinCode: string }>>;
+  teamMembers(teamId: string, guildId?: string): Promise<Res<{ members: TeamMember[] }>>;
+  teamJoinCode(teamId: string, guildId?: string): Promise<Res<{ teamId: string; joinCode: string }>>;
   teamJoinRequests(): Promise<Res<{ requests: JoinRequest[] }>>;
-  approveJoinRequest(teamId: string, userId: string): Promise<Res<Record<string, never>>>;
-  rejectJoinRequest(teamId: string, userId: string): Promise<Res<Record<string, never>>>;
-  removeMember(teamId: string, userId: string): Promise<Res<Record<string, never>>>;
+  approveJoinRequest(teamId: string, userId: string, guildId?: string): Promise<Res<Record<string, never>>>;
+  rejectJoinRequest(teamId: string, userId: string, guildId?: string): Promise<Res<Record<string, never>>>;
+  removeMember(teamId: string, userId: string, guildId?: string): Promise<Res<Record<string, never>>>;
   myTeams(): Promise<Res<{ teams: MyTeam[] }>>;
-  leaveTeam(teamId: string): Promise<Res<Record<string, never>>>;
-  deleteTeam(teamId: string): Promise<Res<Record<string, never>>>;
+  leaveTeam(teamId: string, guildId?: string): Promise<Res<Record<string, never>>>;
+  deleteTeam(teamId: string, guildId?: string): Promise<Res<Record<string, never>>>;
   presence(): Promise<Res<{ playersInGame: number; entries: PresenceEntry[] }>>;
   /** The live scoreboard of a game in progress; absent on an old main-process build. */
   liveBoard?(matchId: string): Promise<Res<{ board: LiveBoard }>>;

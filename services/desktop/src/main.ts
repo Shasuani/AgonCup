@@ -58,6 +58,7 @@ import {
   lookupTournamentByCode,
   lockIn,
   markReady,
+  type ActiveAccount,
   type MyMatch,
 } from "./tournaments/tournaments.js";
 import {
@@ -1005,56 +1006,105 @@ async function bootstrap(): Promise<void> {
     ),
   );
   // Per-user dismissal — clears a finished tournament off THIS user's list only.
-  ipcMain.handle("lol:tournament-hide", (_event, args: { tournamentId: string }) =>
-    withSession((t) =>
-      hideTournament(
-        { accessToken: t, tournamentId: args.tournamentId },
-        { backendUrl: backendBaseUrl() },
+  // Per-object calls carry the row's own server (`guildId` -> `X-Guild-Id`):
+  // the lists span every server the user belongs to, and the backend would
+  // otherwise look the id up on the user's default server and 404.
+  ipcMain.handle(
+    "lol:tournament-hide",
+    (_event, args: { tournamentId: string; guildId?: string }) =>
+      withSession((t) =>
+        hideTournament(
+          { accessToken: t, tournamentId: args.tournamentId, guildId: args.guildId },
+          { backendUrl: backendBaseUrl() },
+        ),
       ),
-    ),
   );
-  ipcMain.handle("lol:tournament-bracket", (_event, args: { tournamentId: string }) =>
-    withSession((t) =>
-      getBracket(
-        { accessToken: t, tournamentId: args.tournamentId },
-        { backendUrl: backendBaseUrl() },
+  ipcMain.handle(
+    "lol:tournament-bracket",
+    (_event, args: { tournamentId: string; guildId?: string }) =>
+      withSession((t) =>
+        getBracket(
+          { accessToken: t, tournamentId: args.tournamentId, guildId: args.guildId },
+          { backendUrl: backendBaseUrl() },
+        ),
       ),
-    ),
   );
   ipcMain.handle("lol:tournament-lookup", (_event, args: { code: string }) =>
     withSession((t) =>
       lookupTournamentByCode({ accessToken: t, code: args.code }, { backendUrl: backendBaseUrl() }),
     ),
   );
-  ipcMain.handle("lol:tournament-entrants", (_event, args: { tournamentId: string }) =>
-    withSession((t) =>
-      listEntrants(
-        { accessToken: t, tournamentId: args.tournamentId },
-        { backendUrl: backendBaseUrl() },
+  ipcMain.handle(
+    "lol:tournament-entrants",
+    (_event, args: { tournamentId: string; guildId?: string }) =>
+      withSession((t) =>
+        listEntrants(
+          { accessToken: t, tournamentId: args.tournamentId, guildId: args.guildId },
+          { backendUrl: backendBaseUrl() },
+        ),
       ),
-    ),
   );
+  /**
+   * Which account is open in League right now — sent with lock-in so the lobby
+   * invites THAT one (a player with two accounts on the server was otherwise
+   * invited on the signed-out one, ToDoList #8). A live READ-ONLY LCU read
+   * first; with League closed, the last account this device saw signed in is
+   * the best guess (it is what the profile card shows); never signed in at
+   * all, nothing is sent and the backend keeps its own pick.
+   */
+  const activeAccountForLockIn = async (): Promise<ActiveAccount | undefined> => {
+    const live = await readCurrentSummoner();
+    if (live.ok) {
+      return {
+        gameName: live.gameName,
+        tagLine: live.tagLine,
+        region: live.region,
+        lcuPuuid: live.puuid,
+        summonerId: live.summonerId,
+      };
+    }
+    if (lastProfile.gameName !== undefined && lastProfile.tagLine !== undefined) {
+      return {
+        gameName: lastProfile.gameName,
+        tagLine: lastProfile.tagLine,
+        region: lastProfile.region,
+      };
+    }
+    return undefined;
+  };
+
   ipcMain.handle(
     "lol:tournament-lock-in",
-    (_event, args: { tournamentId: string; teamId?: string }) =>
-      withSession((t) =>
+    async (_event, args: { tournamentId: string; teamId?: string; guildId?: string }) => {
+      const activeAccount = await activeAccountForLockIn();
+      log("lock_in_active_account", {
+        tournamentId: args.tournamentId,
+        activeAccount: activeAccount ? `${activeAccount.gameName}#${activeAccount.tagLine}` : null,
+      });
+      return withSession((t) =>
         lockIn(
           {
             accessToken: t,
             tournamentId: args.tournamentId,
+            guildId: args.guildId,
             ...(args.teamId ? { teamId: args.teamId } : {}),
             // Lock-in doubles as hosting consent: the automation toggle IS the
             // player's "may my client run the lobby?" answer, so the current
             // value rides along and the orchestrator can seed them as a host.
             hostOptIn: adapter.writeAutomationEnabled(),
+            activeAccount,
           },
           { backendUrl: backendBaseUrl() },
         ),
-      ),
+      );
+    },
   );
-  ipcMain.handle("lol:match-ready", (_event, args: { matchId: string }) =>
+  ipcMain.handle("lol:match-ready", (_event, args: { matchId: string; guildId?: string }) =>
     withSession((t) =>
-      markReady({ accessToken: t, matchId: args.matchId }, { backendUrl: backendBaseUrl() }),
+      markReady(
+        { accessToken: t, matchId: args.matchId, guildId: args.guildId },
+        { backendUrl: backendBaseUrl() },
+      ),
     ),
   );
 
@@ -1065,14 +1115,20 @@ async function bootstrap(): Promise<void> {
   ipcMain.handle("lol:team-join", (_event, args: { code: string }) =>
     withSession((t) => joinTeamByCode({ accessToken: t, code: args.code }, { backendUrl: backendBaseUrl() })),
   );
-  ipcMain.handle("lol:team-members", (_event, args: { teamId: string }) =>
+  ipcMain.handle("lol:team-members", (_event, args: { teamId: string; guildId?: string }) =>
     withSession((t) =>
-      listTeamMembers({ accessToken: t, teamId: args.teamId }, { backendUrl: backendBaseUrl() }),
+      listTeamMembers(
+        { accessToken: t, teamId: args.teamId, guildId: args.guildId },
+        { backendUrl: backendBaseUrl() },
+      ),
     ),
   );
-  ipcMain.handle("lol:team-code", (_event, args: { teamId: string }) =>
+  ipcMain.handle("lol:team-code", (_event, args: { teamId: string; guildId?: string }) =>
     withSession((t) =>
-      getTeamJoinCode({ accessToken: t, teamId: args.teamId }, { backendUrl: backendBaseUrl() }),
+      getTeamJoinCode(
+        { accessToken: t, teamId: args.teamId, guildId: args.guildId },
+        { backendUrl: backendBaseUrl() },
+      ),
     ),
   );
 
@@ -1080,41 +1136,53 @@ async function bootstrap(): Promise<void> {
   ipcMain.handle("lol:team-join-requests", () =>
     withSession((t) => listMyJoinRequests({ accessToken: t }, { backendUrl: backendBaseUrl() })),
   );
-  ipcMain.handle("lol:team-approve", (_event, args: { teamId: string; userId: string }) =>
-    withSession((t) =>
-      approveJoinRequest(
-        { accessToken: t, teamId: args.teamId, userId: args.userId },
-        { backendUrl: backendBaseUrl() },
+  ipcMain.handle(
+    "lol:team-approve",
+    (_event, args: { teamId: string; userId: string; guildId?: string }) =>
+      withSession((t) =>
+        approveJoinRequest(
+          { accessToken: t, teamId: args.teamId, userId: args.userId, guildId: args.guildId },
+          { backendUrl: backendBaseUrl() },
+        ),
       ),
-    ),
   );
-  ipcMain.handle("lol:team-reject", (_event, args: { teamId: string; userId: string }) =>
-    withSession((t) =>
-      rejectJoinRequest(
-        { accessToken: t, teamId: args.teamId, userId: args.userId },
-        { backendUrl: backendBaseUrl() },
+  ipcMain.handle(
+    "lol:team-reject",
+    (_event, args: { teamId: string; userId: string; guildId?: string }) =>
+      withSession((t) =>
+        rejectJoinRequest(
+          { accessToken: t, teamId: args.teamId, userId: args.userId, guildId: args.guildId },
+          { backendUrl: backendBaseUrl() },
+        ),
       ),
-    ),
   );
-  ipcMain.handle("lol:team-remove-member", (_event, args: { teamId: string; userId: string }) =>
-    withSession((t) =>
-      removeMember(
-        { accessToken: t, teamId: args.teamId, userId: args.userId },
-        { backendUrl: backendBaseUrl() },
+  ipcMain.handle(
+    "lol:team-remove-member",
+    (_event, args: { teamId: string; userId: string; guildId?: string }) =>
+      withSession((t) =>
+        removeMember(
+          { accessToken: t, teamId: args.teamId, userId: args.userId, guildId: args.guildId },
+          { backendUrl: backendBaseUrl() },
+        ),
       ),
-    ),
   );
   ipcMain.handle("lol:teams-mine", () =>
     withSession((t) => listMyTeams({ accessToken: t }, { backendUrl: backendBaseUrl() })),
   );
-  ipcMain.handle("lol:team-leave", (_event, args: { teamId: string }) =>
+  ipcMain.handle("lol:team-leave", (_event, args: { teamId: string; guildId?: string }) =>
     withSession((t) =>
-      leaveTeam({ accessToken: t, teamId: args.teamId }, { backendUrl: backendBaseUrl() }),
+      leaveTeam(
+        { accessToken: t, teamId: args.teamId, guildId: args.guildId },
+        { backendUrl: backendBaseUrl() },
+      ),
     ),
   );
-  ipcMain.handle("lol:team-delete", (_event, args: { teamId: string }) =>
+  ipcMain.handle("lol:team-delete", (_event, args: { teamId: string; guildId?: string }) =>
     withSession((t) =>
-      deleteTeam({ accessToken: t, teamId: args.teamId }, { backendUrl: backendBaseUrl() }),
+      deleteTeam(
+        { accessToken: t, teamId: args.teamId, guildId: args.guildId },
+        { backendUrl: backendBaseUrl() },
+      ),
     ),
   );
 

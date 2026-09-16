@@ -444,6 +444,12 @@ export interface ChampionSummaryEntry {
 export interface EogPlayerStats {
   readonly puuid?: Puuid;
   readonly summonerId?: SummonerId;
+  /**
+   * `Name#TAG` as the live scoreboard shows it — set on MID-GAME lines
+   * (`source: 'liveClientData'`), where the `:2999` API exposes no PUUID. The
+   * backend resolves it to a linked account for display; never an identity.
+   */
+  readonly riotId?: string;
   /** `championId` — numeric champion id (0 if absent); icon resolved downstream. */
   readonly championId: number;
   /** `CHAMPIONS_KILLED`. */
@@ -487,8 +493,9 @@ export interface EogTeamStats {
  *
  * `source` names the capture surface: `'eogStatsBlock'` is the post-game
  * scoreboard read; `'liveClientData'` is the MID-GAME variant for a mode decided
- * before the nexus falls (the 1v1 first-blood duel, §3.6.4) — `teams` is empty
- * there and the verdict rides entirely on `liveClientEvents`.
+ * before the nexus falls (the 1v1 first-blood duel, §3.6.4) — `teams` is the
+ * live scoreboard at capture time there (lines keyed by `riotId`, not PUUID)
+ * and the verdict rides entirely on `liveClientEvents`.
  */
 export interface EogReport {
   readonly source: 'eogStatsBlock' | 'liveClientData';
@@ -633,7 +640,10 @@ export interface LcuAdapter {
    * by the RUNNING game's platform id (`GET /lol-gameflow/v1/session` →
    * `gameData.gameId` — the same id the eog block reports later), so the two
    * duelists' captures corroborate without anyone waiting for an eog block that
-   * may never exist (duelists leave after the deciding kill). READ-ONLY. (§3.6.5)
+   * may never exist (duelists leave after the deciding kill). `teams` carries the
+   * live scoreboard (champion, level, items, K/D/A per `riotId`) with the
+   * first-blood scorer's side marked as the winner — the match history's only
+   * view of a duel. READ-ONLY. (§3.6.5)
    */
   captureLiveClientReport(
     reporterPuuid?: Puuid,
@@ -921,6 +931,85 @@ function liveSpellKey(value: unknown): string | undefined {
   return raw?.match(/SummonerSpell_(\w+?)_DisplayName/)?.[1];
 }
 
+/** Scoreboard side order: blue (`ORDER`) before red (`CHAOS`), anything else last. */
+function liveSideRank(side: string): number {
+  if (side === 'ORDER') return 0;
+  if (side === 'CHAOS') return 1;
+  return 2;
+}
+
+/**
+ * `FirstBlood` rides on a `ChampionKill` at the same `EventTime`; allow a small
+ * skew so a same-tick pair still pairs up while an unrelated later kill never
+ * does. Mirrors `lol_core.adjudication` so the client's display-only winner
+ * and the backend's vote agree.
+ */
+const FIRST_BLOOD_KILL_TOLERANCE_S = 2.0;
+
+/**
+ * Which live-scoreboard side scored first blood, from the captured kill stream
+ * — `ORDER` / `CHAOS`, or `undefined` when there is no `FirstBlood` event yet or
+ * no captured name maps to exactly one player. Resolution order (the same as
+ * `lol_core.adjudication.derive_first_blood_team`): the `FirstBlood` event's
+ * `Recipient`, else the killer of the `ChampionKill` nearest to it in time.
+ * Names match a player's `Name#TAG` or bare game name, case-insensitively; a
+ * name two players share is dropped rather than guessed.
+ */
+function firstBloodSide(
+  events: readonly LiveClientKillEvent[],
+  players: readonly LiveGamePlayer[],
+): string | undefined {
+  const sideByName = new Map<string, string>();
+  const collided = new Set<string>();
+  const learn = (name: string, side: string): void => {
+    const key = name.trim().toLowerCase();
+    if (key === '' || collided.has(key)) return;
+    const seen = sideByName.get(key);
+    if (seen !== undefined && seen !== side) {
+      sideByName.delete(key);
+      collided.add(key);
+      return;
+    }
+    sideByName.set(key, side);
+  };
+  for (const p of players) {
+    learn(p.riotId, p.team);
+    const hash = p.riotId.indexOf('#');
+    if (hash > 0) learn(p.riotId.slice(0, hash), p.team);
+  }
+  const resolve = (name: string | undefined): string | undefined => {
+    const key = name?.trim().toLowerCase() ?? '';
+    if (key === '') return undefined;
+    const hit = sideByName.get(key);
+    if (hit !== undefined) return hit;
+    const hash = key.indexOf('#');
+    return hash > 0 ? sideByName.get(key.slice(0, hash).trim()) : undefined;
+  };
+
+  const ordered = [...events].sort((a, b) => a.eventTime - b.eventTime || a.eventId - b.eventId);
+  const firstBlood = ordered.find((e) => e.eventName === 'FirstBlood');
+  if (firstBlood === undefined) return undefined;
+  const direct = resolve(firstBlood.recipient);
+  if (direct !== undefined) return direct;
+  const kills = ordered
+    .filter(
+      (e) =>
+        e.eventName === 'ChampionKill' &&
+        Math.abs(e.eventTime - firstBlood.eventTime) <= FIRST_BLOOD_KILL_TOLERANCE_S,
+    )
+    .sort(
+      (a, b) =>
+        Math.abs(a.eventTime - firstBlood.eventTime) - Math.abs(b.eventTime - firstBlood.eventTime) ||
+        a.eventTime - b.eventTime ||
+        a.eventId - b.eventId,
+    );
+  for (const kill of kills) {
+    const side = resolve(kill.killerName);
+    if (side !== undefined) return side;
+  }
+  return undefined;
+}
+
 /**
  * Is the client's current lobby THIS match's lobby (vs. some unrelated party)?
  *
@@ -968,6 +1057,8 @@ export class LcuAdapterImpl implements LcuAdapter {
   #auth: import('./lockfile.js').LcuAuth | undefined;
   /** mtime of the lockfile backing {@link #auth}; a change ⇒ creds rotated. */
   #lockfileMtimeMs = -1;
+  /** `championName -> id` from the client's own catalogue; read once per adapter. */
+  #championIdsByName: Map<string, number> | null = null;
 
   constructor(args: {
     config: LcuAdapterConfig;
@@ -1800,9 +1891,18 @@ export class LcuAdapterImpl implements LcuAdapter {
    * (READ-ONLY; the id is platform-established at game start, so every
    * participant keys the same value), takes the bundled kill stream — or
    * captures a fresh one when the caller has none — and emits an
-   * {@link EogReport} with `source: 'liveClientData'` and an empty `teams`
-   * (no scoreboard exists yet; adjudication derives the winner from the kill
-   * stream — §3.6.4/§3.6.6).
+   * {@link EogReport} with `source: 'liveClientData'`.
+   *
+   * `teams` is the live scoreboard at capture time (`:2999 allgamedata`, the
+   * same read as {@link captureLiveGameSnapshot}): champion, level, items and
+   * K/D/A per player, keyed by `riotId` — the live client never exposes PUUIDs,
+   * so the backend resolves the Riot ID to a linked account — with the champion
+   * id looked up in the client's own catalogue. `isWinningTeam` marks the side
+   * of the first-blood scorer when the kill stream names one (the same
+   * resolution the adjudicator applies). Nothing else ever reports a duel, so
+   * this is what the match history shows for a 1v1 (ToDoList #9/#10); the
+   * verdict still rides on `liveClientEvents` (§3.6.4/§3.6.6). Best-effort: an
+   * unreadable scoreboard leaves `teams` empty rather than failing the report.
    */
   async captureLiveClientReport(
     reporterPuuid?: Puuid,
@@ -1823,15 +1923,85 @@ export class LcuAdapterImpl implements LcuAdapter {
       );
     }
     const events = liveClientEvents ?? (await this.captureLiveClientEvents());
+    const teams = await this.#liveScoreboardTeams(events);
     return {
       source: 'liveClientData',
       lcuGameId: String(gameId) as LcuGameId,
       reporterPuuid: reporterPuuid ?? ('' as Puuid),
-      teams: [],
+      teams,
       liveClientEvents: events,
       schemaVersion: this.#config.schemaVersion,
       capturedAtMs: this.#rt.clock.nowMs(),
     };
+  }
+
+  /**
+   * The live scoreboard as eog-shaped teams (see {@link captureLiveClientReport}).
+   * Soft-fail: `[]` when `:2999` cannot be read — the report is still valid, it
+   * just carries no scoreboard.
+   */
+  async #liveScoreboardTeams(events: LiveClientEventCapture): Promise<EogTeamStats[]> {
+    let snapshot: LiveGameSnapshot;
+    try {
+      snapshot = await this.captureLiveGameSnapshot();
+    } catch {
+      return [];
+    }
+    if (snapshot.players.length === 0) {
+      return [];
+    }
+    const championIds = await this.#championIdByName();
+    const sides: string[] = [];
+    const bySide = new Map<string, EogPlayerStats[]>();
+    for (const p of snapshot.players) {
+      const side = p.team;
+      let lines = bySide.get(side);
+      if (lines === undefined) {
+        lines = [];
+        bySide.set(side, lines);
+        sides.push(side);
+      }
+      lines.push({
+        ...(p.riotId !== '' ? { riotId: p.riotId } : {}),
+        championId: championIds.get(p.championName.toLowerCase()) ?? 0,
+        championsKilled: p.kills,
+        numDeaths: p.deaths,
+        assists: p.assists,
+        ...(p.championName !== '' ? { championName: p.championName } : {}),
+        level: p.level,
+        items: [...p.items],
+        minionsKilled: p.creepScore,
+        visionScore: Math.round(p.wardScore),
+      });
+    }
+    // Blue side (ORDER) first, as the eog block lists team 100 before 200.
+    sides.sort((a, b) => liveSideRank(a) - liveSideRank(b));
+    const winner = firstBloodSide(events.events, snapshot.players);
+    return sides.map((side) => ({
+      isWinningTeam: winner !== undefined && side === winner,
+      players: bySide.get(side) ?? [],
+    }));
+  }
+
+  /**
+   * `championName -> id` from the client's own catalogue, read once and cached.
+   * A failed read is not cached (the next report tries again) and yields an
+   * empty map, so every line reports `championId: 0` but the name still shows.
+   */
+  async #championIdByName(): Promise<Map<string, number>> {
+    if (this.#championIdsByName !== null) {
+      return this.#championIdsByName;
+    }
+    const map = new Map<string, number>();
+    try {
+      for (const c of await this.getChampionSummary()) {
+        map.set(c.name.toLowerCase(), c.id);
+      }
+    } catch {
+      return map;
+    }
+    this.#championIdsByName = map;
+    return map;
   }
 }
 

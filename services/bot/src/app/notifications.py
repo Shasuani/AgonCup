@@ -314,11 +314,12 @@ class NotificationSubscriber:
         """(Re)build the origin_guild_id -> (discord_guild_id, channel) cache via the
         read-only resolve endpoint (no mutation; admin not asserted)."""
         for guild in self._bot.guilds:
+            # No display_name: the actor here is the bot's own user, and the
+            # server's name is never a person's name (ToDoList #7).
             ctx = DiscordContext(
                 discord_user_id=self._self_id(),
                 discord_guild_id=guild.id,
                 is_discord_guild_admin=False,
-                display_name=guild.name,
             )
             try:
                 view = await self._backend.resolve_guild(ctx)

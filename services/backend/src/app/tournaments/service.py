@@ -35,7 +35,9 @@ from sqlalchemy import String, cast, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.accounts.service import region_label_for
+from app.auth.tenancy import across_user_guilds, find_across_user_guilds
 from app.joincodes import generate_join_code, normalize_join_code
+from app.logging import get_logger
 from app.models import (
     ClientSession,
     Match,
@@ -48,6 +50,8 @@ from app.models import (
     TournamentParticipant,
     User,
 )
+
+logger = get_logger(__name__)
 
 MAX_TEAMS_HARD_CAP = 16
 
@@ -425,6 +429,39 @@ async def get_tournament_by_code(session: AsyncSession, *, code: str) -> Tournam
     return t
 
 
+async def get_tournament_by_code_for_user(
+    session: AsyncSession, *, code: str, user_id: uuid.UUID
+) -> Tournament:
+    """Resolve a join code across every guild the user belongs to (PLAN.md §3.1).
+
+    The desktop client sends no ``X-Guild-Id``, so the tenant session sits on the
+    JWT's default guild — the one where the user holds their most privileged
+    role. A player who is admin of their own server and a plain member of the
+    server running the cup therefore redeemed a perfectly good code against the
+    wrong tenant and got "invalid join code". Join codes are globally unique, so
+    trying each of the user's guilds (acting guild first) finds the one owner.
+
+    On a hit the transaction is LEFT on the tournament's guild: the enrolment
+    rows written next read ``guild_id`` from the GUC and must land in the same
+    tenant as the tournament. A code from a server the user is not a member of
+    still reads as invalid — that guild is never visited.
+    """
+    normalized = normalize_join_code(code)
+    if not normalized:
+        raise InvalidJoinCodeError("empty code")
+
+    async def _find() -> Tournament | None:
+        try:
+            return await get_tournament_by_code(session, code=normalized)
+        except InvalidJoinCodeError:
+            return None
+
+    found = await find_across_user_guilds(session, user_id=user_id, find=_find)
+    if found is None:
+        raise InvalidJoinCodeError(normalized)
+    return found
+
+
 async def join_by_code(
     session: AsyncSession,
     *,
@@ -447,8 +484,12 @@ async def join_by_code(
     Both paths are idempotent (a unique constraint backs each) and require open
     registration (DRAFT/OPEN) — a running/finished tournament raises
     :class:`RegistrationClosedError`.
+
+    The code is resolved across every guild the caller belongs to (see
+    :func:`get_tournament_by_code_for_user`); from here on the transaction acts
+    in the tournament's own guild.
     """
-    tournament = await get_tournament_by_code(session, code=code)
+    tournament = await get_tournament_by_code_for_user(session, code=code, user_id=user_id)
     if tournament.status not in (TournamentStatus.OPEN, TournamentStatus.DRAFT):
         raise RegistrationClosedError(tournament.status.value)
     # Scheduled-registration gate (PLAN.md §3.2): reject before the window opens,
@@ -701,8 +742,27 @@ async def _sync_team_participants(
 
 
 async def list_my_tournaments(session: AsyncSession, *, user_id: uuid.UUID) -> list[Tournament]:
-    """List tournaments the acting user is in — as a **solo participant** (1v1) OR
-    via a **team** they're an active member of (5v5). RLS scopes to the guild.
+    """List tournaments the user is in, across every guild they belong to.
+
+    The desktop client shows one list for one player; that player may be entered
+    in cups on several servers, and without a server picker the client cannot
+    ask for them one guild at a time. So this walks the user's guilds (acting
+    guild first — see :mod:`app.auth.tenancy`) and concatenates the per-guild
+    lists; each row carries its ``guild_id`` so the client can address follow-up
+    calls (lock-in, bracket, entrants) to the right tenant.
+    """
+    return await across_user_guilds(
+        session,
+        user_id=user_id,
+        read=lambda: _list_my_tournaments_in_acting_guild(session, user_id=user_id),
+    )
+
+
+async def _list_my_tournaments_in_acting_guild(
+    session: AsyncSession, *, user_id: uuid.UUID
+) -> list[Tournament]:
+    """The acting guild's slice of :func:`list_my_tournaments` — as a **solo
+    participant** (1v1) OR via a **team** they're an active member of (5v5).
 
     Solo enrolment lands a ``TournamentParticipant`` row; team enrolment registers
     the team (a ``Registration``) — so a member sees their team's tournaments too.
@@ -977,6 +1037,7 @@ async def check_in(
     team_id: uuid.UUID,
     acting_user_id: uuid.UUID | None = None,
     host_opt_in: bool | None = None,
+    active_account: ActiveAccount | None = None,
 ) -> Registration:
     """Force a whole team CHECKED_IN — the admin override, not the player path.
 
@@ -989,6 +1050,7 @@ async def check_in(
     can never opt anyone else in — but it must not silently drop the caller's own
     answer either, which is what left every match without an eligible host when a
     captain locked their team in with ``{"team_id": ..., "host_opt_in": true}``.
+    ``active_account`` likewise describes the acting user's own client only.
     """
     reg = await _registration_for(session, tournament_id=tournament_id, team_id=team_id)
     # Deliberately NOT region-gated: this is the admin's escape hatch for a stuck
@@ -1001,11 +1063,13 @@ async def check_in(
     ):
         if participant.locked_in_at is None:
             participant.locked_in_at = now
+        mine = participant.user_id == acting_user_id
         await record_client_presence(
             session,
             user_id=participant.user_id,
-            host_opt_in=host_opt_in if participant.user_id == acting_user_id else None,
+            host_opt_in=host_opt_in if mine else None,
             region=tournament.region,
+            active_account=active_account if mine else None,
         )
     reg.status = RegistrationStatus.CHECKED_IN
     await session.flush()
@@ -1015,12 +1079,66 @@ async def check_in(
     return reg
 
 
+def _fold(value: str) -> str:
+    """Case/whitespace-insensitive Riot ID comparison key."""
+    return value.strip().casefold()
+
+
+@dataclass(frozen=True)
+class ActiveAccount:
+    """The account signed into the player's League client right now (PLAN.md §3.6.1).
+
+    The desktop reads it from the local LCU (READ-ONLY ``current-summoner``) at
+    lock-in and sends it along, so the orchestrator can invite the account that
+    is actually OPEN instead of an arbitrary linked one — a player holding two
+    accounts on the same server was otherwise invited on whichever the id
+    tie-break picked, i.e. the offline one (ToDoList #8).
+
+    Every field is advisory (it comes from the player's own, forgeable client):
+    a match only re-orders the player's OWN linked accounts, it never adds one.
+    ``lcu_puuid`` is the LCU's 36-char UUID and ``summoner_id`` the per-server
+    LCU id, both stored as advisory columns at verification; the Riot ID is the
+    reliable fallback. ``region`` is carried for logging only — the tournament's
+    platform decides which server an invite can reach.
+    """
+
+    game_name: str | None = None
+    tag_line: str | None = None
+    region: str | None = None
+    lcu_puuid: str | None = None
+    summoner_id: str | None = None
+
+    def matches(self, account: RiotAccount) -> bool:
+        """Is ``account`` the one open in the client?"""
+        if self.lcu_puuid and account.lcu_puuid and self.lcu_puuid == account.lcu_puuid:
+            return True
+        if self.summoner_id and account.summoner_id and self.summoner_id == account.summoner_id:
+            return True
+        if (
+            self.game_name
+            and self.tag_line
+            and account.riot_id_game_name
+            and account.riot_id_tag_line
+        ):
+            return _fold(self.game_name) == _fold(account.riot_id_game_name) and _fold(
+                self.tag_line
+            ) == _fold(account.riot_id_tag_line)
+        return False
+
+    @property
+    def label(self) -> str:
+        if self.game_name and self.tag_line:
+            return f"{self.game_name}#{self.tag_line}"
+        return self.lcu_puuid or self.summoner_id or "?"
+
+
 async def record_client_presence(
     session: AsyncSession,
     *,
     user_id: uuid.UUID,
     host_opt_in: bool | None = None,
     region: str | None = None,
+    active_account: ActiveAccount | None = None,
 ) -> ClientSession | None:
     """Write the player's standing :class:`ClientSession` at lock-in (PLAN.md §3.6.1).
 
@@ -1051,22 +1169,46 @@ async def record_client_presence(
     the PUUID written here is who the lobby invites — an invite only works
     same-server, so the account on the tournament's platform is preferred over
     any other. ``None`` keeps the old verified-first pick.
+
+    ``active_account`` (what the desktop saw signed into League) breaks the tie
+    AMONG accounts on that platform: the open one is invited, so a player with
+    two accounts on the same server is no longer invited on the offline one.
+    It never overrides the platform — an invite cannot cross servers — and an
+    open account that is not linked (or is elsewhere) simply leaves the old pick.
     """
     accounts = list(
         (await session.execute(select(RiotAccount).where(RiotAccount.user_id == user_id)))
         .scalars()
         .all()
     )
-    # Pick in Python, not ORDER BY: region-match first, then verified, then the
-    # stable id tie-break the old query used. A user rarely has more than two
-    # rows, and the explicit key is testable offline.
+    # Pick in Python, not ORDER BY: region-match first, then the account open in
+    # the client, then verified, then the stable id tie-break the old query used.
+    # A user rarely has more than two rows, and the explicit key is testable
+    # offline.
     account = min(
         accounts,
-        key=lambda a: (a.region != region if region is not None else False, not a.verified, a.id),
+        key=lambda a: (
+            a.region != region if region is not None else False,
+            not (active_account is not None and active_account.matches(a)),
+            not a.verified,
+            a.id,
+        ),
         default=None,
     )
     if account is None:
         return None
+    if active_account is not None and not active_account.matches(account):
+        # Worth a trace: this is exactly the "invite went to my other account"
+        # report, and the reason (unlinked / wrong server) is only visible here.
+        logger.info(
+            "tournament.lock_in.active_account_not_invited",
+            user_id=str(user_id),
+            active_account=active_account.label,
+            active_region=active_account.region,
+            tournament_region=region,
+            invited_puuid=account.puuid,
+            linked=[a.riot_id_game_name for a in accounts],
+        )
 
     row = (
         (
@@ -1174,6 +1316,7 @@ async def check_in_self(
     tournament_id: uuid.UUID,
     user_id: uuid.UUID,
     host_opt_in: bool | None = None,
+    active_account: ActiveAccount | None = None,
 ) -> Registration:
     """Lock the **caller themselves** in — the button every entrant presses.
 
@@ -1191,6 +1334,8 @@ async def check_in_self(
 
     ``host_opt_in`` carries the player's answer to "may your client run the lobby?"
     when the caller has one; ``None`` leaves any standing answer alone.
+    ``active_account`` is who the desktop saw signed into League, so the lobby
+    invites THAT account (see :class:`ActiveAccount`).
     """
     team_id = await resolve_check_in_team(session, tournament_id=tournament_id, user_id=user_id)
     # Repaired rather than required: an entry whose registration was never written
@@ -1227,7 +1372,11 @@ async def check_in_self(
     # :func:`record_client_presence`). The tournament's region steers which of the
     # player's accounts gets invited.
     await record_client_presence(
-        session, user_id=user_id, host_opt_in=host_opt_in, region=tournament.region
+        session,
+        user_id=user_id,
+        host_opt_in=host_opt_in,
+        region=tournament.region,
+        active_account=active_account,
     )
     await session.flush()
 

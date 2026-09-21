@@ -18,6 +18,7 @@ import {
   chooseMacInstallTarget,
   electronUpdaterInstaller,
   isTranslocated,
+  LSREGISTER,
   macSwapInstaller,
   originalBundleFromMounts,
   volumeOf,
@@ -100,6 +101,10 @@ test("buildMacSwapScript: waits on the pid, swaps with rollback, clears quaranti
   assert.ok(script.includes('mv "$NEW" "$APP"'));
   assert.ok(script.includes("reopen_previous"));
   assert.ok(script.includes("xattr -dr com.apple.quarantine"));
+  // macOS is told the bundle changed, with the real tool unless a test overrides it
+  assert.ok(script.includes(`LSREGISTER='${LSREGISTER}'`));
+  assert.ok(script.includes('touch "$APP"'));
+  assert.ok(script.includes('"$LSREGISTER" -f "$APP"'));
   assert.ok(script.includes('hdiutil detach "$VOLUME"'));
   assert.ok(script.trimEnd().endsWith('open -n "$APP"'));
   execFileSync("/bin/sh", ["-n", "-c", script]); // parses as POSIX sh
@@ -114,8 +119,8 @@ async function runSwap(opts: { readonly withOld: boolean; readonly newExists: bo
   const root = await mkdtemp(join(tmpdir(), "lol-swap-"));
   const bin = join(root, "bin");
   await mkdir(bin);
-  // `open`, `xattr` and `hdiutil` are recorded instead of run.
-  for (const tool of ["open", "xattr", "hdiutil"]) {
+  // `open`, `xattr`, `hdiutil` and `lsregister` are recorded instead of run.
+  for (const tool of ["open", "xattr", "hdiutil", "lsregister"]) {
     await writeFile(join(bin, tool), `#!/bin/sh\necho "${tool} $*" >> "${root}/calls"\n`, { mode: 0o755 });
   }
   const app = join(root, "Applications", "AgonCup.app");
@@ -137,6 +142,7 @@ async function runSwap(opts: { readonly withOld: boolean; readonly newExists: bo
     previousAppPath: previous,
     volume: null,
     logPath: join(root, "swap.log"),
+    lsregisterPath: join(bin, "lsregister"),
   });
   let code = 0;
   try {
@@ -163,6 +169,10 @@ test("swap script (real sh): replaces the old bundle, removes .old, opens the ne
   assert.deepEqual(r.appsDir, ["AgonCup.app"]);
   assert.ok(r.calls.includes(`open -n ${r.app}`));
   assert.ok(r.log.includes("swap done"));
+  // Re-registered BEFORE the relaunch: the Dock tile is created with the new icon.
+  const registered = r.calls.indexOf(`lsregister -f ${r.app}`);
+  assert.ok(registered >= 0, "the swapped bundle is re-registered with LaunchServices");
+  assert.ok(registered < r.calls.indexOf(`open -n ${r.app}`));
 });
 
 test("swap script (real sh): installs into a folder that has no copy yet (e.g. from the .dmg)", async () => {
@@ -179,6 +189,7 @@ test("swap script (real sh): a failed move restores the old app and reopens it",
   assert.deepEqual(withOld.appsDir, ["AgonCup.app"]);
   assert.ok(withOld.calls.includes(`open -n ${withOld.app}`));
   assert.ok(withOld.log.includes("swap failed"));
+  assert.ok(!withOld.calls.includes("lsregister"), "nothing changed, nothing to re-register");
 
   // Nothing at the target to fall back on: the copy that was running reopens.
   const fromDmg = await runSwap({ withOld: false, newExists: false });
@@ -352,6 +363,9 @@ function fakeMac(over: Partial<MacSwapDeps> = {}) {
     spawnDetached: (p) => {
       calls.push(`spawn ${p}`);
     },
+    refreshAppRegistration: async (p) => {
+      calls.push(`refresh ${p}`);
+    },
     quit: () => {
       calls.push("quit");
     },
@@ -453,8 +467,22 @@ test("macSwapInstaller: cleanup logs the last swap and clears staging, never und
   files.set("/tmp/stage/swap.log", "Mon swap start\nMon swap done\n");
   const inst = macSwapInstaller(deps);
   await inst.cleanup();
-  assert.deepEqual(calls, ["rm /tmp/stage"]);
+  // First boot after a swap: the bundle is re-registered (an older version's
+  // script did not do it), then staging goes.
+  assert.deepEqual(calls, ["refresh /Applications/AgonCup.app", "rm /tmp/stage"]);
   assert.deepEqual(logs.at(-1), ["update_swap_log", { text: "Mon swap start\nMon swap done\n" }]);
+
+  // No swap happened: an ordinary boot touches nothing but the staging dir.
+  const plain = fakeMac();
+  await macSwapInstaller(plain.deps).cleanup();
+  assert.deepEqual(plain.calls, ["rm /tmp/stage"]);
+
+  // A refresh that fails (bundle not writable) is logged and never blocks the cleanup.
+  const readOnly = fakeMac({ refreshAppRegistration: async () => { throw new Error("EACCES"); } });
+  readOnly.files.set("/tmp/stage/swap.log", "Mon swap done\n");
+  await macSwapInstaller(readOnly.deps).cleanup();
+  assert.deepEqual(readOnly.calls, ["rm /tmp/stage"]);
+  assert.deepEqual(readOnly.logs.at(-1), ["update_registration_refresh_failed", { detail: "EACCES" }]);
 
   await inst.prepare(release(), () => {});
   calls.length = 0;

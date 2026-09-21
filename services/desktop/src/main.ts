@@ -43,9 +43,10 @@ import {
 } from "./orchestration/index.js";
 import { WsBackendTransport, createWsFactory, type WebSocketFactory } from "./transport/wsTransport.js";
 import { checkLcuIdentity, type IdentityCheckResult } from "./identity/identityCheck.js";
-import { readCurrentSummoner } from "./lcu/readSummoner.js";
+import { readCurrentSummoner, type ReadSummonerResult } from "./lcu/readSummoner.js";
 import { verifyDesktop, type VerifyResult } from "./lcu/verify.js";
 import { listMyAccounts, type ListAccountsResult } from "./accounts/listAccounts.js";
+import { ensureActiveAccountLinked } from "./accounts/ensureLinked.js";
 import { unlinkAccount } from "./accounts/unlinkAccount.js";
 import { refreshAccountRank } from "./accounts/refreshRank.js";
 import {
@@ -95,6 +96,7 @@ import {
   appBundleFromExecPath,
   electronUpdaterInstaller,
   isTranslocated,
+  LSREGISTER,
   macSwapInstaller,
   originalBundleFromMounts,
   type Installer,
@@ -1047,13 +1049,12 @@ async function bootstrap(): Promise<void> {
   /**
    * Which account is open in League right now — sent with lock-in so the lobby
    * invites THAT one (a player with two accounts on the server was otherwise
-   * invited on the signed-out one, ToDoList #8). A live READ-ONLY LCU read
-   * first; with League closed, the last account this device saw signed in is
+   * invited on the signed-out one, ToDoList #8). The live READ-ONLY LCU read
+   * (`live`) first; with League closed, the last account this device saw signed in is
    * the best guess (it is what the profile card shows); never signed in at
    * all, nothing is sent and the backend keeps its own pick.
    */
-  const activeAccountForLockIn = async (): Promise<ActiveAccount | undefined> => {
-    const live = await readCurrentSummoner();
+  const activeAccountForLockIn = (live: ReadSummonerResult): ActiveAccount | undefined => {
     if (live.ok) {
       return {
         gameName: live.gameName,
@@ -1076,12 +1077,39 @@ async function bootstrap(): Promise<void> {
   ipcMain.handle(
     "lol:tournament-lock-in",
     async (_event, args: { tournamentId: string; teamId?: string; guildId?: string }) => {
-      const activeAccount = await activeAccountForLockIn();
+      const live = await readCurrentSummoner();
+      const activeAccount = activeAccountForLockIn(live);
       log("lock_in_active_account", {
         tournamentId: args.tournamentId,
         activeAccount: activeAccount ? `${activeAccount.gameName}#${activeAccount.tagLine}` : null,
       });
-      return withSession((t) =>
+      // The backend only invites LINKED accounts, so an open account that is not
+      // linked yet is linked first (no code — the session is the credential).
+      // Needs League running; a failure never blocks lock-in, it is reported.
+      let linkedAccount: string | undefined;
+      let warning: string | undefined;
+      if (live.ok) {
+        const ensured = await withSession((t) =>
+          ensureActiveAccountLinked(
+            { accessToken: t, summoner: live },
+            { backendUrl: backendBaseUrl() },
+          ),
+        );
+        log("lock_in_account_link", {
+          tournamentId: args.tournamentId,
+          ...(ensured.ok
+            ? { outcome: ensured.outcome }
+            : { outcome: "failed", status: ensured.status, detail: ensured.detail }),
+        });
+        if (ensured.ok && ensured.outcome === "linked") {
+          linkedAccount = ensured.riotId;
+        } else if (!ensured.ok) {
+          warning =
+            `${live.gameName}#${live.tagLine} (open in League) could not be linked: ` +
+            `${ensured.detail} The lobby invite goes to your linked account instead.`;
+        }
+      }
+      const result = await withSession((t) =>
         lockIn(
           {
             accessToken: t,
@@ -1097,6 +1125,12 @@ async function bootstrap(): Promise<void> {
           { backendUrl: backendBaseUrl() },
         ),
       );
+      if (!result.ok) return result;
+      return {
+        ok: true,
+        ...(linkedAccount !== undefined ? { linkedAccount } : {}),
+        ...(warning !== undefined ? { warning } : {}),
+      };
     },
   );
   ipcMain.handle("lol:match-ready", (_event, args: { matchId: string; guildId?: string }) =>
@@ -1432,6 +1466,11 @@ async function bootstrap(): Promise<void> {
         spawnDetached: (script) => {
           const child = spawn("/bin/sh", [script], { detached: true, stdio: "ignore" });
           child.unref();
+        },
+        refreshAppRegistration: async (bundlePath) => {
+          const now = new Date();
+          await fsp.utimes(bundlePath, now, now);
+          await run(LSREGISTER, ["-f", bundlePath]);
         },
         quit: () => app.quit(),
         log,

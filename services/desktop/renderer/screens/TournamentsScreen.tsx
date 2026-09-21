@@ -312,13 +312,18 @@ function EntrantsPanel({ tournamentId, guildId, solo, maxTeams, entrants: data, 
   const b = lol();
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  // Which account the invite will reach: lock-in links the account open in
+  // League when it was not linked yet, and says so (or says why it could not).
+  const [linkNote, setLinkNote] = useState<{ tone: 'ok' | 'gold'; text: string } | null>(null);
 
   async function lockIn() {
     if (!b) return;
-    setBusy(true); setMsg(null);
+    setBusy(true); setMsg(null); setLinkNote(null);
     const r = await b.tournamentLockIn(tournamentId, undefined, guildId);
     setBusy(false);
     if (!r.ok) { setMsg(errText(r)); return; }
+    if (r.warning) setLinkNote({ tone: 'gold', text: r.warning });
+    else if (r.linkedAccount) setLinkNote({ tone: 'ok', text: `Linked ${r.linkedAccount} — the lobby invite goes to this account.` });
     reload();
   }
 
@@ -391,6 +396,7 @@ function EntrantsPanel({ tournamentId, guildId, solo, maxTeams, entrants: data, 
       </div>
 
       {msg && <div style={{ marginTop: 12 }}><Notice tone="err">{msg}</Notice></div>}
+      {linkNote && <div style={{ marginTop: 12 }}><Notice tone={linkNote.tone}>{linkNote.text}</Notice></div>}
     </div>
   );
 }

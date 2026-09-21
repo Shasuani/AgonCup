@@ -116,7 +116,7 @@ export interface LolBridge {
   tournamentBracket(tournamentId: string, guildId?: string): Promise<Res<{ tournament: Tournament; matches: BracketMatch[] }>>;
   lookupTournament(code: string): Promise<Res<{ tournament: Tournament }>>;
   tournamentEntrants(tournamentId: string, guildId?: string): Promise<Res<{ entrants: Entrant[] }>>;
-  tournamentLockIn(tournamentId: string, teamId?: string, guildId?: string): Promise<Res<Record<string, never>>>;
+  tournamentLockIn(tournamentId: string, teamId?: string, guildId?: string): Promise<Res<{ linkedAccount?: string; warning?: string }>>;
   matchReady(matchId: string, guildId?: string): Promise<Res<{ side: string; bothReady: boolean }>>;
   createTeam(name: string): Promise<Res<{ team: { id: string; name: string; joinCode: string } }>>;
   joinTeam(code: string): Promise<Res<{ team: { id: string; name: string } }>>;

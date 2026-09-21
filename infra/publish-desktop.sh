@@ -85,6 +85,15 @@ if [ "$MODE" = "" ]; then
     fi
     node_major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
     if [ "$node_major" -lt 22 ]; then
+        # nvm keeps several Nodes side by side and the shell's default may be an
+        # older one; put the newest 22+ install first instead of giving up.
+        for candidate in "$HOME"/.nvm/versions/node/v2[2-9]*/bin "$HOME"/.nvm/versions/node/v[3-9]*/bin; do
+            [ -x "$candidate/node" ] && PATH="$candidate:$PATH"
+        done
+        export PATH
+        node_major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
+    fi
+    if [ "$node_major" -lt 22 ]; then
         _die "Node 22+ is needed on PATH (found: $(node --version 2>/dev/null || echo none))."
     fi
     # Old outputs (including versioned names from before the stable-name change)

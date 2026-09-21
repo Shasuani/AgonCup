@@ -1,4 +1,4 @@
-# Edge Cases — LeagueOfLeagues
+# Edge Cases — AgonCup
 
 > **Living design doc.** Καταγράφουμε εδώ τα edge cases ανά περιοχή + την
 > απόφαση για το πώς τα αντιμετωπίζουμε. **Τίποτα δεν υλοποιείται** μέχρι ο

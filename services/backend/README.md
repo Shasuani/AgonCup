@@ -1,6 +1,6 @@
 # lol-backend
 
-FastAPI backend for LeagueOfLeagues — source of truth for tournaments, accounts,
+FastAPI backend for AgonCup — source of truth for tournaments, accounts,
 auth, autonomous match orchestration, and result corroboration (PLAN.md §3.1).
 
 ## Phase 0 status

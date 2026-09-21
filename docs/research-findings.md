@@ -1,4 +1,4 @@
-# LeagueOfLeagues — Research Findings
+# AgonCup — Research Findings
 
 Standalone research backing the hardened implementation plan. Each section
 covers a topic with key facts, implications, risks, and open questions, with a

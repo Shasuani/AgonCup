@@ -1,7 +1,7 @@
 # lol-core
 
 Domain enums, business rules, the **single-elimination bracket engine**, and the
-**result quorum / anomaly adjudication** logic for LeagueOfLeagues.
+**result quorum / anomaly adjudication** logic for AgonCup.
 
 **No web framework imports.** Pure domain logic, unit-tested. Depends on
 `lol-schemas` (via a path dependency) for the canonical DTO types.

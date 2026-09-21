@@ -50,8 +50,8 @@ const rel = (over: Partial<ReleaseInfo> = {}): ReleaseInfo => ({
   upToDate: false,
   required: false,
   publishedAt: null,
-  downloadUrl: "https://x/downloads/LeagueOfLeagues-Setup.exe",
-  packageUrl: "https://x/downloads/LeagueOfLeagues-Setup-0.2.0.exe",
+  downloadUrl: "https://x/downloads/AgonCup-Setup.exe",
+  packageUrl: "https://x/downloads/AgonCup-Setup-0.2.0.exe",
   packageSha512: null,
   packageSize: null,
   feedUrl: "https://x/downloads",
@@ -157,7 +157,7 @@ test("update available: notifies once per version, prepares in the background, e
   const s = await t.updates.checkNow("startup");
   assert.equal(s.phase, "downloading");
   assert.equal(s.latest, "0.2.0");
-  assert.equal(s.downloadUrl, "https://x/downloads/LeagueOfLeagues-Setup.exe");
+  assert.equal(s.downloadUrl, "https://x/downloads/AgonCup-Setup.exe");
   assert.deepEqual(t.notifications, [{ version: "0.2.0", required: false }]);
   assert.equal(t.installer.prepares, 1);
 
@@ -261,5 +261,5 @@ test("no installer (dev run): install explains and keeps the manual link", async
   const after = await t.updates.install();
   assert.equal(after.phase, "failed");
   assert.match(after.error ?? "", /cannot update itself/);
-  assert.equal(after.downloadUrl, "https://x/downloads/LeagueOfLeagues-Setup.exe");
+  assert.equal(after.downloadUrl, "https://x/downloads/AgonCup-Setup.exe");
 });

@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "LeagueOfLeagues admin SPA (React + TypeScript + Vite). CRUD + bracket viz + dispute/override queue.",
+  "description": "AgonCup admin SPA (React + TypeScript + Vite). CRUD + bracket viz + dispute/override queue.",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

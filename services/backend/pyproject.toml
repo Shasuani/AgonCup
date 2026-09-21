@@ -5,11 +5,11 @@ build-backend = "hatchling.build"
 [project]
 name = "lol-backend"
 version = "0.1.0"
-description = "LeagueOfLeagues backend API (FastAPI) — tournaments, accounts, orchestration, results."
+description = "AgonCup backend API (FastAPI) — tournaments, accounts, orchestration, results."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Proprietary" }
-authors = [{ name = "LeagueOfLeagues" }]
+authors = [{ name = "AgonCup" }]
 
 dependencies = [
     "fastapi>=0.111",

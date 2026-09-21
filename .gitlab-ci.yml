@@ -1,4 +1,4 @@
-# LeagueOfLeagues — GitLab CI/CD (gitlab.com, self-hosted runner, docker+dind)
+# AgonCup — GitLab CI/CD (gitlab.com, self-hosted runner, docker+dind)
 #
 #   test  ->  build  ->  security  ->  deploy
 #

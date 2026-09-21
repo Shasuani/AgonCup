@@ -110,7 +110,7 @@ gated on reachability; authed verify wiring (mock backend).
 13. SPA: "Devices" view listing `device_label` refresh tokens with revoke.
 14. Bot `cogs/register.py`: copy update — "paste this code in the desktop app to
     sign in" (it already mints + DMs the code; minimal change). Optional `/link` alias.
-15. (Later, Proposal 2) Bot button + deep-link `leagueofleagues://pair?code=…` to
+15. (Later, Proposal 2) Bot button + deep-link `agoncup://pair?code=…` to
     drop the copy-paste.
 
 ## Open item to lock before coding

@@ -5,7 +5,10 @@ for the full design; this file is the day-to-day reference.
 
 ## What this is
 
-**LeagueOfLeagues** — a multi-tenant *League of Legends* tournament platform.
+**AgonCup** (named *LeagueOfLeagues* until 2026-09-21 — the repo folder, the
+`lol-*` / `lol_*` package names, the `@lol/desktop` npm name and the desktop
+`appId` keep the old spelling on purpose; nothing a player sees does) — a
+multi-tenant *League of Legends* tournament platform.
 Up to 16 teams/tournament, many tournaments in parallel, run and reported through
 **Discord**, with a desktop client that **autonomously runs each custom match via
 the local League client (LCU)** — there is **no Riot Tournament API** (Match-V5
@@ -177,7 +180,7 @@ non-existent `false()` function and breaks `alembic upgrade head`).
   `infra/publish-desktop.sh` on a Mac = `npm run dist:all` + SFTP upload as the
   chrooted `lolupload` account (password in the macOS Keychain, never in the
   repo) of five files whose names carry no version and simply overwrite:
-  `LeagueOfLeagues-Setup.exe`, `LeagueOfLeagues.dmg`, `LeagueOfLeagues.zip`,
+  `AgonCup-Setup.exe`, `AgonCup.dmg`, `AgonCup.zip`,
   `latest.yml`, `latest-mac.yml`. Installers first, feeds last, each via a
   temporary name + rename. Caddy serves the folder at `/downloads/`. See
   `docs/gitlab-cicd.md §9`.

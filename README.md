@@ -1,4 +1,4 @@
-# LeagueOfLeagues
+# AgonCup
 
 A multi-tenant tournament platform for *League of Legends*. It supports up to
 **16 teams per tournament**, **multiple tournaments running in parallel**, user
@@ -8,7 +8,7 @@ and an **admin web frontend**.
 
 The Discord bot is multi-tenant: any guild can invite it and run its own
 tournaments, optionally surfaced (with consent and approval) in the central
-*League Of Leagues* server.
+*AgonCup* server.
 
 > Not endorsed by Riot Games. The desktop client drives the user's own League
 > client through an unofficial, unsupported, reverse-engineered API.

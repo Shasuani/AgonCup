@@ -137,7 +137,7 @@ def create_app() -> FastAPI:
     settings = get_settings()
 
     app = FastAPI(
-        title="LeagueOfLeagues Backend",
+        title="AgonCup Backend",
         version="0.1.0",
         description="Tournaments, accounts, autonomous match orchestration & results.",
         lifespan=lifespan,

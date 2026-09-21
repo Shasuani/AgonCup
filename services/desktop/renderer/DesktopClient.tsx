@@ -69,7 +69,7 @@ export default function DesktopClient({ user, onSignOut }: { user: BridgeUser | 
     <div className="ll-app">
       {/* Title bar */}
       <div className="ll-titlebar" style={{ ...chromeStyle, ...dragRegion, height: TITLE_BAR_HEIGHT, padding: `0 16px 0 ${isMac ? TRAFFIC_LIGHT_INSET : 18}px` }}>
-        <span className="ll-wordmark"><BrandMark size={22} />LEAGUE<em>OF</em>LEAGUES</span>
+        <span className="ll-wordmark"><BrandMark size={22} /><span>AGON<em>CUP</em></span></span>
         <div style={{ ...noDrag, display: 'flex', alignItems: 'center', gap: 12 }}>
           <LcuBadge status={lcu} />
         </div>

@@ -1,6 +1,6 @@
 # lol-desktop
 
-LeagueOfLeagues **desktop client** (Electron + TypeScript) — PLAN.md §3.3 / §3.6.
+AgonCup **desktop client** (Electron + TypeScript) — PLAN.md §3.3 / §3.6.
 
 Autonomously drives the local League client over the **LCU** (host: create lobby
 + invite by PUUID; guest: auto-accept) and captures live (`:2999`) + end-of-game

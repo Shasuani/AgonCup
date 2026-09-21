@@ -1,6 +1,6 @@
 # lol-bot
 
-Multi-tenant **Discord bot** for LeagueOfLeagues (PLAN.md §3.2).
+Multi-tenant **Discord bot** for AgonCup (PLAN.md §3.2).
 
 `discord.py` **`AutoShardedBot`** from day one (sharding is transparent as guild
 count grows). Runs on the **non-privileged `guilds` intent only** — deliberately

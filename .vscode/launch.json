@@ -1,5 +1,5 @@
 {
-  // LeagueOfLeagues — Run & Debug (host dev, NO docker for the app tiers).
+  // AgonCup — Run & Debug (host dev, NO docker for the app tiers).
   //
   // Prereqs, once:
   //   1. Task "infra: up (postgres + redis)"   — dev DB on :5442 / redis on :6389

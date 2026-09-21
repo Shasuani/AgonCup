@@ -1,4 +1,4 @@
-# Pre-commit hooks for LeagueOfLeagues.
+# Pre-commit hooks for AgonCup.
 # Install with:  uv tool install pre-commit  (or pipx install pre-commit)
 #                pre-commit install
 # Run on demand: pre-commit run --all-files

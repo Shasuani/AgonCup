@@ -7,8 +7,8 @@
 // the highlighted tile; the other stays one click away (people download for a
 // teammate's machine too).
 
-export const WINDOWS_INSTALLER_URL = "/downloads/LeagueOfLeagues-Setup.exe";
-export const MAC_INSTALLER_URL = "/downloads/LeagueOfLeagues.dmg";
+export const WINDOWS_INSTALLER_URL = "/downloads/AgonCup-Setup.exe";
+export const MAC_INSTALLER_URL = "/downloads/AgonCup.dmg";
 
 export type DesktopOs = "windows" | "mac" | "other";
 

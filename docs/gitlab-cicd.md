@@ -424,9 +424,9 @@ previous one — nothing accumulates on the server:
 
 | File | What for |
 |---|---|
-| `LeagueOfLeagues-Setup.exe` | Windows installer — the site's button, and what installed Windows clients download to update |
-| `LeagueOfLeagues.dmg` | macOS installer — the site's button |
-| `LeagueOfLeagues.zip` | what installed macOS clients download to update themselves |
+| `AgonCup-Setup.exe` | Windows installer — the site's button, and what installed Windows clients download to update |
+| `AgonCup.dmg` | macOS installer — the site's button |
+| `AgonCup.zip` | what installed macOS clients download to update themselves |
 | `latest.yml`, `latest-mac.yml` | tell installed clients a new version exists (read by `GET /api/v1/desktop/version`) |
 
 The script uploads each file under a temporary name and renames it into place

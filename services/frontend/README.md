@@ -1,6 +1,6 @@
 # lol-frontend
 
-Admin SPA (React + TypeScript + Vite) for LeagueOfLeagues (PLAN.md §3.4).
+Admin SPA (React + TypeScript + Vite) for AgonCup (PLAN.md §3.4).
 
 Discord-OAuth, admin-role-gated. CRUD for accounts/guilds/tournaments/teams/
 matches, a bracket visualizer, and the **dispute / override queue** that admins

@@ -15,7 +15,7 @@ Fields (PLAN.md §3.2 "per-guild settings"):
 * ``notify_channel_id`` — the Discord channel snowflake the bot posts tournament
   notifications to (consumed by the notifications phase).
 * ``central_feed_enabled`` — the tenant's opt-in to surface tournaments in the
-  central League Of Leagues feed (federation phase; consent + approval still
+  central AgonCup feed (federation phase; consent + approval still
   required downstream).
 """
 

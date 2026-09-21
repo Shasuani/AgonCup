@@ -2,7 +2,7 @@
 
 This is the data core behind :mod:`app.federation.router`. It implements the
 **one-way, consented, admin-approved, field-whitelisted** projection of a guild's
-tournament into the shared *League Of Leagues* central feed (PLAN.md §3.2 / §0
+tournament into the shared *AgonCup* central feed (PLAN.md §3.2 / §0
 "surfaced (with consent + approval)"; §9 privacy):
 
 * :func:`request_share` — a **guild_admin** opts a tournament in

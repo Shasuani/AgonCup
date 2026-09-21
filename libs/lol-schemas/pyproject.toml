@@ -5,11 +5,11 @@ build-backend = "hatchling.build"
 [project]
 name = "lol-schemas"
 version = "0.1.0"
-description = "Canonical Pydantic v2 DTOs for LeagueOfLeagues (the ONE canonical Python type source)."
+description = "Canonical Pydantic v2 DTOs for AgonCup (the ONE canonical Python type source)."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Proprietary" }
-authors = [{ name = "LeagueOfLeagues" }]
+authors = [{ name = "AgonCup" }]
 dependencies = [
     "pydantic>=2.7,<3",
 ]

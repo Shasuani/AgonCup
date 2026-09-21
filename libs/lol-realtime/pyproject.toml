@@ -9,7 +9,7 @@ description = "WebSocket envelope Pydantic models + exported JSON schema (comman
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
-authors = [{ name = "League Of Leagues" }]
+authors = [{ name = "AgonCup" }]
 dependencies = [
     "pydantic>=2.7",
 ]

@@ -1,4 +1,4 @@
-"""lol_schemas — canonical Pydantic v2 DTOs for LeagueOfLeagues (v3 model).
+"""lol_schemas — canonical Pydantic v2 DTOs for AgonCup (v3 model).
 
 The single canonical Python type source. Import models directly from the package
 root, e.g. ``from lol_schemas import TournamentDTO, LobbyPhase``.

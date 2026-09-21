@@ -5,11 +5,11 @@ build-backend = "hatchling.build"
 [project]
 name = "lol-core"
 version = "0.1.0"
-description = "Domain enums, business rules, bracket engine, and result adjudication for LeagueOfLeagues. No web framework."
+description = "Domain enums, business rules, bracket engine, and result adjudication for AgonCup. No web framework."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Proprietary" }
-authors = [{ name = "LeagueOfLeagues" }]
+authors = [{ name = "AgonCup" }]
 dependencies = [
     "lol-schemas",
     "pydantic>=2.7,<3",

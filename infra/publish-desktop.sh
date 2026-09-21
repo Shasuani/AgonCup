@@ -15,9 +15,9 @@
 #
 # Five files, whose names carry NO version (electron-builder.yml → artifactName),
 # so each release overwrites the previous one and nothing accumulates:
-#     LeagueOfLeagues-Setup.exe   Windows installer (site button + Windows self-update)
-#     LeagueOfLeagues.dmg         macOS installer (site button)
-#     LeagueOfLeagues.zip         what installed macOS clients download to update
+#     AgonCup-Setup.exe   Windows installer (site button + Windows self-update)
+#     AgonCup.dmg         macOS installer (site button)
+#     AgonCup.zip         what installed macOS clients download to update
 #     latest.yml, latest-mac.yml  tell installed clients a new version exists
 # Each file goes up under a temporary name and is renamed into place (atomic on
 # the server, so nobody ever downloads a half-written installer); installers
@@ -63,9 +63,9 @@ RELEASE="${DESKTOP_RELEASE_DIR:-services/desktop/release}"
 # Must match electron-builder.yml (artifactName), src/update/installers.ts,
 # the backend's app/desktop/service.py and the SPA's DownloadClient component.
 INSTALLERS=(
-    "$RELEASE/LeagueOfLeagues-Setup.exe"
-    "$RELEASE/LeagueOfLeagues.dmg"
-    "$RELEASE/LeagueOfLeagues.zip"
+    "$RELEASE/AgonCup-Setup.exe"
+    "$RELEASE/AgonCup.dmg"
+    "$RELEASE/AgonCup.zip"
 )
 FEEDS=(
     "$RELEASE/latest.yml"

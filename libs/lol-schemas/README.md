@@ -1,6 +1,6 @@
 # lol-schemas
 
-Canonical **Pydantic v2** DTOs for LeagueOfLeagues — the single canonical Python
+Canonical **Pydantic v2** DTOs for AgonCup — the single canonical Python
 type source consumed by `backend`, `worker`, `bot`, and (via codegen) the TS
 clients.
 

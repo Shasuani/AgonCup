@@ -23,8 +23,8 @@ describe("DownloadClient", () => {
     const mac = screen.getByRole("link", { name: "Download for Mac" });
     expect(win).toHaveAttribute("href", WINDOWS_INSTALLER_URL);
     expect(mac).toHaveAttribute("href", MAC_INSTALLER_URL);
-    expect(WINDOWS_INSTALLER_URL).toBe("/downloads/LeagueOfLeagues-Setup.exe");
-    expect(MAC_INSTALLER_URL).toBe("/downloads/LeagueOfLeagues.dmg");
+    expect(WINDOWS_INSTALLER_URL).toBe("/downloads/AgonCup-Setup.exe");
+    expect(MAC_INSTALLER_URL).toBe("/downloads/AgonCup.dmg");
     // Neither is ever hidden; an unknown OS just gets no highlight.
     expect(win).not.toHaveAttribute("data-recommended");
     expect(mac).not.toHaveAttribute("data-recommended");

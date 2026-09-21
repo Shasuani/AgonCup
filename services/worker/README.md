@@ -1,6 +1,6 @@
 # lol-worker
 
-Background **arq** worker for LeagueOfLeagues (PLAN.md §1.1 / §3 / §7).
+Background **arq** worker for AgonCup (PLAN.md §1.1 / §3 / §7).
 
 Owns the retriable / scheduled work that must not run on the web event loop:
 

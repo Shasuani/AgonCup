@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-# Multi-stage build for the LeagueOfLeagues backend (FastAPI on uvicorn).
+# Multi-stage build for the AgonCup backend (FastAPI on uvicorn).
 # Builds on the shared python base image (PLAN.md §6 / SHARED CONVENTIONS).
 # The base image provides Python 3.12, uv, build essentials, and a non-root
 # "app" user. Build the base first:  docker build -t lol/python-base:dev infra/images/python-base

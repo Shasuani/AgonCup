@@ -5,7 +5,7 @@
 #
 #   make desktop-mac                                  # -> /Applications, prod backend
 #   BACKEND_URL=http://localhost:8000 make desktop-mac
-#   APP_DEST="$HOME/Applications/LeagueOfLeagues.app" make desktop-mac
+#   APP_DEST="$HOME/Applications/AgonCup.app" make desktop-mac
 #
 # WHY INSTALL INSTEAD OF `npm start`
 # ----------------------------------
@@ -34,7 +34,7 @@ set -euo pipefail
 
 #: The stable local code-signing identity (see step 6 — it is what keeps the
 #: saved session readable across reinstalls).
-SIGN_IDENTITY="LeagueOfLeagues Dev"
+SIGN_IDENTITY="AgonCup Dev"
 
 BACKEND_URL="${BACKEND_URL:-https://lol.gameras.gr}"
 # The client reads TWO urls (src/main.ts backendBaseUrl / the realtime socket).
@@ -42,7 +42,7 @@ BACKEND_URL="${BACKEND_URL:-https://lol.gameras.gr}"
 # does not surface until orchestration actually runs — derive it by default.
 REALTIME_URL="${REALTIME_URL:-$(printf '%s' "$BACKEND_URL" \
   | sed -e 's|^https://|wss://|' -e 's|^http://|ws://|')/api/v1/realtime/ws}"
-APP_DEST="${APP_DEST:-/Applications/LeagueOfLeagues.app}"
+APP_DEST="${APP_DEST:-/Applications/AgonCup.app}"
 
 DESKTOP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="$(cd "$DESKTOP_DIR/../.." && pwd)"
@@ -151,7 +151,7 @@ esac
 # Quit the running copy first: replacing a bundle under a live process leaves it
 # in a half-swapped state, and the next launch reads a mix of both builds.
 say "installing to $APP_DEST"
-osascript -e 'tell application "System Events" to if exists (process "LeagueOfLeagues") then tell application "LeagueOfLeagues" to quit' \
+osascript -e 'tell application "System Events" to if exists (process "AgonCup") then tell application "AgonCup" to quit' \
   >/dev/null 2>&1 || true
 rm -rf "$APP_DEST"
 mkdir -p "$(dirname "$APP_DEST")"
@@ -171,7 +171,7 @@ ditto "$STAGED" "$APP_DEST"
 say "signing + clearing quarantine"
 if ! security find-identity -v -p codesigning | grep -q "$SIGN_IDENTITY"; then
   say "creating the local signing identity (first run only)"
-  CERT_DIR="$HOME/.config/leagueofleagues"
+  CERT_DIR="$HOME/.config/agoncup"
   mkdir -p "$CERT_DIR"
   cat > "$CERT_DIR/codesign.cnf" <<'CNF'
 [req]
@@ -179,7 +179,7 @@ distinguished_name = dn
 x509_extensions = v3
 prompt = no
 [dn]
-CN = LeagueOfLeagues Dev
+CN = AgonCup Dev
 [v3]
 basicConstraints = critical,CA:false
 keyUsage = critical,digitalSignature
@@ -212,6 +212,6 @@ cat <<EOF
   installed $APP_DEST
   backend   $BACKEND_URL
   realtime  $REALTIME_URL
-  launch    Spotlight/Finder "LeagueOfLeagues", or: open -a "$APP_DEST"
+  launch    Spotlight/Finder "AgonCup", or: open -a "$APP_DEST"
             (both urls are baked in; env vars still override when set)
 EOF

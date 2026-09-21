@@ -1,4 +1,4 @@
-"""Slash-command cogs for the LeagueOfLeagues bot (PLAN.md §3.2).
+"""Slash-command cogs for the AgonCup bot (PLAN.md §3.2).
 
 The bot is now the ADMIN + onboarding + notifications surface only — every
 user-facing action (linking accounts, teams, tournaments, unregistering) lives in

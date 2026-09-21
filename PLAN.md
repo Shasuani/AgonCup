@@ -1,4 +1,4 @@
-# LeagueOfLeagues — Detailed Implementation Plan (Hardened v3 — Autonomous)
+# AgonCup — Detailed Implementation Plan (Hardened v3 — Autonomous)
 
 > Tournament platform for *League of Legends*. Supports up to **16 teams per
 > tournament**, **multiple tournaments running in parallel**, user registration
@@ -6,7 +6,7 @@
 > autonomously runs each custom match via the local League client (**LCU**), and
 > an **admin web frontend**. The Discord bot is **multi-tenant**: any guild can
 > invite it and run its own tournaments, optionally surfaced (with consent +
-> approval) in the central *League Of Leagues* server.
+> approval) in the central *AgonCup* server.
 
 ---
 

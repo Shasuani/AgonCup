@@ -5,11 +5,11 @@ build-backend = "hatchling.build"
 [project]
 name = "lol-bot"
 version = "0.1.0"
-description = "LeagueOfLeagues Discord bot (discord.py AutoShardedBot) — multi-tenant registration, tournament join, status."
+description = "AgonCup Discord bot (discord.py AutoShardedBot) — multi-tenant registration, tournament join, status."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Proprietary" }
-authors = [{ name = "LeagueOfLeagues" }]
+authors = [{ name = "AgonCup" }]
 
 dependencies = [
     "discord.py>=2.4",

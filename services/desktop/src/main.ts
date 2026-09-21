@@ -1,5 +1,5 @@
 /**
- * LeagueOfLeagues desktop client — Electron main process (PLAN.md §3.3 / §3.6).
+ * AgonCup desktop client — Electron main process (PLAN.md §3.3 / §3.6).
  *
  * The desktop client is **load-bearing for match EXECUTION** but **advisory for
  * result TRUTH** (PLAN.md §0 split trust model). It:
@@ -1455,8 +1455,8 @@ async function bootstrap(): Promise<void> {
       const n = new Notification({
         title: required ? "Update required" : "Update available",
         body: required
-          ? `LeagueOfLeagues ${version} is required to keep playing. Open the app to update.`
-          : `LeagueOfLeagues ${version} is ready to install. Open the app and press Update.`,
+          ? `AgonCup ${version} is required to keep playing. Open the app to update.`
+          : `AgonCup ${version} is ready to install. Open the app and press Update.`,
       });
       n.on("click", () => {
         mainWindow?.show();
@@ -1503,7 +1503,7 @@ async function bootstrap(): Promise<void> {
       height: 820,
       minWidth: 1120,
       minHeight: 720,
-      title: "LeagueOfLeagues — Desktop",
+      title: "AgonCup — Desktop",
       backgroundColor: "#010a13",
       ...(devIcon !== null && process.platform !== "darwin" ? { icon: devIcon } : {}),
       // macOS: drop the native grey title bar and let the traffic lights sit

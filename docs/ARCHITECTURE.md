@@ -1,4 +1,4 @@
-# LeagueOfLeagues — Architecture & Component Documentation
+# AgonCup — Architecture & Component Documentation
 
 > Scope: this document covers **project infrastructure** + the **backend** and
 > **desktop client** components in depth. Worker, bot, and frontend are described

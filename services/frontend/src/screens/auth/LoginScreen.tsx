@@ -88,7 +88,7 @@ export default function LoginScreen(): JSX.Element {
     <main aria-labelledby="login-heading" data-login>
       <div data-landing>
         {/* The pitch. Decorative for the auth flow, load-bearing for a first visit. */}
-        <section data-landing-hero aria-label="About LeagueOfLeagues">
+        <section data-landing-hero aria-label="About AgonCup">
           <div data-landing-brand>
             <BrandLogo data-landing-logo />
             <p data-login-tagline>Tournament Operations Console</p>

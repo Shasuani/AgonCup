@@ -1,6 +1,6 @@
 # infra/docker-compose.yml
 #
-# Local development stack for LeagueOfLeagues (Phase 0 scaffolding).
+# Local development stack for AgonCup (Phase 0 scaffolding).
 #
 #   services: postgres, redis, backend, worker
 #   (bot / frontend are Phase-0 placeholders, commented out below.)

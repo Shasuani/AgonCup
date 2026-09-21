@@ -119,8 +119,8 @@ export function AppLayout(): JSX.Element {
         <aside data-app-sidebar>
           <div data-app-sidebar-head>
             <span data-brand>
-              <BrandLogo data-brand-logo aria-label="LeagueOfLeagues — Admin" />
-              <BrandMark data-brand-mark aria-label="LeagueOfLeagues — Admin" />
+              <BrandLogo data-brand-logo aria-label="AgonCup — Admin" />
+              <BrandMark data-brand-mark aria-label="AgonCup — Admin" />
             </span>
           </div>
           <nav aria-label="Primary">

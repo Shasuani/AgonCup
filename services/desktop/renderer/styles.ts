@@ -1,4 +1,4 @@
-// LeagueOfLeagues desktop — the one global stylesheet (injected once by App).
+// AgonCup desktop — the one global stylesheet (injected once by App).
 //
 // Everything visual used to live in per-element inline `style={{}}` objects,
 // which cannot express hover / focus / active states, keyframes, scrollbars or

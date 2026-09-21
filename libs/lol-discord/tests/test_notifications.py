@@ -38,7 +38,7 @@ def _field_values(embed: dict[str, object]) -> str:
 # --------------------------------------------------------------------------- #
 def test_registration_code() -> None:
     embed = registration_code(code="7K3M-QP9R")
-    assert embed["title"] == "Paste this code in the LeagueOfLeagues desktop app to sign in"
+    assert embed["title"] == "Paste this code in the AgonCup desktop app to sign in"
     assert "sign in" in embed["description"].lower()
     assert embed["color"] == int(EmbedColor.WARNING)
     blob = _field_values(embed)

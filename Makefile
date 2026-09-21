@@ -1,4 +1,4 @@
-# LeagueOfLeagues — root Makefile.
+# AgonCup — root Makefile.
 #
 # Conventions:
 #   - Python package/runtime manager = uv (provided by the python-base image).
@@ -53,7 +53,7 @@ OWNER_DATABASE_URL ?= postgresql+asyncpg://lol:lol@$(DB_HOST):$(DB_PORT)/lol
 APP_DATABASE_URL   ?= postgresql+asyncpg://app_rw:app_rw@$(DB_HOST):$(DB_PORT)/lol
 
 help: ## Show this help.
-	@echo "LeagueOfLeagues — available targets:"
+	@echo "AgonCup — available targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 		| sort \
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -185,7 +185,7 @@ desktop-win: ## Build the desktop client for Windows into $$OUT_DIR (default J:\
 # latest build against the right backend (a Finder launch inherits no shell env,
 # so both urls are baked into the installed bundle). Override with
 # BACKEND_URL= / APP_DEST=.
-desktop-mac: ## Build + install the desktop client to $$APP_DEST (default /Applications/LeagueOfLeagues.app).
+desktop-mac: ## Build + install the desktop client to $$APP_DEST (default /Applications/AgonCup.app).
 	@bash services/desktop/scripts/install-macos.sh
 
 # --- Placeholders (wired up in later phases) ---------------------------------

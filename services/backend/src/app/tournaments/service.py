@@ -15,7 +15,7 @@ function (no DB) so it is exhaustively testable on its own.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -534,12 +534,16 @@ async def _solo_team(session: AsyncSession, *, user_id: uuid.UUID, guild_id: uui
             select(Team).where(Team.captain_user_id == user_id, Team.is_solo.is_(True))
         )
     ).scalar_one_or_none()
-    if existing is not None:
-        return existing
-
     display_name = (
         await session.execute(select(User.display_name).where(User.id == user_id))
     ).scalar_one_or_none()
+    if existing is not None:
+        # Reused, so re-named: the name was copied once and would otherwise stay
+        # whatever the player was called back then (see :func:`_solo_player_names`).
+        if display_name and existing.name != display_name:
+            existing.name = display_name
+        return existing
+
     team = Team(
         guild_id=guild_id,
         name=display_name or "Player",
@@ -560,6 +564,33 @@ async def _solo_team(session: AsyncSession, *, user_id: uuid.UUID, guild_id: uui
     )
     await session.flush()
     return team
+
+
+async def _solo_player_names(session: AsyncSession, teams: Iterable[Team]) -> dict[uuid.UUID, str]:
+    """Solo team id -> its player's CURRENT display name, for the read paths.
+
+    A solo team is named after its player ONCE, at their first 1v1 enrolment, and
+    then reused across tournaments. A name that was wrong at that moment — the
+    server owner stored under the server's name (ToDoList #7) — or that the player
+    has changed since therefore stayed on every entrant list and bracket, long
+    after ``User.display_name`` itself was healed. The user row is the truth; the
+    stored team name is only the fallback for a team missing from the result.
+    """
+    captains = {
+        team.id: team.captain_user_id
+        for team in teams
+        if team.is_solo and team.captain_user_id is not None
+    }
+    if not captains:
+        return {}
+    by_user: dict[uuid.UUID, str] = {}
+    for uid, name in (
+        await session.execute(
+            select(User.id, User.display_name).where(User.id.in_(list(captains.values())))
+        )
+    ).all():
+        by_user[uid] = name
+    return {team_id: by_user[uid] for team_id, uid in captains.items() if by_user.get(uid)}
 
 
 async def _enrol_solo(
@@ -883,9 +914,11 @@ async def get_bracket(session: AsyncSession, *, tournament_id: uuid.UUID) -> lis
         .scalars()
         .all()
     )
-    names: dict[uuid.UUID, str] = {
-        r[0]: r[1] for r in (await session.execute(select(Team.id, Team.name))).all()
-    }
+    in_bracket = {tid for m in matches for tid in (m.team_a, m.team_b) if tid is not None}
+    teams = [t for t in (await session.execute(select(Team))).scalars().all() if t.id in in_bracket]
+    names: dict[uuid.UUID, str] = {t.id: t.name for t in teams}
+    # A 1v1 slot shows the player's current name, not the one frozen on their team.
+    names.update(await _solo_player_names(session, teams))
     return [
         BracketMatch(
             id=m.id,
@@ -1535,6 +1568,8 @@ async def list_entrants(
         )
     ).all():
         member_names[uid] = display_name
+    # A 1v1 entry IS its player: show their current name, not the frozen team name.
+    solo_names = await _solo_player_names(session, teams.values())
 
     entrants: list[Entrant] = []
     for entry_team_id, reg in entries.items():
@@ -1554,7 +1589,7 @@ async def list_entrants(
         entrants.append(
             Entrant(
                 team_id=entry_team_id,
-                name=team.name,
+                name=solo_names.get(entry_team_id, team.name),
                 # Derived from the roster, not read off the registration: a team
                 # that locked in and THEN gained a member is not ready any more,
                 # and a stored flag would keep claiming it was while the new

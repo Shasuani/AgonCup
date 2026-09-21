@@ -21,7 +21,15 @@ from lol_schemas.enums import (
     TournamentStatus,
 )
 
-from app.models import Match, Registration, Team, TeamMember, Tournament, TournamentParticipant
+from app.models import (
+    Match,
+    Registration,
+    Team,
+    TeamMember,
+    Tournament,
+    TournamentParticipant,
+    User,
+)
 from app.tournaments import service
 from tests._fake_session import FakeSession
 
@@ -474,3 +482,76 @@ async def test_a_participant_without_a_registration_still_appears_and_can_lock_i
     assert reg.status is RegistrationStatus.CHECKED_IN, "locking in repairs and completes"
     assert len(session.store[Registration]) == 1, "the missing half was written once"
     assert (await service.list_entrants(session, tournament_id=tournament.id))[0].locked_in
+
+
+async def test_a_1v1_entry_shows_the_players_current_name_not_the_frozen_team_name() -> None:
+    """ToDoList #7, second round: the entrant list kept the player's OLD name.
+
+    A solo team is named once and reused. The server owner's was minted while the
+    bot still stored them under the SERVER's name; the user row healed, the team
+    name did not — so everyone joining still saw "League of Leagues" in the list
+    and in the bracket.
+    """
+    guild_id, owner = uuid.uuid4(), uuid.uuid4()
+    session = FakeSession()
+    session.current_guild = str(guild_id)
+    tournament = _tournament(guild_id=guild_id, game_mode=GameMode.ARAM_1V1)
+    stale = _team(guild_id=guild_id, captain_user_id=owner, name="League of Leagues")
+    stale.is_solo = True
+    session.store[User].append(User(id=owner, discord_user_id=1, display_name="Kostas"))
+    session.store[Tournament].append(tournament)
+    session.store[Team].append(stale)
+    session.store[TeamMember].append(await _member(team=stale, user_id=owner))
+    session.store[Registration].append(
+        Registration(
+            guild_id=guild_id,
+            tournament_id=tournament.id,
+            team_id=stale.id,
+            status=RegistrationStatus.PENDING,
+        )
+    )
+    session.store[Match].append(
+        Match(
+            id=uuid.uuid4(),
+            guild_id=guild_id,
+            tournament_id=tournament.id,
+            round=1,
+            bracket_slot=0,
+            team_a=stale.id,
+            team_b=None,
+        )
+    )
+
+    entrants = await service.list_entrants(session, tournament_id=tournament.id)
+    assert [e.name for e in entrants] == ["Kostas"]
+    bracket = await service.get_bracket(session, tournament_id=tournament.id)
+    assert bracket[0].team_a_name == "Kostas"
+    assert stale.name == "League of Leagues", "a GET heals what is shown, it writes nothing"
+
+    # The stored name heals the next time the player enters a 1v1.
+    await service.join_by_code(session, code=_CODE, user_id=owner)
+    assert stale.name == "Kostas"
+    assert len(session.store[Team]) == 1, "the same solo team, renamed — never a second one"
+
+
+async def test_a_real_teams_name_is_never_replaced_by_its_captains() -> None:
+    guild_id, captain = uuid.uuid4(), uuid.uuid4()
+    session = FakeSession()
+    session.current_guild = str(guild_id)
+    tournament = _tournament(guild_id=guild_id, game_mode=GameMode.SUMMONERS_RIFT_5V5)
+    team = _team(guild_id=guild_id, captain_user_id=captain, name="Alpha")
+    session.store[User].append(User(id=captain, discord_user_id=1, display_name="Kostas"))
+    session.store[Tournament].append(tournament)
+    session.store[Team].append(team)
+    session.store[TeamMember].append(await _member(team=team, user_id=captain))
+    session.store[Registration].append(
+        Registration(
+            guild_id=guild_id,
+            tournament_id=tournament.id,
+            team_id=team.id,
+            status=RegistrationStatus.PENDING,
+        )
+    )
+
+    entrants = await service.list_entrants(session, tournament_id=tournament.id)
+    assert [e.name for e in entrants] == ["Alpha"]

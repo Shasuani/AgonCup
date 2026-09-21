@@ -55,22 +55,22 @@ def registration_code(*, code: str, expires_minutes: int = 15) -> dict[str, Any]
     """Sign-in code: paste it in the desktop app to sign in and link (PLAN.md §3.5).
 
     The player receives a one-time ``code`` (issued to their authenticated Discord
-    identity) which they paste into the LeagueOfLeagues desktop app to **sign in**.
+    identity) which they paste into the AgonCup desktop app to **sign in**.
     The desktop then reads the live League client (LCU) to obtain the player's
     PUUID and completes the account link — so there is no icon dance and no Riot ID
     required. The code is a secret credential, so the embed is always sent
     ephemerally.
     """
     return build_embed(
-        "Paste this code in the LeagueOfLeagues desktop app to sign in",
-        "Use the code below to sign in to the LeagueOfLeagues desktop app, which "
+        "Paste this code in the AgonCup desktop app to sign in",
+        "Use the code below to sign in to the AgonCup desktop app, which "
         "then links your League account.",
         color=EmbedColor.WARNING,
         fields=[
             _field("Your code", f"`{code}`", inline=True),
             _field(
                 "Steps",
-                "1. Open the LeagueOfLeagues desktop app.\n"
+                "1. Open the AgonCup desktop app.\n"
                 "2. Make sure League is running and you're signed in.\n"
                 "3. Paste this code to sign in and link your account.",
             ),
@@ -155,7 +155,7 @@ def lobby_credentials(
         description = (
             f"**{tournament_name}** — **you are opening this match**{versus}. "
             f"Create a **custom game**{game_phrase} with the name and password "
-            "below. Leave the LeagueOfLeagues client running: as soon as the lobby "
+            "below. Leave the AgonCup client running: as soon as the lobby "
             "exists it invites the other players for you, and their clients accept "
             "automatically."
         )

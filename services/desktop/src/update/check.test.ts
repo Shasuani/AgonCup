@@ -19,8 +19,8 @@ test("checkDesktopVersion: URL, query, mapping", async () => {
         up_to_date: false,
         required: false,
         published_at: "2026-09-08T10:00:00.000Z",
-        download_url: "https://x/downloads/LeagueOfLeagues.dmg",
-        package_url: "https://x/downloads/LeagueOfLeagues-0.2.0-universal.zip",
+        download_url: "https://x/downloads/AgonCup.dmg",
+        package_url: "https://x/downloads/AgonCup-0.2.0-universal.zip",
         package_sha512: "abc==",
         package_size: 42,
         feed_url: "https://x/downloads",
@@ -39,7 +39,7 @@ test("checkDesktopVersion: URL, query, mapping", async () => {
     assert.equal(r.release.status, "update_available");
     assert.equal(r.release.latest, "0.2.0");
     assert.equal(r.release.upToDate, false);
-    assert.equal(r.release.packageUrl, "https://x/downloads/LeagueOfLeagues-0.2.0-universal.zip");
+    assert.equal(r.release.packageUrl, "https://x/downloads/AgonCup-0.2.0-universal.zip");
     assert.equal(r.release.packageSha512, "abc==");
     assert.equal(r.release.packageSize, 42);
     assert.equal(r.release.publishedAt, "2026-09-08T10:00:00.000Z");

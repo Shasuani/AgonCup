@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-# Multi-stage build for the LeagueOfLeagues Discord bot (discord.py).
+# Multi-stage build for the AgonCup Discord bot (discord.py).
 # Builds on the shared python base image. Build the base first:
 #   docker build -t lol/python-base:dev infra/images/python-base   (or `make build-bases`)
 

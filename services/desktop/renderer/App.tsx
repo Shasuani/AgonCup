@@ -85,7 +85,7 @@ function OfflineScreen({ name }: { name: string | null }) {
       <div className="ll-stage__card" style={{ textAlign: 'center', maxWidth: 440 }}>
         <div className="ll-center" style={{ gap: 12, marginBottom: 22 }}>
           <BrandMark size={28} />
-          <span className="ll-wordmark">LEAGUE<em>OF</em>LEAGUES</span>
+          <span className="ll-wordmark"><span>AGON<em>CUP</em></span></span>
         </div>
         <div className="ll-panel" style={{ padding: '34px 36px' }}>
           <Spinner size={26} />

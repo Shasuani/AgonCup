@@ -25,20 +25,20 @@ from app.main import app
 
 WIN_FEED = """version: 0.2.0
 files:
-  - url: LeagueOfLeagues-Setup-0.2.0.exe
+  - url: AgonCup-Setup-0.2.0.exe
     sha512: winhash==
     size: 87654321
-path: LeagueOfLeagues-Setup-0.2.0.exe
+path: AgonCup-Setup-0.2.0.exe
 sha512: winhash==
 releaseDate: '2026-09-08T10:00:00.000Z'
 """
 
 MAC_FEED = """version: 0.2.0
 files:
-  - url: LeagueOfLeagues-0.2.0-universal.zip
+  - url: AgonCup-0.2.0-universal.zip
     sha512: machash==
     size: 123456789
-path: LeagueOfLeagues-0.2.0-universal.zip
+path: AgonCup-0.2.0-universal.zip
 sha512: machash==
 releaseDate: '2026-09-08T10:00:00.000Z'
 """
@@ -88,7 +88,7 @@ def test_parse_feed_reads_the_electron_builder_scalars() -> None:
     feed = parse_feed(MAC_FEED)
     assert feed is not None
     assert feed.version == "0.2.0"
-    assert feed.path == "LeagueOfLeagues-0.2.0-universal.zip"
+    assert feed.path == "AgonCup-0.2.0-universal.zip"
     assert feed.sha512 == "machash=="
     assert feed.size == 123456789
     assert feed.release_date == "2026-09-08T10:00:00.000Z"
@@ -144,8 +144,8 @@ def test_describe_release_required_below_minimum() -> None:
     )
     assert info.status == "update_available"
     assert info.required is True
-    assert info.download_url == "https://x/downloads/LeagueOfLeagues-Setup.exe"
-    assert info.package_url == "https://x/downloads/LeagueOfLeagues-Setup-0.2.0.exe"
+    assert info.download_url == "https://x/downloads/AgonCup-Setup.exe"
+    assert info.package_url == "https://x/downloads/AgonCup-Setup-0.2.0.exe"
     assert info.package_sha512 == "winhash=="
     assert info.feed_url == "https://x/downloads"
 
@@ -162,7 +162,7 @@ def test_describe_release_override_has_no_package() -> None:
     assert info.status == "update_available"
     assert info.latest == "9.9.9"
     assert info.package_url is None
-    assert info.download_url == "https://x/downloads/LeagueOfLeagues.dmg"
+    assert info.download_url == "https://x/downloads/AgonCup.dmg"
 
 
 # --- endpoint -----------------------------------------------------------------
@@ -216,17 +216,15 @@ async def test_endpoint_update_available_per_platform() -> None:
     assert body["required"] is False
     assert body["latest"] == "0.2.0"
     assert body["current"] == "0.1.0"
-    assert (
-        body["package_url"] == "https://lol.example/downloads/LeagueOfLeagues-0.2.0-universal.zip"
-    )
-    assert body["download_url"] == "https://lol.example/downloads/LeagueOfLeagues.dmg"
+    assert body["package_url"] == "https://lol.example/downloads/AgonCup-0.2.0-universal.zip"
+    assert body["download_url"] == "https://lol.example/downloads/AgonCup.dmg"
     assert seen == ["https://lol.example/downloads/latest-mac.yml"]
 
     resp = await _get({"version": "0.2.0", "platform": "win32"})
     body = resp.json()
     assert body["status"] == "up_to_date"
     assert body["up_to_date"] is True
-    assert body["package_url"] == "https://lol.example/downloads/LeagueOfLeagues-Setup-0.2.0.exe"
+    assert body["package_url"] == "https://lol.example/downloads/AgonCup-Setup-0.2.0.exe"
     assert seen[-1] == "https://lol.example/downloads/latest.yml"
 
 
@@ -240,7 +238,7 @@ async def test_endpoint_unknown_feed_never_fails() -> None:
     assert body["status"] == "unknown"
     assert body["up_to_date"] is True
     assert body["latest"] is None
-    assert body["download_url"] == "https://lol.example/downloads/LeagueOfLeagues-Setup.exe"
+    assert body["download_url"] == "https://lol.example/downloads/AgonCup-Setup.exe"
 
 
 async def test_endpoint_minimum_makes_update_required() -> None:
@@ -264,7 +262,7 @@ async def test_endpoint_override_and_custom_downloads_url() -> None:
     assert body["latest"] == "0.3.0"
     assert body["status"] == "update_available"
     assert body["package_url"] is None
-    assert body["download_url"] == "https://cdn.example/dl/LeagueOfLeagues.dmg"
+    assert body["download_url"] == "https://cdn.example/dl/AgonCup.dmg"
     assert seen == []  # the override skips the feed entirely
 
 

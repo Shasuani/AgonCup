@@ -34,8 +34,8 @@ const release = (over: Partial<ReleaseInfo> = {}): ReleaseInfo => ({
   upToDate: false,
   required: false,
   publishedAt: null,
-  downloadUrl: "https://x/downloads/LeagueOfLeagues.dmg",
-  packageUrl: "https://x/downloads/LeagueOfLeagues-0.2.0-universal.zip",
+  downloadUrl: "https://x/downloads/AgonCup.dmg",
+  packageUrl: "https://x/downloads/AgonCup-0.2.0-universal.zip",
   packageSha512: "good==",
   packageSize: 10,
   feedUrl: "https://x/downloads",
@@ -45,12 +45,12 @@ const release = (over: Partial<ReleaseInfo> = {}): ReleaseInfo => ({
 const noLog = (): void => {};
 
 const TRANSLOCATED =
-  "/private/var/folders/3q/r5gt/T/AppTranslocation/A6BC74A7-8D81-446B-ACC7-670E41C95B9D/d/LeagueOfLeagues.app";
+  "/private/var/folders/3q/r5gt/T/AppTranslocation/A6BC74A7-8D81-446B-ACC7-670E41C95B9D/d/AgonCup.app";
 // Real `mount` output from a Mac running the app straight from the opened .dmg.
 const MOUNTS = [
   "/dev/disk3s1s1 on / (apfs, sealed, local, read-only, journaled)",
-  "/dev/disk13s1 on /Volumes/LeagueOfLeagues 0.2.3-universal (hfs, local, nodev, nosuid, read-only, noowners, quarantine, mounted by kostaskolta)",
-  "/Volumes/LeagueOfLeagues 0.2.3-universal/LeagueOfLeagues.app on /private/var/folders/3q/r5gt/T/AppTranslocation/A6BC74A7-8D81-446B-ACC7-670E41C95B9D (nullfs, local, nodev, nosuid, read-only, noowners, quarantine, nobrowse, mounted by kostaskolta)",
+  "/dev/disk13s1 on /Volumes/AgonCup 0.2.3-universal (hfs, local, nodev, nosuid, read-only, noowners, quarantine, mounted by kostaskolta)",
+  "/Volumes/AgonCup 0.2.3-universal/AgonCup.app on /private/var/folders/3q/r5gt/T/AppTranslocation/A6BC74A7-8D81-446B-ACC7-670E41C95B9D (nullfs, local, nodev, nosuid, read-only, noowners, quarantine, nobrowse, mounted by kostaskolta)",
   "/Applications/Other.app on /private/var/folders/3q/r5gt/T/AppTranslocation/0000AAAA-0000-0000-0000-000000000000 (nullfs, local, read-only, nobrowse)",
   "",
 ].join("\n");
@@ -59,23 +59,23 @@ const MOUNTS = [
 
 test("appBundleFromExecPath: finds the .app, null outside a bundle", () => {
   assert.equal(
-    appBundleFromExecPath("/Applications/LeagueOfLeagues.app/Contents/MacOS/LeagueOfLeagues"),
-    "/Applications/LeagueOfLeagues.app",
+    appBundleFromExecPath("/Applications/AgonCup.app/Contents/MacOS/AgonCup"),
+    "/Applications/AgonCup.app",
   );
-  assert.equal(appBundleFromExecPath(`${TRANSLOCATED}/Contents/MacOS/LeagueOfLeagues`), TRANSLOCATED);
+  assert.equal(appBundleFromExecPath(`${TRANSLOCATED}/Contents/MacOS/AgonCup`), TRANSLOCATED);
   assert.equal(appBundleFromExecPath("/usr/local/bin/electron"), null);
 });
 
 test("isTranslocated / volumeOf: recognise a translocated mirror and a mounted volume", () => {
   assert.equal(isTranslocated(TRANSLOCATED), true);
-  assert.equal(isTranslocated("/Applications/LeagueOfLeagues.app"), false);
-  assert.equal(volumeOf("/Volumes/LeagueOfLeagues 0.2.3-universal/LeagueOfLeagues.app"), "/Volumes/LeagueOfLeagues 0.2.3-universal");
-  assert.equal(volumeOf("/Applications/LeagueOfLeagues.app"), null);
+  assert.equal(isTranslocated("/Applications/AgonCup.app"), false);
+  assert.equal(volumeOf("/Volumes/AgonCup 0.2.3-universal/AgonCup.app"), "/Volumes/AgonCup 0.2.3-universal");
+  assert.equal(volumeOf("/Applications/AgonCup.app"), null);
 });
 
 test("originalBundleFromMounts: maps the translocated mirror back to the .dmg copy", () => {
-  assert.equal(originalBundleFromMounts(TRANSLOCATED, MOUNTS), "/Volumes/LeagueOfLeagues 0.2.3-universal/LeagueOfLeagues.app");
-  assert.equal(originalBundleFromMounts("/Applications/LeagueOfLeagues.app", MOUNTS), null);
+  assert.equal(originalBundleFromMounts(TRANSLOCATED, MOUNTS), "/Volumes/AgonCup 0.2.3-universal/AgonCup.app");
+  assert.equal(originalBundleFromMounts("/Applications/AgonCup.app", MOUNTS), null);
   assert.equal(originalBundleFromMounts(TRANSLOCATED, "/dev/disk3s1s1 on / (apfs)\n"), null);
 });
 
@@ -83,9 +83,9 @@ test("buildMacSwapScript: waits on the pid, swaps with rollback, clears quaranti
   const script = buildMacSwapScript({
     pid: 4242,
     appPath: "/Applications/League's.app",
-    newAppPath: "/tmp/stage/app/LeagueOfLeagues.app",
-    previousAppPath: "/Volumes/LeagueOfLeagues/LeagueOfLeagues.app",
-    volume: "/Volumes/LeagueOfLeagues",
+    newAppPath: "/tmp/stage/app/AgonCup.app",
+    previousAppPath: "/Volumes/AgonCup/AgonCup.app",
+    volume: "/Volumes/AgonCup",
     logPath: "/tmp/stage/swap.log",
   });
   assert.ok(script.startsWith("#!/bin/sh\n"));
@@ -95,8 +95,8 @@ test("buildMacSwapScript: waits on the pid, swaps with rollback, clears quaranti
   // single quotes inside paths are escaped for sh
   assert.ok(script.includes(`APP='/Applications/League'\\''s.app'`));
   assert.ok(script.includes(`OLD='/Applications/League'\\''s.app.old'`));
-  assert.ok(script.includes(`NEW='/tmp/stage/app/LeagueOfLeagues.app'`));
-  assert.ok(script.includes(`VOLUME='/Volumes/LeagueOfLeagues'`));
+  assert.ok(script.includes(`NEW='/tmp/stage/app/AgonCup.app'`));
+  assert.ok(script.includes(`VOLUME='/Volumes/AgonCup'`));
   assert.ok(script.includes('mv "$NEW" "$APP"'));
   assert.ok(script.includes("reopen_previous"));
   assert.ok(script.includes("xattr -dr com.apple.quarantine"));
@@ -118,9 +118,9 @@ async function runSwap(opts: { readonly withOld: boolean; readonly newExists: bo
   for (const tool of ["open", "xattr", "hdiutil"]) {
     await writeFile(join(bin, tool), `#!/bin/sh\necho "${tool} $*" >> "${root}/calls"\n`, { mode: 0o755 });
   }
-  const app = join(root, "Applications", "LeagueOfLeagues.app");
-  const fresh = join(root, "stage", "app", "LeagueOfLeagues.app");
-  const previous = join(root, "dmg", "LeagueOfLeagues.app");
+  const app = join(root, "Applications", "AgonCup.app");
+  const fresh = join(root, "stage", "app", "AgonCup.app");
+  const previous = join(root, "dmg", "AgonCup.app");
   if (opts.withOld) {
     await mkdir(app, { recursive: true });
     await writeFile(join(app, "version"), "old");
@@ -160,7 +160,7 @@ test("swap script (real sh): replaces the old bundle, removes .old, opens the ne
   const r = await runSwap({ withOld: true, newExists: true });
   assert.equal(r.code, 0);
   assert.equal(r.version, "new");
-  assert.deepEqual(r.appsDir, ["LeagueOfLeagues.app"]);
+  assert.deepEqual(r.appsDir, ["AgonCup.app"]);
   assert.ok(r.calls.includes(`open -n ${r.app}`));
   assert.ok(r.log.includes("swap done"));
 });
@@ -176,7 +176,7 @@ test("swap script (real sh): a failed move restores the old app and reopens it",
   const withOld = await runSwap({ withOld: true, newExists: false });
   assert.equal(withOld.code, 1);
   assert.equal(withOld.version, "old");
-  assert.deepEqual(withOld.appsDir, ["LeagueOfLeagues.app"]);
+  assert.deepEqual(withOld.appsDir, ["AgonCup.app"]);
   assert.ok(withOld.calls.includes(`open -n ${withOld.app}`));
   assert.ok(withOld.log.includes("swap failed"));
 
@@ -321,7 +321,7 @@ function fakeMac(over: Partial<MacSwapDeps> = {}) {
   const files = new Map<string, string>();
   const logs: Array<[string, Record<string, unknown> | undefined]> = [];
   const deps: MacSwapDeps = {
-    appBundlePath: "/Applications/LeagueOfLeagues.app",
+    appBundlePath: "/Applications/AgonCup.app",
     originalBundlePath: null,
     applicationsDirs: ["/Applications", "/Users/p/Applications"],
     stagingDir: "/tmp/stage",
@@ -334,7 +334,7 @@ function fakeMac(over: Partial<MacSwapDeps> = {}) {
     extractZip: async (zip, dir) => {
       calls.push(`extract ${zip} -> ${dir}`);
     },
-    findAppBundle: async (dir) => `${dir}/LeagueOfLeagues.app`,
+    findAppBundle: async (dir) => `${dir}/AgonCup.app`,
     canReplace: async () => true,
     writeFile: async (p, text) => {
       files.set(p, text);
@@ -371,7 +371,7 @@ test("macSwapInstaller: download, verify, unpack, then swap script + quit", asyn
   assert.deepEqual(calls, [
     "rm /tmp/stage",
     "mkdir /tmp/stage",
-    "download https://x/downloads/LeagueOfLeagues-0.2.0-universal.zip -> /tmp/stage/update.zip",
+    "download https://x/downloads/AgonCup-0.2.0-universal.zip -> /tmp/stage/update.zip",
     "mkdir /tmp/stage/app",
     "extract /tmp/stage/update.zip -> /tmp/stage/app",
   ]);
@@ -381,8 +381,8 @@ test("macSwapInstaller: download, verify, unpack, then swap script + quit", asyn
   await inst.install(release());
   const script = files.get("/tmp/stage/swap.sh");
   assert.ok(script?.includes("PID=77"));
-  assert.ok(script?.includes("APP='/Applications/LeagueOfLeagues.app'"));
-  assert.ok(script?.includes("NEW='/tmp/stage/app/LeagueOfLeagues.app'"));
+  assert.ok(script?.includes("APP='/Applications/AgonCup.app'"));
+  assert.ok(script?.includes("NEW='/tmp/stage/app/AgonCup.app'"));
   assert.ok(script?.includes("VOLUME=''"));
   assert.deepEqual(calls, ["chmod /tmp/stage/swap.sh 755", "spawn /tmp/stage/swap.sh", "quit"]);
 });
@@ -403,43 +403,43 @@ test("macSwapInstaller: no package on the feed never downloads", async () => {
 test("macSwapInstaller: a copy started from the .dmg is installed into Applications and the .dmg ejected", async () => {
   const dmg = fakeMac({
     appBundlePath: TRANSLOCATED,
-    originalBundlePath: "/Volumes/LeagueOfLeagues 0.2.3-universal/LeagueOfLeagues.app",
+    originalBundlePath: "/Volumes/AgonCup 0.2.3-universal/AgonCup.app",
   });
   const inst = macSwapInstaller(dmg.deps);
   await inst.prepare(release(), () => {});
   await inst.install(release());
   const script = dmg.files.get("/tmp/stage/swap.sh") ?? "";
-  assert.ok(script.includes("APP='/Applications/LeagueOfLeagues.app'"));
-  assert.ok(script.includes("PREVIOUS='/Volumes/LeagueOfLeagues 0.2.3-universal/LeagueOfLeagues.app'"));
-  assert.ok(script.includes("VOLUME='/Volumes/LeagueOfLeagues 0.2.3-universal'"));
+  assert.ok(script.includes("APP='/Applications/AgonCup.app'"));
+  assert.ok(script.includes("PREVIOUS='/Volumes/AgonCup 0.2.3-universal/AgonCup.app'"));
+  assert.ok(script.includes("VOLUME='/Volumes/AgonCup 0.2.3-universal'"));
   assert.ok(dmg.calls.includes("quit"));
 });
 
 test("chooseMacInstallTarget: in place when possible, else the first Applications folder that takes it", async () => {
-  const inPlace = await chooseMacInstallTarget(fakeMac({ appBundlePath: "/Users/p/Desktop/LeagueOfLeagues.app" }).deps);
-  assert.deepEqual(inPlace, { target: "/Users/p/Desktop/LeagueOfLeagues.app", previous: "/Users/p/Desktop/LeagueOfLeagues.app", volume: null });
+  const inPlace = await chooseMacInstallTarget(fakeMac({ appBundlePath: "/Users/p/Desktop/AgonCup.app" }).deps);
+  assert.deepEqual(inPlace, { target: "/Users/p/Desktop/AgonCup.app", previous: "/Users/p/Desktop/AgonCup.app", volume: null });
 
   // Translocated from /Applications itself (never moved by Finder): replace the real copy.
   const fromApps = await chooseMacInstallTarget(
-    fakeMac({ appBundlePath: TRANSLOCATED, originalBundlePath: "/Applications/LeagueOfLeagues.app" }).deps,
+    fakeMac({ appBundlePath: TRANSLOCATED, originalBundlePath: "/Applications/AgonCup.app" }).deps,
   );
-  assert.equal(fromApps?.target, "/Applications/LeagueOfLeagues.app");
+  assert.equal(fromApps?.target, "/Applications/AgonCup.app");
 
   // Translocated, origin unknown: never the read-only mirror.
   const unknown = await chooseMacInstallTarget(fakeMac({ appBundlePath: TRANSLOCATED }).deps);
-  assert.deepEqual(unknown, { target: "/Applications/LeagueOfLeagues.app", previous: TRANSLOCATED, volume: null });
+  assert.deepEqual(unknown, { target: "/Applications/AgonCup.app", previous: TRANSLOCATED, volume: null });
 
   // A standard account that may not write /Applications gets ~/Applications.
   const noAdmin = await chooseMacInstallTarget(
     fakeMac({
-      appBundlePath: "/Volumes/LoL/LeagueOfLeagues.app",
+      appBundlePath: "/Volumes/LoL/AgonCup.app",
       canReplace: async (p) => p.startsWith("/Users/p/"),
     }).deps,
   );
-  assert.equal(noAdmin?.target, "/Users/p/Applications/LeagueOfLeagues.app");
+  assert.equal(noAdmin?.target, "/Users/p/Applications/AgonCup.app");
   assert.equal(noAdmin?.volume, "/Volumes/LoL");
 
-  const nowhere = fakeMac({ appBundlePath: "/Volumes/LoL/LeagueOfLeagues.app", canReplace: async () => false });
+  const nowhere = fakeMac({ appBundlePath: "/Volumes/LoL/AgonCup.app", canReplace: async () => false });
   assert.equal(await chooseMacInstallTarget(nowhere.deps), null);
   const inst = macSwapInstaller(nowhere.deps);
   await inst.prepare(release(), () => {});

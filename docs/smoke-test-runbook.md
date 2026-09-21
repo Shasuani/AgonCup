@@ -21,7 +21,7 @@
 5. `BACKEND_URL=http://<IP-του-Mac-σου>:8000 make desktop-mac`
    - Για το prod: σκέτο `make desktop-mac` (default: lol.gameras.gr).
    - Στο 2ο μηχάνημα: ίδιο BACKEND_URL, με το IP σου ορατό στο LAN.
-6. Άνοιξε την εφαρμογή από το Spotlight (LeagueOfLeagues).
+6. Άνοιξε την εφαρμογή από το Spotlight (AgonCup).
 
 ## Γ. Register + pair (και οι 2 παίκτες)
 

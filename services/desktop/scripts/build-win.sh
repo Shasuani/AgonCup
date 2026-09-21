@@ -44,7 +44,7 @@ if [ -e "$OUT_DIR" ]; then
     exit 1
   fi
   if [ -n "$(ls -A "$OUT_DIR" 2>/dev/null)" ] \
-     && [ ! -f "$OUT_DIR/LeagueOfLeagues.exe" ] \
+     && [ ! -f "$OUT_DIR/AgonCup.exe" ] \
      && [ "${FORCE:-0}" != "1" ]; then
     echo "Refusing to wipe $OUT_DIR: not empty and not a previous build." >&2
     echo "Re-run with FORCE=1 if you are sure." >&2
@@ -83,7 +83,7 @@ say "staging into $OUT_DIR"
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 unzip -q "$ELECTRON_ZIP" -d "$OUT_DIR"
-mv "$OUT_DIR/electron.exe" "$OUT_DIR/LeagueOfLeagues.exe"
+mv "$OUT_DIR/electron.exe" "$OUT_DIR/AgonCup.exe"
 
 # Electron resolves resources/app.asar, then resources/app, then the bundled
 # default_app.asar — so an unpacked resources/app takes precedence as-is.
@@ -120,7 +120,7 @@ grep -qF 'localhost:8000' "$APP/dist/main.js" && {
 
 # --- 6. launcher ------------------------------------------------------------
 # CRLF: .cmd files are parsed by cmd.exe, which is happier with DOS endings.
-printf '@echo off\r\nsetlocal\r\nset "BACKEND_URL=%s"\r\nset "REALTIME_URL=%s"\r\nstart "" "%%~dp0LeagueOfLeagues.exe"\r\n' \
+printf '@echo off\r\nsetlocal\r\nset "BACKEND_URL=%s"\r\nset "REALTIME_URL=%s"\r\nstart "" "%%~dp0AgonCup.exe"\r\n' \
   "$BACKEND_URL" "$REALTIME_URL" > "$OUT_DIR/run.cmd"
 
 say "done"

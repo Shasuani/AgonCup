@@ -1,6 +1,6 @@
 /**
  * @lol/clients-ts — framework-agnostic, fetch-based TypeScript client for the
- * LeagueOfLeagues backend HTTP API (services/backend, mounted at `/api/v1`).
+ * AgonCup backend HTTP API (services/backend, mounted at `/api/v1`).
  *
  * ============================================================================
  *  HAND-WRITTEN FOR NOW — SHOULD LATER BE GENERATED FROM THE BACKEND OPENAPI.

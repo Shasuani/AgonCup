@@ -150,7 +150,7 @@ async function web(svg) {
   // hairlines/glow (noise at tab size) — browsers scale it to whatever they need.
   const favSvg = variant(svg, { platform: "win", size: 32 }).replace(
     "<svg ",
-    '<svg role="img" aria-label="LeagueOfLeagues" ',
+    '<svg role="img" aria-label="AgonCup" ',
   );
   await writeFile(join(webDir, "favicon.svg"), `${favSvg}\n`, "utf8");
   console.log("wrote frontend/public/favicon.svg");

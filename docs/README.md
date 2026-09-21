@@ -1,4 +1,4 @@
-# LeagueOfLeagues — docs
+# AgonCup — docs
 
 | Doc | What |
 |-----|------|

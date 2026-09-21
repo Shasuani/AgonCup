@@ -1,4 +1,4 @@
-conti# Privacy Policy — LeagueOfLeagues (DRAFT / STUB)
+conti# Privacy Policy — AgonCup (DRAFT / STUB)
 
 > **Placeholder.** A public, hosted privacy policy is required for Riot product
 > registration and Discord app verification. Replace this with a legally reviewed
@@ -25,7 +25,7 @@ conti# Privacy Policy — LeagueOfLeagues (DRAFT / STUB)
 - Account/guild deletion purges associated data (incl. `on_guild_remove`).
 
 ## Disclaimer
-LeagueOfLeagues isn't endorsed by Riot Games and doesn't reflect the views or
+AgonCup isn't endorsed by Riot Games and doesn't reflect the views or
 opinions of Riot Games or anyone officially involved in producing or managing
 Riot Games properties.
 

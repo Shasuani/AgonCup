@@ -1,5 +1,5 @@
-<svg width="1200" height="630" viewBox="0 0 1200 630" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="LeagueOfLeagues — Tournament Operations Console. Run your League of Legends tournaments.">
-  <title>LeagueOfLeagues — Tournament Operations Console</title>
+<svg width="1200" height="630" viewBox="0 0 1200 630" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="AgonCup — Tournament Operations Console. Run your League of Legends tournaments.">
+  <title>AgonCup — Tournament Operations Console</title>
   <defs>
     <!-- Cobalt brand background gradient (bg -> surface, with cobalt bloom) -->
     <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="630" gradientUnits="userSpaceOnUse">
@@ -35,17 +35,19 @@
       <stop offset="0.5" stop-color="#785a28"/>
       <stop offset="1" stop-color="#c8aa6e"/>
     </linearGradient>
-    <linearGradient id="icGold" gradientUnits="userSpaceOnUse" x1="4" y1="2" x2="28" y2="30">
+    <linearGradient id="icGold" gradientUnits="userSpaceOnUse" x1="25" y1="8" x2="80" y2="92">
       <stop offset="0" stop-color="#f0e6d2"/>
-      <stop offset="0.5" stop-color="#e2c98c"/>
-      <stop offset="1" stop-color="#c8aa6e"/>
+      <stop offset="0.45" stop-color="#c8aa6e"/>
+      <stop offset="1" stop-color="#785a28"/>
     </linearGradient>
-    <linearGradient id="icHex" gradientUnits="userSpaceOnUse" x1="16" y1="2.5" x2="16" y2="29.5">
-      <stop offset="0" stop-color="#11243c"/>
-      <stop offset="1" stop-color="#040d1a"/>
-    </linearGradient>
+    <mask id="icMark" maskUnits="userSpaceOnUse" x="0" y="0" width="100" height="100">
+      <path d="M50 12 87 85H13Z" fill="#fff" stroke="#fff" stroke-width="6" stroke-linejoin="round"/>
+      <g transform="translate(19 35.18) scale(0.62)">
+        <path d="M38 12H62V17H56V27C56 33 74 35 74 48C74 62 58 70 55 80L61 86H39L45 80C42 70 26 62 26 48C26 35 44 33 44 27V17H38Z" fill="#000"/>
+        <path d="M56 19.5C72 13 79 30 68 37.5M44 19.5C28 13 21 30 32 37.5" fill="none" stroke="#000" stroke-width="5.5" stroke-linecap="round"/>
+      </g>
+    </mask>
     <clipPath id="icTile"><rect x="100" y="100" width="824" height="824" rx="185"/></clipPath>
-    <filter id="icGlow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="1.3"/></filter>
     <linearGradient id="wordmark" x1="0" y1="0" x2="0" y2="64" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#ffffff"/>
       <stop offset="1" stop-color="#e8eaf0"/>
@@ -94,18 +96,14 @@
       </g>
       <rect x="114" y="114" width="796" height="796" rx="172" fill="none" stroke="url(#icFrame)" stroke-width="6" opacity="0.85"/>
       <rect x="130" y="130" width="764" height="764" rx="158" fill="none" stroke="#c8aa6e" stroke-width="2" opacity="0.22"/>
-      <g transform="translate(512 512) scale(19.5) translate(-16 -16)">
-        <path d="M16 2.5 27.7 9.25v13.5L16 29.5 4.3 22.75V9.25L16 2.5Z" fill="none" stroke="#c8aa6e" stroke-width="2.6" stroke-linejoin="round" opacity="0.45" filter="url(#icGlow)"/>
-        <path d="M16 2.5 27.7 9.25v13.5L16 29.5 4.3 22.75V9.25L16 2.5Z" fill="url(#icHex)" stroke="url(#icGold)" stroke-width="1.6" stroke-linejoin="round"/>
-        <path d="M11.5 10v12h4.5" fill="none" stroke="url(#icGold)" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>
-        <path d="M20.5 10v12" fill="none" stroke="#c8aa6e" stroke-width="2.1" stroke-linecap="round" opacity="0.5"/>
-        <path d="M16 16h4.5" fill="none" stroke="url(#icGold)" stroke-width="2.1" stroke-linecap="round"/>
+      <g transform="translate(512 484) scale(5.9) translate(-50 -48.5)">
+        <rect width="100" height="100" fill="url(#icGold)" mask="url(#icMark)"/>
       </g>
     </g>
 
     <!-- Wordmark -->
     <text x="152" y="44" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
-      font-size="58" font-weight="800" letter-spacing="-1.5" fill="url(#wordmark)">LeagueOfLeagues</text>
+      font-size="58" font-weight="800" letter-spacing="-1.5" fill="url(#wordmark)">AgonCup</text>
 
     <!-- Eyebrow / category -->
     <text x="154" y="86" font-family="'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace"

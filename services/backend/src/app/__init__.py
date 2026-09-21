@@ -1,3 +1,3 @@
-"""LeagueOfLeagues backend application package."""
+"""AgonCup backend application package."""
 
 __version__ = "0.1.0"

@@ -1,4 +1,4 @@
-; LeagueOfLeagues — NSIS customisations picked up by electron-builder (nsis.include).
+; AgonCup — NSIS customisations picked up by electron-builder (nsis.include).
 ;
 ; Tolerate a failing PREVIOUS uninstaller when upgrading. The 0.2.0 installer
 ; shipped electron-builder 24.13.3, whose "is the app running?" check misfires

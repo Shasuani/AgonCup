@@ -1,4 +1,4 @@
-# electron-builder packaging config for the LeagueOfLeagues desktop client.
+# electron-builder packaging config for the AgonCup desktop client.
 # (PLAN.md §3.3 desktop client; built on a Mac with `npm run dist:all` and
 # uploaded by hand to the server's downloads folder — docs/gitlab-cicd.md §9.)
 #
@@ -16,8 +16,8 @@
 # with the feed.
 #
 # FILE NAMES CARRY NO VERSION on purpose (artifactName below): every release
-# overwrites the same five files on the server — LeagueOfLeagues-Setup.exe,
-# LeagueOfLeagues.dmg, LeagueOfLeagues.zip, latest.yml, latest-mac.yml. The
+# overwrites the same five files on the server — AgonCup-Setup.exe,
+# AgonCup.dmg, AgonCup.zip, latest.yml, latest-mac.yml. The
 # website's buttons, the feed files and the clients' manual-download fallback
 # (src/update/installers.ts, app/desktop/service.py, the SPA's DownloadClient)
 # all name the same files, so nothing has to be renamed or linked after an
@@ -35,9 +35,15 @@
 # The LCU-write ToS spike [BETA-GATE] (docs/compliance-checklist.md) remains the
 # gate before any SIGNED client ships.
 
+# appId deliberately keeps the project's FORMER name (LeagueOfLeagues, renamed to
+# AgonCup 2026-09-21). No player ever sees it, and it is what ties an installed
+# copy to its updates: the NSIS uninstall registry key is a GUID derived from it,
+# so a new appId would install AgonCup NEXT TO the old app instead of upgrading
+# it, and every 0.2.x client in the field would stop being a one-click update.
+# Do not "tidy" it.
 appId: gg.leagueofleagues.desktop
-productName: LeagueOfLeagues
-copyright: Copyright © LeagueOfLeagues
+productName: AgonCup
+copyright: Copyright © AgonCup
 
 directories:
   output: release
@@ -81,7 +87,7 @@ mac:
     - target: zip
       arch:
         - universal
-  # LeagueOfLeagues.dmg / LeagueOfLeagues.zip — see "FILE NAMES" in the header.
+  # AgonCup.dmg / AgonCup.zip — see "FILE NAMES" in the header.
   artifactName: ${productName}.${ext}
   # Hardened runtime is required for notarization; entitlements live under build/.
   hardenedRuntime: true
@@ -99,7 +105,7 @@ win:
     - target: nsis
       arch:
         - x64
-  # LeagueOfLeagues-Setup.exe — no spaces (electron-builder's default is
+  # AgonCup-Setup.exe — no spaces (electron-builder's default is
   # "Name Setup 1.0.0.exe"), no version (see "FILE NAMES" in the header). This
   # exact name goes into latest.yml and into the website's URL.
   artifactName: ${productName}-Setup.${ext}

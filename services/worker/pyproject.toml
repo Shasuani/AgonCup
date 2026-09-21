@@ -5,11 +5,11 @@ build-backend = "hatchling.build"
 [project]
 name = "lol-worker"
 version = "0.1.0"
-description = "LeagueOfLeagues worker (arq) — verification polling, lobby watchdog/failover state machine, result corroboration/anomaly scoring."
+description = "AgonCup worker (arq) — verification polling, lobby watchdog/failover state machine, result corroboration/anomaly scoring."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Proprietary" }
-authors = [{ name = "LeagueOfLeagues" }]
+authors = [{ name = "AgonCup" }]
 
 dependencies = [
     "arq>=0.26",

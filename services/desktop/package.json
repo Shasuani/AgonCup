@@ -1,9 +1,9 @@
 {
   "name": "@lol/desktop",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "private": true,
   "type": "module",
-  "description": "LeagueOfLeagues desktop client (Electron + TypeScript). Autonomous LCU lobby orchestrator + result reporter. Runs natively; built/signed per-OS in CI.",
+  "description": "AgonCup desktop client (Electron + TypeScript). Autonomous LCU lobby orchestrator + result reporter. Runs natively; built/signed per-OS in CI.",
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc -p tsconfig.json && npm run build:renderer",

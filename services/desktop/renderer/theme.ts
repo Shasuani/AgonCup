@@ -1,4 +1,4 @@
-// LeagueOfLeagues — hextech theme tokens (desktop renderer).
+// AgonCup — hextech theme tokens (desktop renderer).
 import type { CSSProperties } from 'react';
 // Cinzel + Barlow are bundled as data: URIs (fonts.ts) — the Electron CSP
 // (default-src 'self', font-src 'self' data:) blocks every CDN, so this is the

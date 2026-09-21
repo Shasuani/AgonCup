@@ -1,7 +1,7 @@
 # infra/ — local stack, shared base images, CI
 
 This directory owns the Docker-first local development stack and the shared base
-images for LeagueOfLeagues. It is Phase-0 scaffolding: it must actually build and
+images for AgonCup. It is Phase-0 scaffolding: it must actually build and
 run, but the services it composes are still skeletons.
 
 ## Layout
@@ -122,7 +122,7 @@ infra/publish-desktop.sh            # add --no-build to re-upload an existing re
 That produces one universal `.dmg` (Intel + Apple Silicon), one Windows `.exe`,
 and the electron-updater feed files (`latest.yml`, `latest-mac.yml`), uploads
 them, and points the stable names the site links at
-(`LeagueOfLeagues.dmg`, `LeagueOfLeagues-Setup.exe`) at the new build.
+(`AgonCup.dmg`, `AgonCup-Setup.exe`) at the new build.
 
 What installed clients do (`services/desktop/src/update/`): 10 s after start
 and every 30 minutes they ask the backend `GET /api/v1/desktop/version?platform=…&version=…`
@@ -133,7 +133,7 @@ in-app banner, and the package is fetched in the background:
 | OS | How it installs |
 |----|-----------------|
 | Windows | electron-updater downloads the `.exe` from the feed; "Restart now" installs silently and relaunches; "Later" installs when the app quits. |
-| macOS | The client downloads the universal `.zip`, verifies its SHA-512 against `latest-mac.yml`, unpacks it and (on "Restart now") a detached script swaps `/Applications/LeagueOfLeagues.app` and relaunches. A copy still running from the mounted `.dmg` is sent to the manual download instead. |
+| macOS | The client downloads the universal `.zip`, verifies its SHA-512 against `latest-mac.yml`, unpacks it and (on "Restart now") a detached script swaps `/Applications/AgonCup.app` and relaunches. A copy still running from the mounted `.dmg` is sent to the manual download instead. |
 
 Backend knobs (`services/backend/.env`): `DESKTOP_DOWNLOADS_URL` (default
 `<FRONTEND_BASE_URL>/downloads`), `DESKTOP_DOWNLOADS_DIR` (read the feed from a

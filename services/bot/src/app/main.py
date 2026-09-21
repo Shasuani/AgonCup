@@ -92,7 +92,7 @@ async def onboard_guild(bot: commands.AutoShardedBot, guild: discord.Guild) -> b
 
 
 class LeagueBot(commands.AutoShardedBot):
-    """The LeagueOfLeagues bot.
+    """The AgonCup bot.
 
     Subclassing lets ``setup_hook`` register cogs and start the notification
     subscriber without any module-level gateway side effects.

@@ -393,7 +393,7 @@ async def update_settings(body: SettingsUpdateRequest) -> GuildSettingsModel:
 # ---------------------------------------------------------------------------
 #: Short human instruction echoed back to the bot for the code embed.
 _REGISTER_INSTRUCTION = (
-    "Enter this code in the LeagueOfLeagues desktop app to sign in and link your account."
+    "Enter this code in the AgonCup desktop app to sign in and link your account."
 )
 
 

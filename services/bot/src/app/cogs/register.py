@@ -2,7 +2,7 @@
 
 Thin presentation layer: the cog delegates to the backend bridge (which mints a
 one-time code) and renders the returned code as a ``lol_discord`` embed. The code
-is pasted into the LeagueOfLeagues desktop app to **sign in**; the desktop then
+is pasted into the AgonCup desktop app to **sign in**; the desktop then
 reads the player's PUUID from the local League client (LCU) and completes the
 account link — so the bot no longer takes a Riot ID and verification does NOT
 complete here. ``/link`` is an alias of ``/register`` (same backend call).

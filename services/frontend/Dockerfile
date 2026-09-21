@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-# Multi-stage build for the LeagueOfLeagues admin SPA (build context = repo root).
+# Multi-stage build for the AgonCup admin SPA (build context = repo root).
 # Build the node base first:  docker build -t lol/node-base:dev infra/images/node-base
 
 # ---------- builder ----------------------------------------------------------

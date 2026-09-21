@@ -1,6 +1,6 @@
 # lol-realtime
 
-The **WebSocket wire contract** for League Of Leagues: Pydantic envelope models
+The **WebSocket wire contract** for AgonCup: Pydantic envelope models
 plus an exported JSON schema (PLAN.md §1.4, §5).
 
 Every envelope carries:

@@ -27,7 +27,7 @@ export default function PairScreen({ onPaired }: { onPaired: () => void }) {
       <div className="ll-stage__card" style={noDrag}>
         <div className="ll-center" style={{ gap: 12, marginBottom: 26 }}>
           <BrandMark size={30} />
-          <span className="ll-wordmark" style={{ fontSize: 17 }}>LEAGUE<em>OF</em>LEAGUES</span>
+          <span className="ll-wordmark" style={{ fontSize: 17 }}><span>AGON<em>CUP</em></span></span>
         </div>
 
         <div className="ll-panel ll-panel--featured" style={{ padding: '34px 36px 32px' }}>

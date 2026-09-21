@@ -148,7 +148,7 @@ export const AsyncState: React.FC<{ loading: boolean; error?: string | null; chi
   return <>{children}</>;
 };
 
-export const EmptyState: React.FC<{ icon?: IconName; title: string; children?: React.ReactNode; action?: React.ReactNode; style?: React.CSSProperties }> = ({ icon = 'hex', title, children, action, style }) => (
+export const EmptyState: React.FC<{ icon?: IconName; title: string; children?: React.ReactNode; action?: React.ReactNode; style?: React.CSSProperties }> = ({ icon = 'amphora', title, children, action, style }) => (
   <div className="ll-empty" style={style}>
     <div className="ll-empty__mark"><Icon name={icon} size={56} /></div>
     <div className="ll-empty__title">{title}</div>

@@ -36,8 +36,8 @@ import { isNewer } from "./version.js";
 /** Stable installer names the website links at; `infra/publish-desktop.sh`
  * keeps them pointed at the newest versioned build. Must match
  * `services/backend/src/app/desktop/service.py`. */
-export const MAC_INSTALLER_FILE = "LeagueOfLeagues.dmg";
-export const WINDOWS_INSTALLER_FILE = "LeagueOfLeagues-Setup.exe";
+export const MAC_INSTALLER_FILE = "AgonCup.dmg";
+export const WINDOWS_INSTALLER_FILE = "AgonCup-Setup.exe";
 
 export type Logger = (event: string, detail?: Record<string, unknown>) => void;
 
@@ -259,7 +259,7 @@ export function isTranslocated(bundlePath: string): boolean {
  * The real location of a translocated bundle, read from `mount` output.
  *
  * Translocation is a read-only nullfs mount whose SOURCE is the original bundle
- * (e.g. `/Volumes/LeagueOfLeagues/LeagueOfLeagues.app on /private/var/folders/…/
+ * (e.g. `/Volumes/AgonCup/AgonCup.app on /private/var/folders/…/
  * AppTranslocation/<UUID> (nullfs, …)`), and the app runs from somewhere under
  * that mount point. Null when `bundlePath` is not under any such mount.
  */
@@ -337,7 +337,7 @@ export function buildMacSwapScript(args: {
 }): string {
   return [
     "#!/bin/sh",
-    "# LeagueOfLeagues self-update: swap the bundle once the app has quit, then relaunch.",
+    "# AgonCup self-update: swap the bundle once the app has quit, then relaunch.",
     `exec >>${shellQuote(args.logPath)} 2>&1`,
     `PID=${Math.trunc(args.pid)}`,
     `APP=${shellQuote(args.appPath)}`,

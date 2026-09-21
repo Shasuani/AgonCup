@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-# Multi-stage build for the LeagueOfLeagues worker (arq).
+# Multi-stage build for the AgonCup worker (arq).
 # Builds on the shared python base image (PLAN.md §6 / SHARED CONVENTIONS).
 # Build the base first:  docker build -t lol/python-base:dev infra/images/python-base
 # (or `make build-bases` from the repo root).

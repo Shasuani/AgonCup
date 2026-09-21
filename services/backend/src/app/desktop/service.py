@@ -26,8 +26,8 @@ FEED_FILES: dict[Platform, str] = {"win32": "latest.yml", "darwin": "latest-mac.
 #: manual install (``infra/publish-desktop.sh`` keeps them pointed at the newest
 #: build). Must match ``services/desktop/src/update/installers.ts``.
 INSTALLER_FILES: dict[Platform, str] = {
-    "win32": "LeagueOfLeagues-Setup.exe",
-    "darwin": "LeagueOfLeagues.dmg",
+    "win32": "AgonCup-Setup.exe",
+    "darwin": "AgonCup.dmg",
 }
 
 #: Reads a feed file's text; ``None`` when it is missing/unreachable. Injected so

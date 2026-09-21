@@ -1,4 +1,4 @@
-# LeagueOfLeagues — Desktop Client UI Design Prompt
+# AgonCup — Desktop Client UI Design Prompt
 
 > Paste everything below the line into a design tool (v0, Lovable, Figma Make, Claude,
 > Stitch…). It describes the **real** app as built in `services/desktop/renderer/`.
@@ -8,7 +8,7 @@
 
 ## Role
 
-You are designing the UI for **LeagueOfLeagues**, a desktop companion app for
+You are designing the UI for **AgonCup**, a desktop companion app for
 *League of Legends* tournaments. Produce a high-fidelity, production-ready design —
 not a moodboard. I want screens I can implement directly in React.
 
@@ -101,7 +101,7 @@ tone for decorative labels only.
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
-│ ◆ LEAGUEOFLEAGUES  · Desktop Client v3        [LCU Connected ●] │ 44px title bar
+│ ◆ AGONCUP  · Desktop Client v3        [LCU Connected ●] │ 44px title bar
 ├──────────────┬─────────────────────────────────────────────────┤
 │ SIGNED IN    │                                                 │
 │ (avatar)     │                                                 │

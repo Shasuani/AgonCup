@@ -8,7 +8,7 @@
       Account-V1 key** (no Tournament API, no production-key review needed).
 - [ ] Host **`riot.txt`** on the public domain; stand up the public marketing site.
 - [ ] Publish a public **privacy policy** ([privacy-policy.md](privacy-policy.md)).
-- [ ] Mandatory disclaimer: **"LeagueOfLeagues isn't endorsed by Riot Games…"** on
+- [ ] Mandatory disclaimer: **"AgonCup isn't endorsed by Riot Games…"** on
       all surfaces; use **approved assets only**.
 - [ ] **Monetization:** free-only for v1; no gambling/wagering. (Entry-fee events,
       if ever: ≥20 participants, transparent win conditions, ≥70% prize-pool —

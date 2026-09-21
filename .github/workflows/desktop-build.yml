@@ -1,6 +1,6 @@
 name: Desktop Build
 
-# Per-OS Electron packaging for the LeagueOfLeagues desktop client
+# Per-OS Electron packaging for the AgonCup desktop client
 # (services/desktop). Builds native installers on macOS + Windows runners and
 # uploads them as artifacts. See PLAN.md §3.3 (desktop client) and §9.
 #

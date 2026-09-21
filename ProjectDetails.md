@@ -1,4 +1,4 @@
-Project: LeagueOfLeagues
+Project: AgonCup
 Description: Tournaments for Leauge of Legends, up to 16 teams per tournament, running in paraller multiple tournaments, user registration and tournament status throught discord. 
 One backend preferred in Python.
 One Discord bot for user registration, tournament join.

@@ -1,4 +1,4 @@
-# Standalone ruff configuration for the LeagueOfLeagues monorepo.
+# Standalone ruff configuration for the AgonCup monorepo.
 # This file is NOT a Python package — it only configures the linter/formatter.
 target-version = "py312"
 line-length = 100

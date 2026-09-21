@@ -32,7 +32,7 @@ export default function WatchScreen() {
         {entries.length === 0 && (
           <Panel tone="dashed">
             <EmptyState icon="eye" title="No games on right now">
-              When a tournament game starts anywhere on LeagueOfLeagues, it shows up here to watch.
+              When a tournament game starts anywhere on AgonCup, it shows up here to watch.
             </EmptyState>
           </Panel>
         )}

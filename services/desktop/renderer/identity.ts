@@ -91,7 +91,9 @@ export function useIdentity(user: BridgeUser | null, pollMs = 15_000, rankPollMs
   const b = lol();
   const summoner = useAsync(async () => { const s = b ? await b.readSummoner() : null; return s && s.ok ? s : null; }, [], pollMs);
   const remembered = useAsync(async () => (b && typeof b.getProfile === 'function' ? await b.getProfile() : null), [], pollMs);
-  const accounts = useAsync(async () => { const r = b ? await b.listAccounts() : null; return r && r.ok ? r.accounts : []; }, []);
+  // Polled like the summoner read: a lock-in can link the account that is open
+  // (see main.ts), and the card would otherwise say "Not linked" until a restart.
+  const accounts = useAsync(async () => { const r = b ? await b.listAccounts() : null; return r && r.ok ? r.accounts : []; }, [], pollMs);
 
   // Freshly refreshed rows (live rank) layered over the list by account id.
   const [fresh, setFresh] = useState<Record<string, LinkedAccount>>({});

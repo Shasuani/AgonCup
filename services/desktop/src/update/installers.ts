@@ -239,9 +239,20 @@ export interface MacSwapDeps {
   readonly mkdir: (path: string) => Promise<void>;
   /** Start the swap script detached from this process (it outlives us). */
   readonly spawnDetached: (scriptPath: string) => void;
+  /**
+   * Tell macOS the bundle at `path` changed: bump its modification date and
+   * re-register it with LaunchServices ({@link LSREGISTER}). A swap leaves the
+   * PATH as it was, so the Dock and Finder otherwise keep showing the previous
+   * version's cached icon (seen on the 0.2.6 → 0.2.7 rename update).
+   */
+  readonly refreshAppRegistration: (bundlePath: string) => Promise<void>;
   readonly quit: () => void;
   readonly log: Logger;
 }
+
+/** macOS' LaunchServices registration tool (not on PATH). */
+export const LSREGISTER =
+  "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
 
 /** `/Applications/X.app/Contents/MacOS/X` → `/Applications/X.app`; null when not in a bundle. */
 export function appBundleFromExecPath(execPath: string): string | null {
@@ -322,10 +333,12 @@ function shellQuote(value: string): string {
  * It waits for the running app to go away (asking it to stop after a minute),
  * moves any bundle at the target aside, moves the new one in, clears the
  * quarantine flag the fresh bundle would otherwise carry (this is the player's
- * own already-installed app updating itself), ejects the .dmg the old copy ran
- * from, and opens the new app. When a move fails it puts the old bundle back
- * and reopens the copy that was running, so the player is never left without
- * an app. Everything it does goes to `logPath` (read back at the next boot).
+ * own already-installed app updating itself), tells macOS the bundle changed
+ * (or the Dock keeps the old version's cached icon for that path), ejects the
+ * .dmg the old copy ran from, and opens the new app. When a move fails it puts
+ * the old bundle back and reopens the copy that was running, so the player is
+ * never left without an app. Everything it does goes to `logPath` (read back
+ * at the next boot).
  */
 export function buildMacSwapScript(args: {
   readonly pid: number;
@@ -334,6 +347,8 @@ export function buildMacSwapScript(args: {
   readonly previousAppPath: string;
   readonly volume: string | null;
   readonly logPath: string;
+  /** Defaults to {@link LSREGISTER}; the tests point it at a recording stub. */
+  readonly lsregisterPath?: string;
 }): string {
   return [
     "#!/bin/sh",
@@ -345,6 +360,7 @@ export function buildMacSwapScript(args: {
     `OLD=${shellQuote(`${args.appPath}.old`)}`,
     `PREVIOUS=${shellQuote(args.previousAppPath)}`,
     `VOLUME=${shellQuote(args.volume ?? "")}`,
+    `LSREGISTER=${shellQuote(args.lsregisterPath ?? LSREGISTER)}`,
     'echo "$(date) swap start: $NEW -> $APP"',
     "reopen_previous() {",
     '  if [ -e "$APP" ]; then open -n "$APP"; elif [ -e "$PREVIOUS" ]; then open -n "$PREVIOUS"; fi',
@@ -371,6 +387,9 @@ export function buildMacSwapScript(args: {
     "fi",
     'rm -rf "$OLD"',
     'xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true',
+    // Same path, new bundle: BEFORE the relaunch, so the Dock tile is born with the new icon.
+    'touch "$APP"',
+    '"$LSREGISTER" -f "$APP" 2>/dev/null || true',
     // Only ever a disk image — never unmount a real drive the app happened to be on.
     `if [ -n "$VOLUME" ] && hdiutil info | awk -F '\\t' -v v="$VOLUME" '$NF == v { f = 1 } END { exit !f }'; then`,
     '  hdiutil detach "$VOLUME" -quiet || true',
@@ -451,7 +470,16 @@ export function macSwapInstaller(deps: MacSwapDeps): Installer {
       if (staged !== null) return;
       try {
         const swapLog = await deps.readText(logPath);
-        if (swapLog !== null) log("update_swap_log", { text: swapLog.slice(-4_000) });
+        if (swapLog !== null) {
+          log("update_swap_log", { text: swapLog.slice(-4_000) });
+          // First boot after a swap. The script of an OLDER version (≤ 0.2.7) did
+          // not refresh the registration itself, so the new version heals it here.
+          try {
+            await deps.refreshAppRegistration(deps.appBundlePath);
+          } catch (err) {
+            log("update_registration_refresh_failed", { detail: errorText(err) });
+          }
+        }
         await deps.rm(deps.stagingDir);
       } catch (err) {
         log("update_cleanup_failed", { detail: errorText(err) });

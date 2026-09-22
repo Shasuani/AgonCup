@@ -198,7 +198,9 @@ export type EntrantsBridgeResult =
   | { ok: false; status: number; detail: string };
 
 export type LockInBridgeResult =
-  | { ok: true }
+  /** `linkedAccount`: the open account was linked just now, so the invite reaches it.
+   *  `warning`: locked in, but the open account could not be linked (why). */
+  | { ok: true; linkedAccount?: string; warning?: string }
   | { ok: false; status: number; detail: string };
 
 /** A team as `createTeam` returns it (includes the shareable join code). */

@@ -11,6 +11,7 @@ from lol_discord.embeds import EmbedColor, EmbedField, build_embed
 from lol_discord.errors import format_error
 from lol_discord.notifications import (
     build_central_feed_item,
+    copyable,
     lobby_credentials,
     match_ready,
     match_result,
@@ -30,6 +31,7 @@ __all__ = [
     "EmbedColor",
     "EmbedField",
     "build_embed",
+    "copyable",
     "format_error",
     "registration_approved",
     "lobby_credentials",

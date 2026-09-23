@@ -48,6 +48,17 @@ def _field(name: str, value: str, *, inline: bool = False) -> EmbedField:
     return {"name": name, "value": value, "inline": inline}
 
 
+def copyable(value: str) -> str:
+    """A value the reader has to carry into another app, as a fenced code block.
+
+    Discord draws a one-click **Copy** button on fenced blocks (desktop on hover,
+    mobile on tap) and on nothing else — inline backticks only change the font,
+    so a lobby name or a sign-in code in them still has to be selected by hand.
+    Bots cannot write to a clipboard, so this block IS the copy button.
+    """
+    return f"```\n{value}\n```"
+
+
 # --------------------------------------------------------------------------- #
 # Registration                                                                 #
 # --------------------------------------------------------------------------- #
@@ -67,7 +78,7 @@ def registration_code(*, code: str, expires_minutes: int = 15) -> dict[str, Any]
         "then links your League account.",
         color=EmbedColor.WARNING,
         fields=[
-            _field("Your code", f"`{code}`", inline=True),
+            _field("Your code", copyable(code), inline=True),
             _field(
                 "Steps",
                 "1. Open the AgonCup desktop app.\n"
@@ -130,8 +141,8 @@ def lobby_credentials(
     them chasing nine people by hand either.
     """
     fields: list[EmbedField] = [
-        _field("Lobby name", f"`{lobby_name}`", inline=True),
-        _field("Password", f"`{lobby_password}`", inline=True),
+        _field("Lobby name", copyable(lobby_name), inline=True),
+        _field("Password", copyable(lobby_password), inline=True),
     ]
     # The game's shape (mode, map, win rule) leads the field list: the name and
     # password say where to meet, this says WHAT to set up — without it the
@@ -333,9 +344,9 @@ def match_ready(
     if mode_text:
         fields.append(_field("Game", mode_text, inline=True))
     if lobby_name:
-        fields.append(_field("Lobby name", lobby_name, inline=True))
+        fields.append(_field("Lobby name", copyable(lobby_name), inline=True))
     if lobby_password:
-        fields.append(_field("Password", lobby_password, inline=True))
+        fields.append(_field("Password", copyable(lobby_password), inline=True))
 
     return build_embed(
         "Your lobby is forming",

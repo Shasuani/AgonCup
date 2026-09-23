@@ -96,13 +96,14 @@ function makeAdapter(over: Partial<Record<string, unknown>> = {}) {
       }
       if (over.noLobby) return null;
       return {
-        lobbyId: "lobby-xyz",
+        lobbyId: (over.lobbyId as string | undefined) ?? "lobby-xyz",
         isCustom: true,
         ...(Array.isArray(over.lobbyMembers) ? { memberSummonerIds: over.lobbyMembers } : {}),
       } as never;
     },
     async invite(ids: readonly unknown[]) {
       calls.push(`invite:${ids.length}`);
+      if (over.inviteThrows) throw new Error("LCU writes refused: kill-switch engaged");
       // Recorded verbatim: the backend orders the invite list deliberately
       // (own team, then the rival captain, then their roster) and a controller
       // that reordered or dropped ids would silently undo that.
@@ -754,6 +755,109 @@ test("the host sends no roster outside the lobby, or when the lobby is unreadabl
   await runTickAsync(s); // ChampSelect
   assert.equal(t.heartbeats.at(-1)?.phase, "ChampSelect");
   assert.equal(t.heartbeats.at(-1)?.lobbyMemberSummonerIds, undefined);
+});
+
+// --- re-invites of roster members not yet in the lobby (§3.6.3) ------------ //
+// A League invite only reaches a client that is online at that moment. The
+// players who reported this had one of them launch League a minute after the
+// batch went out: nothing arrived, and nothing in the system ever sent it again.
+
+const invitesSent = (a: ReturnType<typeof makeAdapter>): number =>
+  a.calls.filter((c) => c.startsWith("invite")).length;
+
+test("a roster member not in the lobby is asked again, with growing gaps", async () => {
+  const t = makeTransport();
+  const over: Record<string, unknown> = { phase: "Lobby", lobbyMembers: ["s-host", "s1"] };
+  const a = makeAdapter(over);
+  const s = makeScheduler();
+  let now = 1_000;
+  makeController(t, a, s, 2000, { nowMs: () => now }).start();
+  t.emit(createCmd()); // invites s1, s2, s3
+  await tickMicrotasks();
+  assert.equal(invitesSent(a), 1);
+
+  await runTickAsync(s); // straight after the batch: too soon
+  assert.equal(invitesSent(a), 1);
+
+  now += 13_000; // first round after ~10s (±25%)
+  await runTickAsync(s);
+  assert.equal(invitesSent(a), 2);
+  assert.deepEqual(a.invited.slice(3), ["s2", "s3"], "only the missing, in roster order");
+
+  now += 14_000; // second round waits ~20s — not yet
+  await runTickAsync(s);
+  assert.equal(invitesSent(a), 2);
+  now += 12_000; // 26s since the last round: due
+  await runTickAsync(s);
+  assert.equal(invitesSent(a), 3);
+
+  over.lobbyMembers = ["s-host", "s1", "s2", "s3"]; // everyone is in
+  now += 300_000;
+  await runTickAsync(s);
+  await runTickAsync(s);
+  assert.equal(invitesSent(a), 3, "nothing left to chase");
+});
+
+test("a lobby the host closes and makes again is asked into at once, as a new lobby", async () => {
+  const t = makeTransport();
+  const over: Record<string, unknown> = { phase: "Lobby", lobbyMembers: ["s-host"] };
+  const a = makeAdapter(over);
+  const s = makeScheduler();
+  let now = 1_000;
+  makeController(t, a, s, 2000, { nowMs: () => now }).start();
+  t.emit(createCmd());
+  await tickMicrotasks();
+  assert.equal(invitesSent(a), 1);
+
+  over.noLobby = true; // the host closed the custom game
+  now += 60_000;
+  await runTickAsync(s);
+  assert.equal(invitesSent(a), 1, "no lobby, nothing to invite into");
+
+  over.noLobby = false; // …and made it again by hand: a different lobby id
+  over.lobbyId = "lobby-made-again";
+  await runTickAsync(s);
+  assert.equal(invitesSent(a), 2, "the whole roster is asked into the new lobby straight away");
+  assert.deepEqual(a.invited.slice(3), ["s1", "s2", "s3"]);
+
+  await runTickAsync(s); // and the new lobby has its own schedule: not again yet
+  assert.equal(invitesSent(a), 2);
+});
+
+test("re-invites are bounded: an abandoned match stops being nagged", async () => {
+  const t = makeTransport();
+  const over: Record<string, unknown> = { phase: "Lobby", lobbyMembers: ["s-host"] };
+  const a = makeAdapter(over);
+  const s = makeScheduler();
+  let now = 1_000;
+  makeController(t, a, s, 2000, { nowMs: () => now }).start();
+  t.emit(createCmd());
+  await tickMicrotasks();
+
+  for (let i = 0; i < 20; i++) {
+    now += 200_000; // well past any backoff
+    await runTickAsync(s);
+  }
+  assert.equal(invitesSent(a), 8, "the create's batch + seven more rounds, then silence");
+});
+
+test("a refused re-invite is one round lost, not a hot loop", async () => {
+  const t = makeTransport();
+  const over: Record<string, unknown> = { phase: "Lobby", lobbyMembers: ["s-host"] };
+  const a = makeAdapter(over);
+  const s = makeScheduler();
+  let now = 1_000;
+  makeController(t, a, s, 2000, { nowMs: () => now }).start();
+  t.emit(createCmd());
+  await tickMicrotasks();
+
+  over.inviteThrows = true; // kill-switch flipped mid-match
+  now += 13_000;
+  await runTickAsync(s);
+  await runTickAsync(s);
+  await runTickAsync(s);
+  assert.equal(invitesSent(a), 2, "one attempt this round, no retry per tick");
+  assert.equal(t.heartbeats.length >= 3, true, "the tick loop is still alive");
 });
 
 test("while the game runs the client shares the live scoreboard, at most every 5s", async () => {

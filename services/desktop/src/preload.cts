@@ -393,12 +393,27 @@ export interface LiveGameFirstBloodBridge {
   atSeconds: number;
 }
 
+/** One row of THIS machine's scoreboard: a Watch-live row plus "is it you". */
+export interface LiveGameBoardPlayerBridge extends LiveBoardPlayerBridge {
+  /** Whether this row is THIS player; null when the local name is unknown. */
+  isYou: boolean | null;
+}
+
+/** The scoreboard of the game on this machine (champions, items, spells, K/D/A). */
+export interface LiveGameBoardBridge {
+  gameTime: number;
+  gameMode: string;
+  players: LiveGameBoardPlayerBridge[];
+}
+
 /** The running (or just-finished) game (`null` = nothing to show). */
 export interface LiveGameBridge {
   status: "in_game" | "ended";
   firstBlood: LiveGameFirstBloodBridge | null;
   /** The LOCAL player's outcome from the GameEnd event; null until known. */
   result: "win" | "loss" | null;
+  /** Null before the first capture (and on a main process older than this field). */
+  board?: LiveGameBoardBridge | null;
 }
 
 /** Whether this session may drive the League client (per-session write opt-in). */

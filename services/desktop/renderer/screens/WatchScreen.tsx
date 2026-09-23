@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { theme as t } from '../theme';
 import { PageHead, Panel, Badge, Notice, AsyncState, EmptyState } from '../ui';
-import { ChampIcon, ItemRow, SpellPair, championIdByKey, spellIdByKey, useChampions } from '../champion';
-import { lol, useAsync, errText, type LiveBoard, type LiveBoardPlayer, type PresenceEntry } from '../bridge';
+import { Scoreboard, teamKills, useGameClock } from '../scoreboard';
+import { lol, useAsync, errText, type LiveBoard, type PresenceEntry } from '../bridge';
 
 /** How often the open scoreboard asks for a fresher board (clients send every ~5s). */
 const BOARD_POLL_MS = 3_000;
@@ -78,10 +78,8 @@ function LiveGame({ entry }: { entry: PresenceEntry }) {
     throw new Error(errText(r));
   }, [entry.matchId], BOARD_POLL_MS);
   const live = board.data;
-  const clock = useGameClock(live);
-  const blue = (live?.players ?? []).filter((p) => p.team !== 'CHAOS');
-  const red = (live?.players ?? []).filter((p) => p.team === 'CHAOS');
-  const kills = (ps: LiveBoardPlayer[]) => ps.reduce((n, p) => n + p.kills, 0);
+  const clock = useGameClock(live, live?.matchId);
+  const players = live?.players ?? [];
 
   return (
     <Panel flush featured>
@@ -96,9 +94,9 @@ function LiveGame({ entry }: { entry: PresenceEntry }) {
         {live && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 22, flexShrink: 0 }}>
             <div style={{ fontFamily: t.display, fontSize: 26, color: t.textStrong, fontVariantNumeric: 'tabular-nums' }} aria-label="Team kills">
-              <span style={{ color: '#5aa8ff' }}>{kills(blue)}</span>
+              <span style={{ color: '#5aa8ff' }}>{teamKills(players, 'blue')}</span>
               <span className="ll-dim" style={{ margin: '0 10px', fontSize: 18 }}>vs</span>
-              <span style={{ color: '#ff6b6b' }}>{kills(red)}</span>
+              <span style={{ color: '#ff6b6b' }}>{teamKills(players, 'red')}</span>
             </div>
             <div style={{ textAlign: 'right' }}>
               <div className="ll-cap" style={{ color: t.textDim }}>Game time</div>
@@ -116,10 +114,7 @@ function LiveGame({ entry }: { entry: PresenceEntry }) {
 
       {live && (
         <>
-          <div className="ll-board">
-            <Side title="Blue side" tone="#5aa8ff" players={blue} />
-            <Side title="Red side" tone="#ff6b6b" players={red} />
-          </div>
+          <Scoreboard players={players} />
           <div className="ll-panel__section ll-dim" style={{ fontSize: 12 }}>
             Scoreboard shared by the players' clients · updates every few seconds · display-only
           </div>
@@ -127,56 +122,6 @@ function LiveGame({ entry }: { entry: PresenceEntry }) {
       )}
     </Panel>
   );
-}
-
-function Side({ title, tone, players }: { title: string; tone: string; players: LiveBoardPlayer[] }) {
-  return (
-    <div className="ll-board__team">
-      <div className="ll-board__head">
-        <span className="ll-cap" style={{ color: tone }}>{title}</span>
-      </div>
-      {players.map((p, i) => <Row key={`${p.championKey}:${i}`} p={p} />)}
-      {players.length === 0 && <div className="ll-dim" style={{ fontSize: 12 }}>—</div>}
-    </div>
-  );
-}
-
-function Row({ p }: { p: LiveBoardPlayer }) {
-  const reg = useChampions();
-  return (
-    <div className="ll-board__row" style={p.isDead ? { opacity: 0.55 } : undefined} data-live-player={p.name}>
-      <ChampIcon id={championIdByKey(reg, p.championKey)} name={p.championName || undefined} size={30} ring="none" level={p.level} />
-      <SpellPair a={spellIdByKey(reg, p.spell1Key)} b={spellIdByKey(reg, p.spell2Key)} size={14} />
-      <span className="ll-board__name" title={p.championName}>
-        {p.name}
-        {p.isDead && <span style={{ color: '#ff6b6b', marginLeft: 6, fontSize: 11.5 }}>dead · {Math.ceil(p.respawnTimer)}s</span>}
-      </span>
-      <ItemRow items={p.items} size={20} />
-      <span className="ll-board__kda">
-        {p.kills} / {p.deaths} / {p.assists}
-        <small>{p.creepScore} CS</small>
-      </span>
-    </div>
-  );
-}
-
-/** The game clock, ticking locally between boards so it never looks frozen. */
-function useGameClock(board: LiveBoard | null | undefined): string {
-  const [now, setNow] = useState(() => Date.now());
-  const [anchor, setAnchor] = useState<{ gameTime: number; at: number } | null>(null);
-  useEffect(() => {
-    if (board) setAnchor({ gameTime: board.gameTime, at: Date.now() });
-  }, [board?.gameTime, board?.matchId]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, []);
-  if (!anchor) return '--:--';
-  // Never run more than one poll window ahead of the last board we actually saw.
-  const seconds = anchor.gameTime + Math.min((now - anchor.at) / 1000, 10);
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${m}:${String(s).padStart(2, '0')}`;
 }
 
 function modeShort(gameMode: string): string {

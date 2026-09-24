@@ -130,12 +130,16 @@ def _build(
     players_per_team: int = 5,
     best_of: int = 1,
     sibling_scored: list[list[str]] | None = None,
+    accounts: list[tuple[Any, ...]] | None = None,
 ) -> tuple[_QueuedSession, uuid.UUID, uuid.UUID, uuid.UUID]:
     """Seed a queued session for a match where A=team_a, B=team_b checked in.
 
     Mirrors adjudicate_match's execute() order: Match, TeamMember(a), TeamMember(b),
     ClientSession, (Tournament.game_mode, best_of), [RiotAccount names — only for a
-    first-blood mode], ResultReport, sibling scored_game_ids.
+    first-blood mode], RiotAccount identity rows (``accounts``: 6-tuples of puuid,
+    lcu_puuid, summoner_id, game_name, tag_line, display_name — default: each
+    roster PUUID with no other id, so a report naming canonical PUUIDs matches),
+    ResultReport, sibling scored_game_ids.
     """
     n = players_per_team
     match_id, ta, tb = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
@@ -167,6 +171,14 @@ def _build(
         # 5b: RiotAccount (puuid, game_name, tag_line) for the kill-stream name map.
         names = [(p, p.upper(), "TAG") for p in a_puuids + b_puuids]
         results.append(_Res(names))
+    # 5c: RiotAccount identity rows for the eog-line resolver.
+    results.append(
+        _Res(
+            accounts
+            if accounts is not None
+            else [(p, None, None, None, None, None) for p in a_puuids + b_puuids]
+        )
+    )
     results.extend(
         [
             _Res(reports),  # 6: ResultReport rows
@@ -201,6 +213,63 @@ async def test_quorum_agreement_auto_records_winner() -> None:
     assert len(spy.calls) == 1
     assert spy.calls[0]["winner_team_id"] == ta
     assert spy.calls[0]["decided_by"] == ResultDecidedBy.QUORUM
+
+
+def _lcu_line(i: int, side: str) -> dict[str, Any]:
+    """A players[] line as a REAL eog-stats-block writes it: the League client's
+    own 36-char puuid and numeric summonerId, never our canonical PUUID."""
+    return {
+        "puuid": f"0000{side}{i}-0000-5000-8000-00000000000{i}",
+        "summonerId": 55990000 + (100 if side == "b" else 0) + i,
+        "championId": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_real_eog_lines_resolve_to_the_roster_by_lcu_puuid_or_summoner_id() -> None:
+    """Verified 2026-09-24 on a live client: the eog block's ``puuid`` is the LCU's
+    36-char UUID, so a report's winners never intersect the canonical roster by
+    raw value — before this every real 5v5 fell to INSUFFICIENT. The LCU puuid
+    and summoner id the desktop stored at verify are what map the lines back.
+    """
+    a_lines = [_lcu_line(i, "a") for i in range(5)]
+    b_lines = [_lcu_line(i, "b") for i in range(5)]
+    payload = {
+        "teams": [
+            {"isWinningTeam": False, "players": a_lines},
+            {"isWinningTeam": True, "players": b_lines},
+        ]
+    }
+    reports = [
+        SimpleNamespace(
+            lcu_game_id="4006997240",
+            reporter_puuid=p,
+            source=ResultSource.EOG_STATS_BLOCK,
+            schema_version="v1",
+            received_at=None,
+            raw_payload=payload,
+            reported_kda=None,
+            kill_stream=None,
+        )
+        for p in _ALL
+    ]
+    # Team A accounts stored their LCU puuid; team B only a summoner id (an older
+    # link) — both id spaces must resolve.
+    accounts = [(f"pa{i}", a_lines[i]["puuid"], None, None, None, None) for i in range(5)] + [
+        (f"pb{i}", None, str(b_lines[i]["summonerId"]), None, None, None) for i in range(5)
+    ]
+    session, match_id, _ta, tb = _build(reports=reports, accounts=accounts)
+    spy = _RecordSpy()
+
+    outcome = await corroboration.adjudicate_match(
+        session,  # type: ignore[arg-type]
+        match_id=match_id,
+        guild_id=uuid.uuid4(),
+        record_winner=spy,
+    )
+
+    assert outcome == AdjudicationOutcome.ACCEPT
+    assert spy.calls[0]["winner_team_id"] == tb
 
 
 @pytest.mark.asyncio

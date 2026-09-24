@@ -46,12 +46,13 @@ from lol_schemas.enums import (
     ResultDecidedBy,
     TournamentStatus,
 )
-from sqlalchemy import func, or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.tenancy import across_user_guilds
 from app.logging import get_logger
-from app.models import Match, MatchResult, ResultReport, RiotAccount, Team, Tournament, User
+from app.models import Match, MatchResult, ResultReport, RiotAccount, Team, Tournament
+from app.results.identity import ScoreboardIdentities, load_identities_for_lines
 
 logger = get_logger(__name__)
 
@@ -542,30 +543,19 @@ class HistoryGame:
     teams: list[HistoryTeam]
 
 
-def _riot_id_key(value: object) -> str | None:
-    """Casefolded ``name#tag`` join key for a scoreboard ``riotId``, or ``None``."""
-    if not isinstance(value, str) or "#" not in value:
-        return None
-    name, _, tag = value.partition("#")
-    name, tag = name.strip(), tag.strip()
-    if not name or not tag:
-        return None
-    return f"{name.casefold()}#{tag.casefold()}"
-
-
 def _history_players(
-    team_raw: dict[str, Any],
-    names: dict[str, tuple[str | None, str | None]],
-    by_riot_id: dict[str, tuple[str, str | None, str | None]] | None = None,
+    team_raw: dict[str, Any], identities: ScoreboardIdentities
 ) -> list[HistoryPlayer]:
     """Map one team's ``players`` block into resolved :class:`HistoryPlayer`s.
 
-    An eog line carries a ``puuid``; a MID-GAME line (the 1v1 first-blood report,
-    the only report a duel ever produces) carries only the ``riotId`` the live
-    scoreboard shows, because the ``:2999`` API exposes no PUUID. Those resolve
-    through ``by_riot_id`` to the linked account — PUUID, name — so the duel
-    renders like any other game and counts as the player's own (ToDoList
-    #9/#10). An unlinked Riot ID keeps the scoreboard name as the label.
+    An eog line carries the League client's ``puuid`` (the 36-char LCU one, not
+    our canonical PUUID) and ``summonerId``; a MID-GAME line (the 1v1 first-blood
+    report, the only report a duel ever produces) carries only the ``riotId`` the
+    live scoreboard shows, because the ``:2999`` API exposes no PUUID. Every one
+    of those resolves through ``identities`` to the linked account — canonical
+    PUUID, name — so each game renders like any other and counts as the player's
+    own (ToDoList #9/#10). An unlinked line keeps whatever it carried as the
+    label: its Riot ID, else its raw puuid as the key.
     """
     out: list[HistoryPlayer] = []
     players = team_raw.get("players")
@@ -574,15 +564,12 @@ def _history_players(
     for p in players:
         if not isinstance(p, dict):
             continue
-        puuid = str(p.get("puuid") or "")
-        display_name, riot_id = names.get(puuid, (None, None))
-        if not puuid:
-            key = _riot_id_key(p.get("riotId"))
-            hit = (by_riot_id or {}).get(key) if key is not None else None
-            if hit is not None:
-                puuid, display_name, riot_id = hit
-            elif isinstance(p.get("riotId"), str):
-                riot_id = str(p["riotId"]).strip() or None
+        linked = identities.resolve(p)
+        if linked is not None:
+            puuid, display_name, riot_id = linked.puuid, linked.display_name, linked.riot_id
+        else:
+            puuid, display_name = str(p.get("puuid") or ""), None
+            riot_id = str(p["riotId"]).strip() or None if isinstance(p.get("riotId"), str) else None
         raw_items = p.get("items")
         items = (
             tuple(int(i) for i in raw_items if isinstance(i, (int, float)))
@@ -697,48 +684,17 @@ async def list_match_history(session: AsyncSession, *, limit: int = 50) -> list[
     if not order:
         return []
 
-    # Batch-resolve PUUID -> (discord display name, riot id) across all games.
-    # Mid-game lines (a duel's first-blood report) have no PUUID, only the Riot
-    # ID the live scoreboard showed: those resolve by game name instead.
-    puuids: set[str] = set()
-    riot_keys: set[str] = set()
-    for key in order:
-        for team in representative[key].raw_payload["teams"]:  # type: ignore[index]
-            for p in team.get("players") or []:
-                if not isinstance(p, dict):
-                    continue
-                if p.get("puuid"):
-                    puuids.add(str(p["puuid"]))
-                elif (riot_key := _riot_id_key(p.get("riotId"))) is not None:
-                    riot_keys.add(riot_key)
-    names: dict[str, tuple[str | None, str | None]] = {}
-    by_riot_id: dict[str, tuple[str, str | None, str | None]] = {}
-    if puuids or riot_keys:
-        clauses = []
-        if puuids:
-            clauses.append(RiotAccount.puuid.in_(puuids))
-        if riot_keys:
-            clauses.append(
-                func.lower(RiotAccount.riot_id_game_name).in_(
-                    {k.split("#", 1)[0] for k in riot_keys}
-                )
-            )
-        for puuid, dname, gname, tline in (
-            await session.execute(
-                select(
-                    RiotAccount.puuid,
-                    User.display_name,
-                    RiotAccount.riot_id_game_name,
-                    RiotAccount.riot_id_tag_line,
-                )
-                .join(User, RiotAccount.user_id == User.id)
-                .where(or_(*clauses))
-            )
-        ).all():
-            riot_id = f"{gname}#{tline}" if gname and tline else None
-            names[str(puuid)] = (dname, riot_id)
-            if gname and tline:
-                by_riot_id[f"{gname.casefold()}#{tline.casefold()}"] = (str(puuid), dname, riot_id)
+    # Batch-resolve every line's League-client id (LCU puuid / summoner id / Riot
+    # ID) -> linked account across all games, in one query.
+    lines: list[dict[str, Any]] = [
+        p
+        for key in order
+        for team in representative[key].raw_payload["teams"]  # type: ignore[index]
+        if isinstance(team, dict)
+        for p in team.get("players") or []
+        if isinstance(p, dict)
+    ]
+    identities = await load_identities_for_lines(session, lines)
 
     # Batch-resolve match -> (round, tournament id, tournament name).
     match_ids = {uuid.UUID(key[0]) for key in order}
@@ -759,7 +715,7 @@ async def list_match_history(session: AsyncSession, *, limit: int = 50) -> list[
         teams = [
             HistoryTeam(
                 is_winner=bool(team.get("isWinningTeam")),
-                players=_history_players(team, names, by_riot_id),
+                players=_history_players(team, identities),
             )
             for team in r.raw_payload["teams"]  # type: ignore[index]
             if isinstance(team, dict)

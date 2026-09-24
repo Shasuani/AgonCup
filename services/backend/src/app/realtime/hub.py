@@ -404,6 +404,9 @@ async def _route_report(
     #      adjudication (Phase 6) later reads.
     # The two are independent: a stale-epoch report must NOT advance the phase, yet
     # the row is still a valid corroboration input, so we persist it regardless.
+    # The usual reason the phase does not move is that it already did — in a 5v5
+    # the first two agreeing reports decide the match (lobby ENDED) and the other
+    # eight land afterwards — so that is routine, not a dropped report.
     try:
         await service.ingest_lobby_state(
             session,
@@ -412,7 +415,7 @@ async def _route_report(
             event=LobbyEvent.GAME_ENDED,
         )
     except (KeyError, ValueError, service.OrchestrationError) as exc:
-        logger.warning("realtime.inbound.report_dropped", error=str(exc))
+        logger.info("realtime.inbound.report_phase_unchanged", reason=str(exc))
     await _persist_result_report(session, subscription=subscription, body=body)
     # Adjudication is intentionally NOT run here — it happens after this
     # transaction commits (see :func:`_adjudicate_after_commit`), so the pass can

@@ -451,6 +451,19 @@ class _QueuedSession:
         return self._q.pop(0)
 
 
+def _acct(
+    puuid: str,
+    display_name: str | None,
+    game_name: str | None,
+    tag_line: str | None,
+    *,
+    lcu_puuid: str | None = None,
+    summoner_id: str | None = None,
+) -> tuple[Any, ...]:
+    """One ``RiotAccount``/``User`` row as the identity query selects it."""
+    return (puuid, lcu_puuid, summoner_id, game_name, tag_line, display_name)
+
+
 def _report(match_id: uuid.UUID, game_id: str, received_at: Any, teams: list[Any]) -> Any:
     from app.models import ResultReport
 
@@ -505,7 +518,7 @@ async def test_list_match_history_dedupes_and_resolves() -> None:
 
     session = _QueuedSession(
         _HistResult([newest, other_game, older_dup]),  # reports, newest-first
-        _HistResult([("p1", "Chama", "ChamaIGN", "EUNE")]),  # name resolution (p2 unlinked)
+        _HistResult([_acct("p1", "Chama", "ChamaIGN", "EUNE")]),  # name resolution (p2 unlinked)
         _HistResult([(match_id, 2, tid, "Summer Cup")]),  # match -> tournament meta
     )
 
@@ -756,7 +769,7 @@ async def test_list_match_history_resolves_live_client_lines_by_riot_id() -> Non
     session = _QueuedSession(
         _HistResult([_report(match_id, "7001", datetime(2026, 9, 16, tzinfo=UTC), teams)]),
         # Stored casing differs from the scoreboard's: the match is case-insensitive.
-        _HistResult([("p1", "Chama", "chamaign", "eune")]),
+        _HistResult([_acct("p1", "Chama", "chamaign", "eune")]),
         _HistResult([(match_id, 1, tid, "Duel Night")]),
     )
 
@@ -776,6 +789,57 @@ async def test_list_match_history_resolves_live_client_lines_by_riot_id() -> Non
 
 
 @pytest.mark.asyncio
+async def test_list_match_history_resolves_real_eog_lines_by_lcu_puuid_and_summoner_id() -> None:
+    """A REAL eog block never carries our canonical PUUID.
+
+    Verified 2026-09-24 against a live client: every ``puuid`` the LCU exposes is
+    its own 36-char UUID. The line's LCU puuid resolves through the advisory
+    ``lcu_puuid`` the desktop sent at verify; a line whose LCU puuid was never
+    stored still resolves by ``summonerId``. Both end up as the canonical PUUID
+    the "your games" filter needs.
+    """
+    from datetime import UTC, datetime
+
+    match_id, tid = uuid.uuid4(), uuid.uuid4()
+    lcu_uuid = "ec15f3f7-785e-57e8-8931-590e59d62f9e"
+    teams = [
+        {
+            "isWinningTeam": True,
+            "players": [{"puuid": lcu_uuid, "summonerId": 55997829, "championId": 103}],
+        },
+        {
+            "isWinningTeam": False,
+            "players": [
+                {
+                    "puuid": "0b2a7c1e-1111-5aaa-8bbb-000000000002",
+                    "summonerId": 777,
+                    "championId": 21,
+                }
+            ],
+        },
+    ]
+    session = _QueuedSession(
+        _HistResult([_report(match_id, "4006997240", datetime(2026, 9, 24, tzinfo=UTC), teams)]),
+        _HistResult(
+            [
+                _acct(
+                    "canon-1", "Chama", "Chama", "Shasu", lcu_puuid=lcu_uuid, summoner_id="55997829"
+                ),
+                _acct("canon-2", "Rival", "Rival", "EUW", lcu_puuid=None, summoner_id="777"),
+            ]
+        ),
+        _HistResult([(match_id, 1, tid, "Summer Cup")]),
+    )
+
+    games = await service.list_match_history(session, limit=50)  # type: ignore[arg-type]
+
+    win = games[0].teams[0].players[0]
+    assert (win.puuid, win.display_name, win.riot_id) == ("canon-1", "Chama", "Chama#Shasu")
+    lose = games[0].teams[1].players[0]
+    assert (lose.puuid, lose.display_name) == ("canon-2", "Rival"), "summoner id alone is enough"
+
+
+@pytest.mark.asyncio
 async def test_list_my_match_history_keeps_a_duel_reported_only_by_riot_id() -> None:
     """The caller's own duel appears in "your games" although its only report
     names them by Riot ID: the resolved PUUID is what the filter matches."""
@@ -789,7 +853,7 @@ async def test_list_my_match_history_keeps_a_duel_reported_only_by_riot_id() -> 
     session = _QueuedSession(
         _HistResult([("p1",)]),  # the caller's linked PUUIDs
         _HistResult([_report(mine, "7001", datetime(2026, 9, 16, tzinfo=UTC), duel)]),
-        _HistResult([("p1", "Chama", "ChamaIGN", "EUNE")]),
+        _HistResult([_acct("p1", "Chama", "ChamaIGN", "EUNE")]),
         _HistResult([(mine, 1, tid, "Duel Night")]),
     )
 

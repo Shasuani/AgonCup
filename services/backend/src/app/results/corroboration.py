@@ -55,6 +55,7 @@ from app.models import (
     Tournament,
 )
 from app.results import service as results_service
+from app.results.identity import ScoreboardIdentities, load_identities_for_roster
 
 logger = get_logger(__name__)
 
@@ -83,8 +84,14 @@ class _MarkDisputed(Protocol):
     ) -> MatchResult | None: ...
 
 
-def _winning_puuids(raw_payload: Any) -> set[str]:
-    """The PUUIDs on the eog team flagged ``isWinningTeam`` (forgeable, best-effort).
+def _winning_puuids(raw_payload: Any, identities: ScoreboardIdentities | None = None) -> set[str]:
+    """The roster PUUIDs on the eog team flagged ``isWinningTeam`` (forgeable, best-effort).
+
+    Each winning line is resolved through ``identities`` (LCU puuid / summoner id
+    / Riot ID -> canonical PUUID, see :mod:`app.results.identity`): the League
+    client never writes our canonical PUUID on a scoreboard, so a raw ``puuid``
+    only matches the roster in the fake-client harness. Without ``identities``
+    the raw value is taken as-is (legacy callers).
 
     Returns an empty set for a malformed / missing payload — such a report simply
     casts no winner vote rather than poisoning adjudication.
@@ -99,7 +106,12 @@ def _winning_puuids(raw_payload: Any) -> set[str]:
         if not isinstance(team, dict) or team.get("isWinningTeam") is not True:
             continue
         for player in team.get("players") or []:
-            if isinstance(player, dict) and player.get("puuid"):
+            if not isinstance(player, dict):
+                continue
+            linked = identities.resolve(player) if identities is not None else None
+            if linked is not None:
+                out.add(linked.puuid)
+            elif player.get("puuid"):
                 out.add(str(player["puuid"]))
     return out
 
@@ -181,6 +193,7 @@ def _claimed_winner(
     report: ResultReport,
     roster_by_team: dict[uuid.UUID, frozenset[str]],
     first_blood_names: dict[str, str] | None,
+    identities: ScoreboardIdentities | None = None,
 ) -> uuid.UUID | None:
     """One report's winner vote (flow step 3).
 
@@ -196,7 +209,7 @@ def _claimed_winner(
         )
         if vote is not None:
             return vote
-    return _derive_winner_team(_winning_puuids(report.raw_payload), roster_by_team)
+    return _derive_winner_team(_winning_puuids(report.raw_payload, identities), roster_by_team)
 
 
 async def _roster_by_team(session: AsyncSession, match: Match) -> dict[uuid.UUID, frozenset[str]]:
@@ -288,6 +301,12 @@ async def adjudicate_match(
     first_blood_names: dict[str, str] | None = None
     if game_mode.decides_on_first_blood:
         first_blood_names = await _puuid_by_name(session, roster_by_team)
+    # Every other mode votes by the eog winner, whose lines carry the League
+    # client's own ids (36-char LCU puuid / summoner id / Riot ID) — never the
+    # canonical PUUID the roster is keyed on. Resolve them per match.
+    identities = await load_identities_for_roster(
+        session, (p for roster in roster_by_team.values() for p in roster)
+    )
 
     rows = (
         (await session.execute(select(ResultReport).where(ResultReport.match_id == match_id)))
@@ -328,7 +347,7 @@ async def adjudicate_match(
                 lcu_game_id=r.lcu_game_id,
                 reporter_puuid=r.reporter_puuid,
                 source=r.source,
-                winner=_claimed_winner(r, roster_by_team, first_blood_names),
+                winner=_claimed_winner(r, roster_by_team, first_blood_names, identities),
                 schema_version=r.schema_version,
                 received_at=r.received_at,
                 # per_player_kda is DELIBERATELY not wired (the data is in

@@ -923,6 +923,21 @@ function asOptString<T extends string>(value: unknown): T | undefined {
 }
 
 /**
+ * `RE` — the Riot ID on an eog-stats-block player line as `Name#TAG`: the split
+ * `riotIdGameName` / `riotIdTagLine` fields when the client writes them, else a
+ * `summonerName` that already reads `Name#TAG`. Undefined when neither exists.
+ */
+function eogRiotId(pr: Record<string, unknown>): string | undefined {
+  const gameName = asOptString<string>(pr['riotIdGameName']);
+  const tagLine = asOptString<string>(pr['riotIdTagLine']);
+  if (gameName !== undefined && gameName !== '' && tagLine !== undefined && tagLine !== '') {
+    return `${gameName}#${tagLine}`;
+  }
+  const summonerName = asOptString<string>(pr['summonerName']);
+  return summonerName !== undefined && summonerName.includes('#') ? summonerName : undefined;
+}
+
+/**
  * `GeneratedTip_SummonerSpell_SummonerFlash_DisplayName` → `SummonerFlash`, the
  * Data Dragon key. The localized `displayName` is not a key, so it is not used.
  */
@@ -1685,11 +1700,16 @@ export class LcuAdapterImpl implements LcuAdapter {
       const team = asRecord(t);
       const players: EogPlayerStats[] = asArray(team['players']).map((p) => {
         const pr = asRecord(p);
+        // NOTE: this `puuid` is the League client's OWN 36-char UUID, not the
+        // canonical Account-V1 PUUID the backend keys players on (verified on a
+        // live client 2026-09-24). It rides along as one of three ids the
+        // backend resolves a line by — with `summonerId` and the Riot ID below.
         const puuid = asOptString<Puuid>(pr['puuid']);
         const summonerId =
           pr['summonerId'] !== undefined
             ? (String(asNumber(pr['summonerId'])) as SummonerId)
             : undefined;
+        const riotId = eogRiotId(pr);
         // The live client nests the counters under `stats`; older captures (and
         // the fake harness) carry them flat on the player. Read whichever exists.
         const stats = asRecord(pr['stats']);
@@ -1717,6 +1737,7 @@ export class LcuAdapterImpl implements LcuAdapter {
         return {
           ...(puuid !== undefined ? { puuid } : {}),
           ...(summonerId !== undefined ? { summonerId } : {}),
+          ...(riotId !== undefined ? { riotId } : {}),
           championId: asNumber(pr['championId']),
           championsKilled: stat('CHAMPIONS_KILLED'),
           numDeaths: stat('NUM_DEATHS'),

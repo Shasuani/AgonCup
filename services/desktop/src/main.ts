@@ -1338,20 +1338,31 @@ async function bootstrap(): Promise<void> {
   // (GameMode.decides_on_first_blood), and the GameEnd event carries this
   // player's win/loss — so the screen can say who won the moment it is known,
   // while the RECORDED result still comes from corroboration server-side.
+  // The scoreboard (allgamedata) rides the same view so the Live match screen
+  // draws champions / items / K/D/A of everyone straight from this machine.
+  // Its game clock moves every tick, so the log keys on the story, not the view.
+  let lastLiveGameStory = "";
   const liveGamePoller = new LiveGamePoller({
     readPhase: () => adapter.getGameflowPhase(),
     readEvents: () => adapter.captureLiveClientEvents(),
+    readSnapshot: () => adapter.captureLiveGameSnapshot(),
     readLocalGameName: async () => {
       const r = await readCurrentSummoner();
       return r.ok && r.gameName !== "" ? r.gameName : null;
     },
     onUpdate: (view: LiveGameView | null) => {
       sendToRenderer("lol:live-game", view);
-      log("live_game", {
+      const story = {
         status: view?.status ?? null,
         firstBloodBy: view?.firstBlood?.scorer ?? null,
         result: view?.result ?? null,
-      });
+        boardPlayers: view?.board?.players.length ?? 0,
+      };
+      const key = JSON.stringify(story);
+      if (key !== lastLiveGameStory) {
+        lastLiveGameStory = key;
+        log("live_game", story);
+      }
     },
   });
   // Pull complement for a renderer that mounts after the last change (the

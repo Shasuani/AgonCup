@@ -13,6 +13,10 @@
  * override (PLAN.md §3.6.4–§3.6.6). This never feeds adjudication; it only
  * tells the human at this desk what their own client just saw.
  *
+ * The same tick also captures the scoreboard (`allgamedata`: champions, items,
+ * spells, level, K/D/A of everyone) so the Live match screen can draw the board
+ * Watch live draws for spectators — straight from this machine, no server hop.
+ *
  * Scorer resolution mirrors `lol_core.adjudication.derive_first_blood_team`:
  * the `FirstBlood` event's `Recipient` when the capture kept it, else the
  * killer of the `ChampionKill` nearest in time (±2s — the FirstBlood rides on a
@@ -23,7 +27,12 @@
  * nothing, {@link start} kicks the timer, {@link tick} runs one probe.
  */
 
-import type { GameflowPhase, LiveClientEventCapture, LiveClientKillEvent } from "@lol/lcu";
+import type {
+  GameflowPhase,
+  LiveClientEventCapture,
+  LiveClientKillEvent,
+  LiveGameSnapshot,
+} from "@lol/lcu";
 import type { PollerTimers } from "./statusPoller.js";
 
 /** First blood, as the winner banner shows it. */
@@ -36,6 +45,39 @@ export interface LiveGameFirstBlood {
   readonly atSeconds: number;
 }
 
+/** One row of this machine's own scoreboard — the same shape Watch live draws. */
+export interface LiveGameBoardPlayer {
+  /** `Name#TAG` straight off `:2999` (no server round-trip, so no display name). */
+  readonly name: string;
+  readonly championKey: string;
+  readonly championName: string;
+  readonly team: string;
+  readonly level: number;
+  readonly isDead: boolean;
+  readonly respawnTimer: number;
+  readonly items: readonly number[];
+  readonly kills: number;
+  readonly deaths: number;
+  readonly assists: number;
+  readonly creepScore: number;
+  readonly wardScore: number;
+  readonly spell1Key: string | null;
+  readonly spell2Key: string | null;
+  /** Whether this row is THIS player; null when the local name is unknown. */
+  readonly isYou: boolean | null;
+}
+
+/**
+ * The scoreboard of the game on this machine, as of the last capture. Read
+ * straight from the local `:2999` port, so it shows even when the backend has
+ * no presence entry for the match yet (Watch live goes through the server).
+ */
+export interface LiveGameBoard {
+  readonly gameTime: number;
+  readonly gameMode: string;
+  readonly players: readonly LiveGameBoardPlayer[];
+}
+
 /** What the renderer shows for the running (or just-finished) game. */
 export interface LiveGameView {
   /** `in_game` while the game runs; `ended` once it is over. */
@@ -44,6 +86,8 @@ export interface LiveGameView {
   readonly firstBlood: LiveGameFirstBlood | null;
   /** The LOCAL player's outcome from the `GameEnd` event; null until known. */
   readonly result: "win" | "loss" | null;
+  /** Champions, items, spells, K/D/A of everyone in the game; null before the first capture. */
+  readonly board: LiveGameBoard | null;
 }
 
 const DEFAULT_TIMERS: PollerTimers = {
@@ -56,6 +100,8 @@ export interface LiveGamePollerConfig {
   readonly readPhase: () => Promise<GameflowPhase>;
   /** The adapter's `:2999` eventdata capture (Documented, read-only). */
   readonly readEvents: () => Promise<LiveClientEventCapture>;
+  /** The adapter's `:2999` allgamedata scoreboard capture (Documented, read-only). */
+  readonly readSnapshot: () => Promise<LiveGameSnapshot>;
   /** The LCU's own Riot ID game name, for the "that's you" verdict (null = unknown). */
   readonly readLocalGameName: () => Promise<string | null>;
   /** Called whenever the rendered view CHANGES (including to/from `null`). */
@@ -154,6 +200,8 @@ export class LiveGamePoller {
   #view: LiveGameView | null = null;
   /** Freshest capture seen this game — kept because the port dies on game exit. */
   #events: readonly LiveClientKillEvent[] = [];
+  /** Freshest scoreboard seen this game — frozen as the final board on exit. */
+  #snapshot: LiveGameSnapshot | null = null;
   /** Local Riot ID game name: null until read; load failures retry per tick. */
   #localName: string | null = null;
 
@@ -209,9 +257,11 @@ export class LiveGamePoller {
       if (NEW_CYCLE_PHASES.has(phase)) {
         // A new game is forming — the previous game's story is over.
         this.#events = [];
+        this.#snapshot = null;
         this.#view = null;
       } else if (LIVE_PHASES.has(phase)) {
         await this.#captureEvents();
+        await this.#captureSnapshot();
         await this.#ensureLocalName();
         this.#view = this.#compute(gameEndResult(this.#events) !== null ? "ended" : "in_game");
       } else if (OVER_PHASES.has(phase) && this.#view !== null) {
@@ -236,6 +286,14 @@ export class LiveGamePoller {
       this.#events = capture.events;
     } catch {
       // Port not up yet / mid-game blip — keep the freshest capture we have.
+    }
+  }
+
+  async #captureSnapshot(): Promise<void> {
+    try {
+      this.#snapshot = await this.#config.readSnapshot();
+    } catch {
+      // Same story as the events: hold the last scoreboard through a blip.
     }
   }
 
@@ -264,6 +322,37 @@ export class LiveGamePoller {
               atSeconds: fb.atSeconds,
             },
       result: gameEndResult(this.#events),
+      board: this.#board(),
+    };
+  }
+
+  #board(): LiveGameBoard | null {
+    const snap = this.#snapshot;
+    if (snap === null) {
+      return null;
+    }
+    const local = this.#localName;
+    return {
+      gameTime: snap.gameTime,
+      gameMode: snap.gameMode,
+      players: snap.players.map((p) => ({
+        name: p.riotId,
+        championKey: p.championKey,
+        championName: p.championName,
+        team: p.team,
+        level: p.level,
+        isDead: p.isDead,
+        respawnTimer: p.respawnTimer,
+        items: p.items,
+        kills: p.kills,
+        deaths: p.deaths,
+        assists: p.assists,
+        creepScore: p.creepScore,
+        wardScore: p.wardScore,
+        spell1Key: p.spell1Key ?? null,
+        spell2Key: p.spell2Key ?? null,
+        isYou: local === null ? null : sameDisplayName(p.riotId, local),
+      })),
     };
   }
 

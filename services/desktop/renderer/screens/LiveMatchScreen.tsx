@@ -3,9 +3,10 @@ import { theme as t } from '../theme';
 import { PageHead, Panel, Badge, Dot, Credential, Switch, EmptyState, Notice, Chip } from '../ui';
 import { Icon } from '../icons';
 import { ChampIcon, championName, useChampions } from '../champion';
+import { Scoreboard, teamKills, useGameClock } from '../scoreboard';
 import {
   lol, useAsync, useChampSelect, useLiveGame, errText,
-  type MyMatch, type ChampSelectBoard, type ChampSelectMember, type LiveGame, type LcuStatus,
+  type MyMatch, type ChampSelectBoard, type ChampSelectMember, type LiveGame, type LiveGameBoard, type LcuStatus,
 } from '../bridge';
 
 // The live lobby, as the backend knows it. This screen used to show only which
@@ -234,6 +235,38 @@ function LiveGamePanel({ view, duel }: { view: LiveGame; duel: boolean }) {
   );
 }
 
+/**
+ * The scoreboard of THIS game, read from this machine's own `:2999` port —
+ * champions, level, spells, items, K/D/A of everyone, the same board Watch
+ * live draws for spectators, only without the server hop. Stays up, frozen on
+ * its final numbers, once the game ends; display-only like the banner above it.
+ */
+function LiveBoardPanel({ board, ended }: { board: LiveGameBoard; ended: boolean }) {
+  const clock = useGameClock(board, undefined, ended);
+  return (
+    <Panel flush featured>
+      <div className="ll-panel__head" style={{ padding: '16px 22px', alignItems: 'center' }}>
+        <div>
+          <h2 className="ll-h2" style={{ fontSize: 20 }}>Scoreboard</h2>
+          <div className="ll-dim" style={{ fontSize: 12.5, marginTop: 4 }}>{ended ? 'Final — as your client last saw it' : 'What everyone sees on TAB, from your League client'}</div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 22, flexShrink: 0 }}>
+          <div style={{ fontFamily: t.display, fontSize: 26, color: t.textStrong, fontVariantNumeric: 'tabular-nums' }} aria-label="Team kills">
+            <span style={{ color: '#5aa8ff' }}>{teamKills(board.players, 'blue')}</span>
+            <span className="ll-dim" style={{ margin: '0 10px', fontSize: 18 }}>vs</span>
+            <span style={{ color: '#ff6b6b' }}>{teamKills(board.players, 'red')}</span>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <div className="ll-cap" style={{ color: t.textDim }}>Game time</div>
+            <div style={{ fontFamily: t.display, fontSize: 22, color: t.goldBright, fontVariantNumeric: 'tabular-nums' }} aria-label="Game time">{clock}</div>
+          </div>
+        </div>
+      </div>
+      <Scoreboard players={board.players} />
+    </Panel>
+  );
+}
+
 /** How the RE champ-select timer phase reads to a player. */
 const SELECT_PHASE_TEXT: Record<string, string> = {
   PLANNING: 'Declaring intent',
@@ -415,6 +448,9 @@ export default function LiveMatchScreen({ lcu }: { lcu?: LcuStatus }) {
 
         {live !== null && playing !== undefined && (
           <LiveGamePanel view={live} duel={isDuel(playing.gameMode)} />
+        )}
+        {live !== null && playing !== undefined && live.board && live.board.players.length > 0 && (
+          <LiveBoardPanel board={live.board} ended={live.status === 'ended'} />
         )}
 
         {board !== null && <ChampSelectPanel board={board} />}

@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 import discord
 from discord import app_commands
 from discord.ext import commands
-from lol_discord import tournament_created
+from lol_discord import copyable, tournament_created
 
 from app.backend_client import BackendClient, BackendError
 from app.cogs._helpers import context_of, embed_from, error_embed, info_embed
@@ -331,8 +331,8 @@ class TournamentAdminCog(commands.Cog):
             embed.add_field(
                 name="Join code",
                 value=(
-                    f"`{join_code}`\nShare this with your players — they enter it in the "
-                    "**desktop client** to join this tournament."
+                    f"{copyable(join_code)}Share this with your players — they enter it in "
+                    "the **desktop client** to join this tournament."
                 ),
                 inline=False,
             )

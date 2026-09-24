@@ -300,6 +300,33 @@ def test_lobby_credentials_carries_the_game_shape() -> None:
     assert "against **Bob**" in description
 
 
+def test_values_carried_into_another_app_are_fenced_for_discords_copy_button() -> None:
+    """Discord's one-click Copy exists only on fenced code blocks.
+
+    The lobby name, the password and the sign-in code all get typed into a
+    different app (League, the desktop client). Inline backticks only change the
+    font; a fenced block gives the reader a Copy button on desktop and mobile.
+    """
+    dm = lobby_credentials(
+        lobby_name="LoL-abc12345",
+        lobby_password="ABC123",
+        tournament_name="Summer Cup",
+    )
+    by_name = {f["name"]: f["value"] for f in dm["fields"]}  # type: ignore[index]
+    assert by_name["Lobby name"] == "```\nLoL-abc12345\n```"
+    assert by_name["Password"] == "```\nABC123\n```"
+
+    code = registration_code(code="7K3M-QP9R")
+    by_name = {f["name"]: f["value"] for f in code["fields"]}  # type: ignore[index]
+    assert by_name["Your code"] == "```\n7K3M-QP9R\n```"
+
+    public = match_ready(
+        match_label="QF1", host_name="Zeus", is_host=False, lobby_name="LoL-abc12345"
+    )
+    by_name = {f["name"]: f["value"] for f in public["fields"]}  # type: ignore[index]
+    assert by_name["Lobby name"] == "```\nLoL-abc12345\n```"
+
+
 def test_lobby_credentials_reads_clean_without_the_game_shape() -> None:
     """Old envelopes carry no mode_text; the embed must not render artifacts."""
     embed = lobby_credentials(

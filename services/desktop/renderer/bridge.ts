@@ -24,12 +24,18 @@ export interface LiveGameFirstBlood {
   isYou: boolean | null;
   atSeconds: number;
 }
+/** One row of THIS machine's scoreboard: a Watch-live row plus "is it you". */
+export interface LiveGameBoardPlayer extends LiveBoardPlayer { isYou: boolean | null }
+/** The scoreboard of the game on this machine (champions, items, spells, K/D/A). */
+export interface LiveGameBoard { gameTime: number; gameMode: string; players: LiveGameBoardPlayer[] }
 /** The running (or just-finished) game; null while there is nothing to show. */
 export interface LiveGame {
   status: 'in_game' | 'ended';
   firstBlood: LiveGameFirstBlood | null;
   /** The LOCAL player's outcome from the GameEnd event; null until known. */
   result: 'win' | 'loss' | null;
+  /** Null before the first capture; absent on a main process older than this field. */
+  board?: LiveGameBoard | null;
 }
 
 export type UpdatePhase = 'idle' | 'checking' | 'up_to_date' | 'unknown' | 'available' | 'downloading' | 'ready' | 'installing' | 'failed';

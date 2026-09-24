@@ -9,7 +9,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import type { GameflowPhase, LiveClientEventCapture, LiveClientKillEvent } from "@lol/lcu";
+import type {
+  GameflowPhase,
+  LiveClientEventCapture,
+  LiveClientKillEvent,
+  LiveGamePlayer,
+  LiveGameSnapshot,
+} from "@lol/lcu";
 import { LiveGamePoller, type LiveGameView } from "./liveGamePoller.js";
 
 const SCHEMA = "test" as LiveClientEventCapture["schemaVersion"];
@@ -18,11 +24,38 @@ function capture(events: LiveClientKillEvent[]): LiveClientEventCapture {
   return { source: "liveClientData", events, schemaVersion: SCHEMA };
 }
 
+function player(
+  riotId: string,
+  team: "ORDER" | "CHAOS",
+  extra: Partial<LiveGamePlayer> & { noSpells?: boolean } = {},
+): LiveGamePlayer {
+  const { noSpells, ...rest } = extra;
+  return {
+    riotId,
+    championKey: "Ahri",
+    championName: "Ahri",
+    team,
+    level: 6,
+    isDead: false,
+    respawnTimer: 0,
+    items: [1055, 0, 0, 0, 0, 0, 3340],
+    kills: 1,
+    deaths: 0,
+    assists: 0,
+    creepScore: 40,
+    wardScore: 0.5,
+    ...(noSpells ? {} : { spell1Key: "SummonerFlash" }),
+    ...rest,
+  };
+}
+
 /** Mutable cells one poller reads from; tests script them between ticks. */
 interface Cells {
   phase: GameflowPhase;
   events: LiveClientKillEvent[];
+  snapshot: LiveGameSnapshot | null;
   eventsFail: boolean;
+  snapshotFail: boolean;
   phaseFail: boolean;
   localName: string | null;
   seen: Array<LiveGameView | null>;
@@ -32,7 +65,9 @@ function build(local: string | null = "Chama"): { poller: LiveGamePoller; cells:
   const cells: Cells = {
     phase: "None",
     events: [],
+    snapshot: null,
     eventsFail: false,
+    snapshotFail: false,
     phaseFail: false,
     localName: local,
     seen: [],
@@ -45,6 +80,10 @@ function build(local: string | null = "Chama"): { poller: LiveGamePoller; cells:
     readEvents: async () => {
       if (cells.eventsFail) throw new Error("port dead");
       return capture(cells.events);
+    },
+    readSnapshot: async () => {
+      if (cells.snapshotFail || cells.snapshot === null) throw new Error("port dead");
+      return cells.snapshot;
     },
     readLocalGameName: async () => cells.localName,
     onUpdate: (v) => cells.seen.push(v),
@@ -76,6 +115,7 @@ test("first blood via Recipient decides the banner while the game still runs", a
     status: "in_game",
     firstBlood: { scorer: "Chama", isYou: true, atSeconds: 83.2 },
     result: null,
+    board: null,
   });
 });
 
@@ -170,6 +210,91 @@ test("an unchanged view is emitted once, not per tick", async () => {
   await poller.tick();
   await poller.tick();
   assert.equal(cells.seen.length, 1);
+});
+
+test("the scoreboard rides the view: champions, items, spells, K/D/A, and which row is you", async () => {
+  const { poller, cells } = build("Chama#Shasu");
+  cells.phase = "InProgress";
+  cells.snapshot = {
+    gameTime: 312.4,
+    gameMode: "ARAM",
+    players: [player("Chama#Shasu", "ORDER"), player("Alice#EUW", "CHAOS", { championKey: "Zed", noSpells: true })],
+  };
+  const view = await poller.tick();
+  assert.equal(view?.status, "in_game");
+  assert.equal(view?.board?.gameTime, 312.4);
+  assert.equal(view?.board?.gameMode, "ARAM");
+  assert.deepEqual(view?.board?.players, [
+    {
+      name: "Chama#Shasu",
+      championKey: "Ahri",
+      championName: "Ahri",
+      team: "ORDER",
+      level: 6,
+      isDead: false,
+      respawnTimer: 0,
+      items: [1055, 0, 0, 0, 0, 0, 3340],
+      kills: 1,
+      deaths: 0,
+      assists: 0,
+      creepScore: 40,
+      wardScore: 0.5,
+      spell1Key: "SummonerFlash",
+      spell2Key: null,
+      isYou: true,
+    },
+    {
+      name: "Alice#EUW",
+      championKey: "Zed",
+      championName: "Ahri",
+      team: "CHAOS",
+      level: 6,
+      isDead: false,
+      respawnTimer: 0,
+      items: [1055, 0, 0, 0, 0, 0, 3340],
+      kills: 1,
+      deaths: 0,
+      assists: 0,
+      creepScore: 40,
+      wardScore: 0.5,
+      spell1Key: null,
+      spell2Key: null,
+      isYou: false,
+    },
+  ]);
+});
+
+test("a fresher scoreboard is emitted every tick, and a blip holds the last one", async () => {
+  const { poller, cells } = build();
+  cells.phase = "InProgress";
+  cells.snapshot = { gameTime: 10, gameMode: "CLASSIC", players: [player("Chama", "ORDER")] };
+  await poller.tick();
+  cells.snapshot = { gameTime: 13, gameMode: "CLASSIC", players: [player("Chama", "ORDER", { kills: 2 })] };
+  await poller.tick();
+  assert.equal(cells.seen.length, 2);
+  assert.equal(poller.lastView?.board?.players[0]?.kills, 2);
+
+  cells.snapshotFail = true; // :2999 hiccup mid-game
+  const held = await poller.tick();
+  assert.equal(held?.board?.gameTime, 13);
+  assert.equal(cells.seen.length, 2); // nothing new to show
+});
+
+test("the final scoreboard is frozen when the game ends, and cleared by a new cycle", async () => {
+  const { poller, cells } = build();
+  cells.phase = "InProgress";
+  cells.snapshot = { gameTime: 900, gameMode: "CLASSIC", players: [player("Chama", "ORDER", { kills: 7 })] };
+  await poller.tick();
+
+  cells.phase = "EndOfGame";
+  cells.snapshotFail = true; // the port is gone
+  const ended = await poller.tick();
+  assert.equal(ended?.status, "ended");
+  assert.equal(ended?.board?.players[0]?.kills, 7);
+
+  cells.phase = "ChampSelect";
+  const cleared = await poller.tick();
+  assert.equal(cleared, null);
 });
 
 test("an unknown local name yields isYou:null, and heals once readable", async () => {

@@ -21,6 +21,7 @@
  */
 
 import type {
+  CurrentLobby,
   GameflowPhase,
   HostEpoch,
   LcuAdapter,
@@ -67,6 +68,45 @@ const MANUAL_LOBBY_WAIT_MS = 15 * 60_000;
 
 /** How often an in-game client shares the live scoreboard (display-only). */
 const LIVE_SNAPSHOT_EVERY_MS = 5_000;
+
+/**
+ * Re-invites of roster members not yet in the lobby (PLAN.md §3.6.3: "bounded
+ * exponential backoff + jitter").
+ *
+ * A League invite is a message to a client that is online NOW: a player whose
+ * League was still starting when the batch went out never sees it, and nothing
+ * else in the system sends it again — the backend only re-emits on a fresh WS
+ * subscribe, which launching League is not. The host's own client is the one
+ * thing that can see who is missing, so it asks them again.
+ *
+ * First retry after {@link REINVITE_BASE_MS}, doubling to {@link REINVITE_MAX_MS},
+ * ±25% jitter so ten hosts on one bracket do not beat in step, and at most
+ * {@link REINVITE_MAX_ATTEMPTS} rounds per lobby (~10 minutes) so an abandoned
+ * match does not nag forever. A lobby the host closes and makes again is a new
+ * lobby id, which restarts the schedule — the one case where the whole roster
+ * has to be asked again straight away.
+ */
+const REINVITE_BASE_MS = 10_000;
+const REINVITE_MAX_MS = 120_000;
+const REINVITE_MAX_ATTEMPTS = 8;
+const REINVITE_JITTER = 0.25;
+
+/** Delay before re-invite round `attempt` (1-based), jittered. */
+function reinviteDelayMs(attempt: number, random: () => number = Math.random): number {
+  const base = Math.min(REINVITE_MAX_MS, REINVITE_BASE_MS * 2 ** Math.max(0, attempt - 1));
+  const jitter = 1 + (random() * 2 - 1) * REINVITE_JITTER;
+  return Math.round(base * jitter);
+}
+
+/** What the host's client remembers about asking the roster into ONE lobby. */
+interface ReinviteState {
+  /** The lobby these invites went into; a different id is a fresh lobby. */
+  readonly lobbyId: string;
+  /** Rounds sent into this lobby so far (the create's own batch counts as one). */
+  readonly attempts: number;
+  /** Earliest time the next round may go out. */
+  readonly nextAtMs: number;
+}
 
 /**
  * Commands only the designated host acts on.
@@ -137,6 +177,14 @@ export class OrchestrationController {
    */
   #pendingInvite: { readonly command: InvitePlayersCommand; readonly deadlineMs: number } | null =
     null;
+  /**
+   * Everyone this host was told to invite (wire summoner ids), from the create
+   * spec or the standalone invite command — the roster {@link #reinviteMissing}
+   * checks the lobby against on every tick.
+   */
+  #roster: readonly string[] = [];
+  /** Re-invite schedule for the lobby currently open; null = nothing to chase. */
+  #reinvite: ReinviteState | null = null;
   #unsubscribeCommands: (() => void) | null = null;
   #unsubscribeInvite: (() => void) | null = null;
   #cancelHeartbeat: (() => void) | null = null;
@@ -253,6 +301,8 @@ export class OrchestrationController {
         this.#unsubscribeInvite?.();
         this.#unsubscribeInvite = null;
         this.#pendingInvite = null;
+        this.#reinvite = null;
+        this.#roster = [];
         this.#isHost = false;
         await this.#ack(command, true);
         break;
@@ -273,6 +323,8 @@ export class OrchestrationController {
       await this.#adapter.invite(spec.invitees);
       this.#lastSpec = wire;
       this.#isHost = true;
+      this.#roster = wire.inviteeSummonerIds;
+      this.#markInvited(String(handle.lobbyId));
       await this.#transport.sendAck({
         commandId: command.commandId,
         matchId: command.matchId,
@@ -305,7 +357,7 @@ export class OrchestrationController {
    * moment the statement "the roster was invited" becomes true.
    */
   async #hostInvite(command: InvitePlayersCommand): Promise<void> {
-    let lobby: unknown = null;
+    let lobby: CurrentLobby | null = null;
     try {
       lobby = await this.#adapter.getCurrentLobby();
     } catch {
@@ -322,16 +374,66 @@ export class OrchestrationController {
       };
       return;
     }
-    await this.#sendInvites(command);
+    await this.#sendInvites(command, lobby);
   }
 
   /** Send one invite batch and ack its outcome. */
-  async #sendInvites(command: InvitePlayersCommand): Promise<void> {
+  async #sendInvites(command: InvitePlayersCommand, lobby: CurrentLobby): Promise<void> {
     try {
       await this.#adapter.invite(command.toSummonerIds.map((id) => fromWire<SummonerId>(id)));
+      this.#roster = command.toSummonerIds;
+      this.#markInvited(String(lobby.lobbyId));
       await this.#ack(command, true);
     } catch (err) {
       await this.#ack(command, false, errorMessage(err));
+    }
+  }
+
+  /** A full batch just went into `lobbyId`: schedule the first re-invite round. */
+  #markInvited(lobbyId: string): void {
+    this.#reinvite = {
+      lobbyId,
+      attempts: 1,
+      nextAtMs: this.#clock.nowMs() + reinviteDelayMs(1),
+    };
+  }
+
+  /**
+   * Ask the roster members who are still not in the lobby, again (§3.6.3).
+   *
+   * Runs on the host's heartbeat tick with the lobby that tick already read.
+   * Three things end a schedule: everyone is in, the lobby is gone (the host
+   * closed it — nothing to invite into), or the rounds are used up. A lobby with
+   * a new id (made again by hand, or re-created after a failover) is asked
+   * straight away and starts its own count.
+   */
+  async #reinviteMissing(lobby: CurrentLobby | null): Promise<void> {
+    if (lobby === null || this.#roster.length === 0) {
+      return;
+    }
+    const lobbyId = String(lobby.lobbyId);
+    const present = new Set((lobby.memberSummonerIds ?? []).map((id) => String(id)));
+    const missing = this.#roster.filter((id) => !present.has(id));
+    if (missing.length === 0) {
+      this.#reinvite = null;
+      return;
+    }
+    const now = this.#clock.nowMs();
+    const state = this.#reinvite;
+    if (state !== null && state.lobbyId === lobbyId) {
+      if (state.attempts >= REINVITE_MAX_ATTEMPTS || now < state.nextAtMs) {
+        return;
+      }
+    }
+    const attempts = state !== null && state.lobbyId === lobbyId ? state.attempts + 1 : 1;
+    // Claim the round before the write: a slow invite must not be sent twice by
+    // the next tick.
+    this.#reinvite = { lobbyId, attempts, nextAtMs: now + reinviteDelayMs(attempts) };
+    try {
+      await this.#adapter.invite(missing.map((id) => fromWire<SummonerId>(id)));
+    } catch {
+      // Refused (gate / kill-switch / pacing) or an LCU error: the schedule
+      // already moved on, so this is one round lost, not a hot loop.
     }
   }
 
@@ -352,7 +454,7 @@ export class OrchestrationController {
       await this.#ack(pending.command, false, "no lobby was created to invite into");
       return;
     }
-    let lobby: unknown;
+    let lobby: CurrentLobby | null;
     try {
       lobby = await this.#adapter.getCurrentLobby();
     } catch {
@@ -365,7 +467,7 @@ export class OrchestrationController {
     // next tick, which would double every invitation in the lobby.
     this.#pendingInvite = null;
     this.#isHost = true;
-    await this.#sendInvites(pending.command);
+    await this.#sendInvites(pending.command, lobby);
   }
 
   async #guestAutoAccept(command: AutoAcceptCommand): Promise<void> {
@@ -408,12 +510,11 @@ export class OrchestrationController {
    * filling up, so the backend can move on from "invites are going out".
    * Best-effort: an unreadable lobby just leaves the beat without it.
    */
-  async #lobbyMembers(): Promise<string[]> {
+  async #hostLobby(): Promise<CurrentLobby | null> {
     try {
-      const lobby = await this.#adapter.getCurrentLobby();
-      return [...(lobby?.memberSummonerIds ?? [])];
+      return await this.#adapter.getCurrentLobby();
     } catch {
-      return [];
+      return null;
     }
   }
 
@@ -427,7 +528,8 @@ export class OrchestrationController {
       await this.#resumePendingInvite();
       return;
     }
-    const members = this.#isHost && phase === LOBBY_PHASE ? await this.#lobbyMembers() : [];
+    const lobby = this.#isHost && phase === LOBBY_PHASE ? await this.#hostLobby() : null;
+    const members = (lobby?.memberSummonerIds ?? []).map((id) => String(id));
     await this.#safe(() =>
       this.#transport.sendHeartbeat({
         matchId: this.#matchId,
@@ -439,6 +541,9 @@ export class OrchestrationController {
       }),
     );
     await this.#resumePendingInvite();
+    if (lobby !== null) {
+      await this.#reinviteMissing(lobby);
+    }
     if (phase === IN_PROGRESS_PHASE) {
       await this.#captureLiveEvents();
       await this.#shareLiveSnapshot();

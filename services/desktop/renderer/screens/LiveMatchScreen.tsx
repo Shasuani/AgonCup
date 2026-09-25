@@ -8,12 +8,15 @@ import {
   lol, useAsync, useChampSelect, useLiveGame, errText,
   type MyMatch, type ChampSelectBoard, type ChampSelectMember, type LiveGame, type LiveGameBoard, type LcuStatus,
 } from '../bridge';
+import { STEPS, stepIndex, lobbyExists, isPlaying, localPhase, pickPlayingMatch, effectiveState } from '../livePhase';
 
 // The live lobby, as the backend knows it. This screen used to show only which
 // tournaments were RUNNING and say the orchestration state "is not yet on the IPC
 // bridge" — so a player had no way to tell whether the custom game existed, who
 // was making it, or what to type if nobody was. All of that now comes from
-// GET /orchestration/matches/mine.
+// GET /orchestration/matches/mine — pushed forward by what the League client on
+// this machine shows (livePhase.ts), because a lobby opened by hand never leaves
+// `host_lost` server-side and the screen used to sit on "Host" all game long.
 
 /** How the lobby-state-machine phase reads to a player waiting on a game. */
 const PHASE_TEXT: Record<string, string> = {
@@ -29,28 +32,6 @@ const PHASE_TEXT: Record<string, string> = {
   aborted: 'Aborted',
   host_lost: 'This one is opened by hand — see below',
 };
-
-/** The visible milestones of a match, in order, and which phases sit at each. */
-const STEPS: { label: string; phases: string[] }[] = [
-  { label: 'Host', phases: ['assigned_host', 'awaiting_create', 'host_lost'] },
-  { label: 'Lobby', phases: ['lobby_open'] },
-  { label: 'Players', phases: ['filling', 'ready'] },
-  { label: 'Champ select', phases: ['starting'] },
-  { label: 'In game', phases: ['in_game'] },
-  { label: 'Result', phases: ['result_pending', 'ended'] },
-];
-
-function stepIndex(state: string | null): number {
-  if (state === null) return -1;
-  const i = STEPS.findIndex((s) => s.phases.includes(state));
-  return i;
-}
-
-/** True once the lobby demonstrably exists in the League client. */
-function lobbyExists(state: string | null): boolean {
-  return state === 'lobby_open' || state === 'filling' || state === 'ready' ||
-    state === 'starting' || state === 'in_game' || state === 'result_pending';
-}
 
 function Stepper({ state }: { state: string | null }) {
   const current = stepIndex(state);
@@ -328,18 +309,22 @@ function ChampSelectPanel({ board }: { board: ChampSelectBoard }) {
   );
 }
 
-function MatchCard({ m }: { m: MyMatch }) {
-  const exists = lobbyExists(m.lobbyState);
+function MatchCard({ m, state }: { m: MyMatch; state: string | null }) {
+  // `state` is the furthest of what the backend recorded and what the League
+  // client on this machine shows (effectiveState): once the game is on, who was
+  // to open the lobby and how to join it by hand no longer matter.
+  const exists = lobbyExists(state);
+  const inPlay = isPlaying(state);
   // "By hand" = no client took the host lease, so a human opens the custom game.
   // The backend still names WHO (host_puuid), which is what tells one player it
   // is theirs to open and everyone else who they are waiting for; only a match
   // with nobody attached at all has no name to give.
-  const byHand = m.lobbyState === 'host_lost';
-  const nobody = m.lobbyState !== null && m.hostName === null && !m.isHost;
-  const phase = m.lobbyState === null
+  const byHand = state === 'host_lost';
+  const nobody = !exists && state !== null && m.hostName === null && !m.isHost;
+  const phase = state === null
     ? 'Drawn — the lobby has not been opened yet'
-    : (PHASE_TEXT[m.lobbyState] ?? m.lobbyState);
-  const aborted = m.lobbyState === 'aborted';
+    : (PHASE_TEXT[state] ?? state);
+  const aborted = state === 'aborted';
 
   return (
     <Panel featured={exists} style={{ padding: '22px 26px' }}>
@@ -351,26 +336,28 @@ function MatchCard({ m }: { m: MyMatch }) {
             <Chip icon="map">{modeText(m.gameMode)}</Chip>
           </div>
         </div>
-        {exists
-          ? <Badge tone="teal" dot pulse>Lobby up</Badge>
-          : aborted ? <Badge tone="red">Aborted</Badge> : <Badge tone="gold" dot pulse>Waiting</Badge>}
+        {inPlay
+          ? <Badge tone="teal" dot pulse={state !== 'result_pending'}>{state === 'starting' ? 'Champ select' : state === 'in_game' ? 'In game' : 'Game over'}</Badge>
+          : exists
+            ? <Badge tone="teal" dot pulse>Lobby up</Badge>
+            : aborted ? <Badge tone="red">Aborted</Badge> : <Badge tone="gold" dot pulse>Waiting</Badge>}
       </div>
 
-      {!aborted && <Stepper state={m.lobbyState} />}
+      {!aborted && <Stepper state={state} />}
 
       <div className="ll-lead" style={{ marginTop: 18, color: t.textStrong }}>{phase}</div>
 
-      {m.isHost && !byHand && (
+      {!inPlay && m.isHost && !byHand && (
         <div style={{ fontSize: 13, color: t.gold, marginTop: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
           <Icon name="crown" size={15} /> You are the host — your client is creating this lobby.
         </div>
       )}
-      {m.isHost && byHand && (
+      {!inPlay && m.isHost && byHand && (
         <div style={{ fontSize: 13, color: t.gold, marginTop: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
           <Icon name="crown" size={15} /> You are opening this match — create the custom game below.
         </div>
       )}
-      {!m.isHost && m.hostName !== null && (
+      {!inPlay && !m.isHost && m.hostName !== null && (
         <div className="ll-dim" style={{ fontSize: 13, marginTop: 8 }}>
           {byHand
             ? `${m.hostName} is opening the custom game — you will be invited automatically.`
@@ -378,7 +365,7 @@ function MatchCard({ m }: { m: MyMatch }) {
         </div>
       )}
 
-      {m.lobbyName !== null && m.lobbyPassword !== null && (
+      {!inPlay && m.lobbyName !== null && m.lobbyPassword !== null && (
         <div className="ll-hr-dashed" style={{ marginBottom: 0 }}>
           {m.isHost && byHand && (
             <p className="ll-lead" style={{ margin: '16px 0 14px' }}>
@@ -429,11 +416,14 @@ export default function LiveMatchScreen({ lcu }: { lcu?: LcuStatus }) {
   }, [], 10_000);
 
   const matches = data ?? [];
-  // The banner is for THIS tournament's game, not whatever the player queues up
-  // on their own: it only mounts while one of their matches is at a phase where
-  // a game can actually be running (champ select / in game / results pending).
-  const playing = matches.find((m) =>
-    m.lobbyState === 'starting' || m.lobbyState === 'in_game' || m.lobbyState === 'result_pending');
+  // The banner and the scoreboard are for THIS tournament's game, not whatever
+  // the player queues up on their own. The backend's phase used to be the only
+  // gate — but a by-hand lobby never leaves `host_lost` server-side, so the game
+  // ran with no banner and no items. The League client on this machine is the
+  // witness now: champ select / in game / just ended, attributed to the open
+  // match it fits (mode-checked against the live game, see livePhase.ts).
+  const phase = localPhase(board, live);
+  const playing = pickPlayingMatch(matches, phase, live?.board?.gameMode ?? null);
 
   return (
     <div>
@@ -468,7 +458,9 @@ export default function LiveMatchScreen({ lcu }: { lcu?: LcuStatus }) {
           </Panel>
         )}
 
-        {!loading && !error && matches.map((m) => <MatchCard key={m.matchId} m={m} />)}
+        {!loading && !error && matches.map((m) => (
+          <MatchCard key={m.matchId} m={m} state={effectiveState(m, phase, playing)} />
+        ))}
       </div>
     </div>
   );

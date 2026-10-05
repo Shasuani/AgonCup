@@ -1,0 +1,229 @@
+/* =========================================================================
+   Hextech — the desktop client's look, brought to the website.
+   The palette lives in the global.css tokens (deep slate, gold, teal); this
+   file adds what tokens cannot express: Cinzel display headings, uppercase
+   gold buttons, gold-cornered panels, the honeycomb page texture and the
+   sidebar's gold selection bar. Mirrors services/desktop/renderer/styles.ts.
+   Loaded after global.css (main.tsx), so equal-specificity rules win here.
+   ========================================================================= */
+
+/* ------------------------------------------------------------ page ------- */
+:root:not([data-theme="light"]) body {
+  background:
+    radial-gradient(900px 480px at 60% -10%, rgba(13, 40, 70, 0.75), transparent 62%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='96' viewBox='0 0 56 96' fill='none'%3E%3Cdefs%3E%3Cpath id='h' d='M14 0 L28 8 L28 24 L14 32 L0 24 L0 8 Z'/%3E%3C/defs%3E%3Cg stroke='%23c8aa6e' stroke-opacity='0.09' fill='none' stroke-width='1'%3E%3Cuse href='%23h' x='14' y='16'/%3E%3Cuse href='%23h' x='14' y='-32'/%3E%3Cuse href='%23h' x='14' y='64'/%3E%3Cuse href='%23h' x='-14' y='-8'/%3E%3Cuse href='%23h' x='42' y='-8'/%3E%3Cuse href='%23h' x='-14' y='40'/%3E%3Cuse href='%23h' x='42' y='40'/%3E%3Cuse href='%23h' x='-14' y='88'/%3E%3Cuse href='%23h' x='42' y='88'/%3E%3C/g%3E%3C/svg%3E") 0 0 / 56px 96px repeat,
+    var(--bg);
+  background-attachment: fixed;
+}
+
+:root:not([data-theme="light"]) ::selection {
+  background: rgba(200, 170, 110, 0.28);
+  color: #f0e6d2;
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(200, 170, 110, 0.16);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 8px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(200, 170, 110, 0.34);
+  background-clip: padding-box;
+}
+
+/* ------------------------------------------------------------ type ------- */
+h1,
+h2,
+h3 {
+  font-family: var(--font-display);
+  letter-spacing: 0.01em;
+}
+
+:root:not([data-theme="light"]) :is(h1, h2, h3) {
+  color: #f0e6d2;
+}
+
+h1 { font-weight: 700; }
+h2,
+h3 { font-weight: 600; }
+
+/* Table/section labels: the client's small-caps "kicker" voice. */
+[data-table] thead th[scope="col"] {
+  letter-spacing: 0.14em;
+}
+
+a {
+  color: var(--primary);
+}
+
+a:hover {
+  color: var(--primary-hover);
+}
+
+/* --------------------------------------------------------- buttons ------- */
+:is(button, a)[data-variant] {
+  font-size: 0.8125rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+:root:not([data-theme="light"]) :is(button, a)[data-variant="primary"] {
+  background: linear-gradient(180deg, #dcc08a 0%, #c8aa6e 45%, #9c7d3e 100%);
+  color: #0a1626;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    0 4px 14px rgba(200, 170, 110, 0.22);
+}
+
+:root:not([data-theme="light"]) :is(button, a)[data-variant="primary"]:hover:not(:disabled) {
+  background: linear-gradient(180deg, #ead1a0 0%, #d4b67c 45%, #ab8a48 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.4),
+    0 6px 20px rgba(200, 170, 110, 0.35);
+}
+
+:root:not([data-theme="light"]) :is(button, a)[data-variant="primary"]:disabled {
+  background: #2b3a4f;
+  color: #6f7d90;
+  box-shadow: none;
+}
+
+/* Secondary = the client's gold "ghost" button. */
+:root:not([data-theme="light"]) :is(button, a)[data-variant="secondary"] {
+  background: transparent;
+  border-color: rgba(200, 170, 110, 0.4);
+  color: #c8aa6e;
+  box-shadow: none;
+}
+
+:root:not([data-theme="light"]) :is(button, a)[data-variant="secondary"]:hover:not(:disabled) {
+  background: rgba(200, 170, 110, 0.1);
+  border-color: #c8aa6e;
+  color: #f0e6d2;
+}
+
+/* ----------------------------------------------------------- panels ------ */
+:root:not([data-theme="light"]) :is(
+    [data-table],
+    [data-panel]:not([data-tone="danger"]),
+    [data-report-form],
+    [data-registrations],
+    [data-start],
+    [data-bracket-section],
+    [data-dash-card]
+  ) {
+  background: linear-gradient(180deg, #0c1a2d 0%, #09152a 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(240, 230, 210, 0.045),
+    0 6px 20px rgba(0, 0, 0, 0.35);
+}
+
+:root:not([data-theme="light"]) [data-table] thead th[scope="col"] {
+  background: rgba(5, 13, 24, 0.7);
+  color: #c8aa6e;
+}
+
+/* Gold corner brackets — the client's "featured" panel. Dashboard cards get
+   them on hover so the grid reads as choices, not a wall. */
+:root [data-dash-card] {
+  position: relative;
+}
+
+:root [data-dash-card]::before,
+:root [data-dash-card]::after {
+  content: "";
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  pointer-events: none;
+  border-color: var(--primary);
+  border-style: solid;
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+
+:root [data-dash-card]::before {
+  top: -1px;
+  left: -1px;
+  border-width: 2px 0 0 2px;
+}
+
+:root [data-dash-card]::after {
+  bottom: -1px;
+  right: -1px;
+  border-width: 0 2px 2px 0;
+}
+
+:root [data-dash-card]:hover::before,
+:root [data-dash-card]:hover::after {
+  opacity: 1;
+}
+
+/* ---------------------------------------------------------- inputs ------- */
+:root:not([data-theme="light"]) :is(input, select, textarea) {
+  background: #050d18;
+}
+
+:root:not([data-theme="light"]) :is(input, select, textarea):focus {
+  border-color: #c8aa6e;
+  box-shadow: 0 0 0 3px rgba(200, 170, 110, 0.18);
+  background: #06101d;
+}
+
+/* --------------------------------------------------- shell / sidebar ----- */
+:root:not([data-theme="light"]) [data-app-sidebar] {
+  background: linear-gradient(180deg, #0a1626 0%, #070f1a 100%);
+  border-right-color: rgba(200, 170, 110, 0.22);
+}
+
+:root:not([data-theme="light"]) [data-app-shell] [data-app-header] {
+  background: linear-gradient(180deg, rgba(11, 23, 39, 0.92), rgba(6, 16, 28, 0.88));
+  border-bottom-color: rgba(200, 170, 110, 0.22);
+}
+
+:root [data-app-sidebar] nav[aria-label="Primary"] a {
+  border: 1px solid transparent;
+  font-size: 0.9rem;
+}
+
+:root [data-app-sidebar] nav[aria-label="Primary"] a svg {
+  color: #785a28;
+}
+
+:root [data-app-sidebar] nav[aria-label="Primary"] a:hover {
+  background: rgba(200, 170, 110, 0.06);
+}
+
+:root [data-app-sidebar] nav[aria-label="Primary"] a:hover svg,
+:root [data-app-sidebar] nav[aria-label="Primary"] a.active svg {
+  color: var(--primary);
+}
+
+:root [data-app-sidebar] nav[aria-label="Primary"] a.active {
+  background: linear-gradient(90deg, rgba(200, 170, 110, 0.18), rgba(200, 170, 110, 0.04));
+  border-color: rgba(200, 170, 110, 0.28);
+  box-shadow: none;
+}
+
+:root:not([data-theme="light"]) [data-app-sidebar] nav[aria-label="Primary"] a.active {
+  color: #f0e6d2;
+}
+
+:root [data-app-sidebar] nav[aria-label="Primary"] a.active::before {
+  background: linear-gradient(180deg, #e2c98c, #c8aa6e);
+}
+
+/* Cinzel is a wide display face — the old Inter tracking (-0.03em) crushes it. */
+[data-landing-title],
+[data-screen-header] h1 {
+  letter-spacing: 0.01em;
+}
+
+/* The ⌘K trigger is a search field, not an action: keep it in sentence case. */
+:root [data-command-trigger] {
+  text-transform: none;
+  letter-spacing: 0.01em;
+}

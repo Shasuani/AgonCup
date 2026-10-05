@@ -7,24 +7,24 @@
 //
 // The mark is the AgonCup "A": a solid A whose counter is a Panathenaic amphora
 // (the prize cup of the ancient agon). Same geometry as the desktop app icon
-// (services/desktop/build/icon.svg — the source of truth), here in the console's
-// cobalt accent. The amphora is a real hole cut by a mask (its handles are
-// strokes), so the mark sits on either theme. Ids come from useId: the sidebar
-// keeps the full logo AND the (display:none) square mark in the DOM together, and
+// (services/desktop/build/icon.svg — the source of truth), in the same hextech
+// gold, with the client's Cinzel "AGONCUP" wordmark. The amphora is a real hole
+// cut by a mask (its handles are strokes), so the mark sits on either theme.
+// Ids come from useId: the sidebar keeps the full logo AND the (display:none) square mark in the DOM together, and
 // a url(#id) that resolves into a hidden SVG paints nothing.
 
 import { useId, type SVGProps } from "react";
 
-const WORDMARK_FONT =
-  "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+const WORDMARK_FONT = "Cinzel, Georgia, 'Times New Roman', serif";
 
 /** Gradient + mask for one mark instance, in the mark's 100-grid. */
 function MarkDefs({ grad, mask }: { grad: string; mask: string }): JSX.Element {
   return (
     <defs>
       <linearGradient id={grad} x1="25" y1="8" x2="80" y2="92" gradientUnits="userSpaceOnUse">
-        <stop stopColor="#8b7dff" />
-        <stop offset="1" stopColor="#6d5cf6" />
+        <stop stopColor="#e2c98c" />
+        <stop offset="0.5" stopColor="#c8aa6e" />
+        <stop offset="1" stopColor="#785a28" />
       </linearGradient>
       <mask id={mask} maskUnits="userSpaceOnUse" x="0" y="0" width="100" height="100">
         <path d="M50 12 87 85H13Z" fill="#fff" stroke="#fff" strokeWidth="6" strokeLinejoin="round" />
@@ -53,9 +53,9 @@ export function BrandLogo(props: SVGProps<SVGSVGElement>): JSX.Element {
   const mask = `${id}-mark`;
   return (
     <svg
-      width="124"
+      width="140"
       height="32"
-      viewBox="0 0 124 32"
+      viewBox="0 0 140 32"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
       role="img"
@@ -71,13 +71,13 @@ export function BrandLogo(props: SVGProps<SVGSVGElement>): JSX.Element {
         x="40"
         y="22"
         fontFamily={WORDMARK_FONT}
-        fontSize="17"
+        fontSize="15"
         fontWeight="700"
-        letterSpacing="-0.3"
+        letterSpacing="2.2"
         fill="currentColor"
       >
-        Agon
-        <tspan fill="#8b7dff">Cup</tspan>
+        AGON
+        <tspan fill="#c8aa6e">CUP</tspan>
       </text>
     </svg>
   );

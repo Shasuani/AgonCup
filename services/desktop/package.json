@@ -1,6 +1,6 @@
 {
   "name": "@lol/desktop",
-  "version": "0.2.9",
+  "version": "0.2.10",
   "private": true,
   "type": "module",
   "description": "AgonCup desktop client (Electron + TypeScript). Autonomous LCU lobby orchestrator + result reporter. Runs natively; built/signed per-OS in CI.",

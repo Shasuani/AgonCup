@@ -33,7 +33,7 @@
      top. A sidebar the same flat color as everything else reads as a list of
      links floating in nothing. */
   background:
-    linear-gradient(180deg, rgba(109, 92, 246, 0.06), transparent 220px),
+    linear-gradient(180deg, rgba(200, 170, 110, 0.06), transparent 220px),
     var(--surface-sunken);
   border-right: 1px solid var(--border-subtle);
   overflow-y: auto;

@@ -28,8 +28,14 @@ FROM python:3.12-slim-bookworm
 # curl is gone for the same reason: nothing used it. Every HEALTHCHECK in the three
 # services shells out to `python`, not curl, and uv arrives as a static binary via
 # the COPY below rather than being fetched.
+#
+# `apt-get upgrade` pulls Debian's security fixes into the base layer: the upstream
+# python:3.12-slim tag (and the CI layer cache built from it) can lag a point
+# release behind, and `security:images` blocks on a fixable CRITICAL such as
+# perl-base 5.36.0-7+deb12u3 (CVE-2026-13221, fixed in deb12u4).
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*

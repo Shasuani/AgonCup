@@ -9,37 +9,37 @@
    ------------------------------------------------------------------------- */
 :root {
   /* Colors */
-  --bg: #0a0b0f;
-  --surface: #111319;
-  --surface-alt: #191c24;
-  --border: #272b36;
-  --text: #e8eaf0;
-  --text-muted: #9ca2b2;
-  --primary: #6d5cf6;
-  --primary-hover: #7e6ff8;
-  --on-primary: #ffffff;
-  --accent: #8b7dff;
-  --success: #34d399;
-  --warning: #fbbf24;
-  --danger: #f87171;
-  --focus-ring: #a99cff;
+  --bg: #010a13;
+  --surface: #0a1626;
+  --surface-alt: #0e1e33;
+  --border: rgba(200, 170, 110, 0.22);
+  --text: #f0e6d2;
+  --text-muted: #a09b8c;
+  --primary: #c8aa6e;
+  --primary-hover: #dcc08a;
+  --on-primary: #0a1626;
+  --accent: #0ac8b9;
+  --success: #3ccf91;
+  --warning: #e2b55a;
+  --danger: #e07b7b;
+  --focus-ring: rgba(200, 170, 110, 0.75);
 
   /* --- Elevation surfaces -------------------------------------------------
      Depth used to be carried by ONE device: a 1px border around a single flat
      --surface. Everything therefore sat on the same plane and the app read as
      a wireframe. These give a real stack: sunken (inputs/wells) < page < card
      < raised (menus, popovers, the thing you are meant to look at). */
-  --surface-sunken: #0c0d12;
-  --surface-raised: #171a23;
+  --surface-sunken: #050d18;
+  --surface-raised: #0e1e33;
 
   /* Two border weights so a card outline and a divider are not the same line. */
-  --border-subtle: #1d212a;
-  --border-strong: #353b4a;
+  --border-subtle: rgba(200, 170, 110, 0.1);
+  --border-strong: rgba(200, 170, 110, 0.45);
 
   /* Top inner highlight — the single most load-bearing trick in a dark UI. It
      fakes a light source above the surface, which is what separates a "panel"
      from a "rectangle". Paired with --elevate below. */
-  --hairline: rgba(255, 255, 255, 0.07);
+  --hairline: rgba(240, 230, 210, 0.05);
   --elevate: linear-gradient(
     180deg,
     rgba(255, 255, 255, 0.038),
@@ -47,13 +47,13 @@
   );
 
   /* Brand tints, so the accent appears somewhere other than the buttons. */
-  --primary-soft: rgba(109, 92, 246, 0.13);
-  --primary-softer: rgba(109, 92, 246, 0.07);
-  --primary-line: rgba(109, 92, 246, 0.36);
-  --brand-gradient: linear-gradient(135deg, var(--primary), var(--accent));
+  --primary-soft: rgba(200, 170, 110, 0.13);
+  --primary-softer: rgba(200, 170, 110, 0.07);
+  --primary-line: rgba(200, 170, 110, 0.36);
+  --brand-gradient: linear-gradient(135deg, #e2c98c, var(--primary) 55%, #9c7d3e);
   /* Table row hover: one notch above --primary-softer so a row under the
      pointer is unmistakable without shouting. */
-  --row-hover: rgba(109, 92, 246, 0.1);
+  --row-hover: rgba(200, 170, 110, 0.1);
 
   /* Control sizing — buttons/inputs/selects share one height so a toolbar row
      lines up instead of stair-stepping. */
@@ -71,10 +71,10 @@
   --space-8: 64px;
 
   /* Radii */
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
+  --radius-sm: 3px;
+  --radius-md: 4px;
+  --radius-lg: 4px;
+  --radius-xl: 6px;
   --radius-pill: 999px;
 
   /* Shadows */
@@ -82,11 +82,12 @@
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.35);
   --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.45);
   --shadow-lg: 0 24px 64px rgba(0, 0, 0, 0.55);
-  --shadow-focus: 0 0 0 3px rgba(109, 92, 246, 0.3);
+  --shadow-focus: 0 0 0 3px rgba(200, 170, 110, 0.3);
 
   /* Typography */
+  --font-display: "Cinzel", Georgia, "Times New Roman", serif;
   --font-sans:
-    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+    "Barlow", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
     Arial, sans-serif;
   --font-mono:
     "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -119,12 +120,12 @@ body {
   background:
     radial-gradient(
       900px 520px at 78% -12%,
-      rgba(109, 92, 246, 0.09),
+      rgba(200, 170, 110, 0.09),
       transparent 62%
     ),
     radial-gradient(
       700px 420px at 8% -6%,
-      rgba(139, 125, 255, 0.055),
+      rgba(10, 200, 185, 0.055),
       transparent 60%
     ),
     var(--bg);
@@ -140,7 +141,7 @@ body {
 }
 
 ::selection {
-  background: rgba(109, 92, 246, 0.3);
+  background: rgba(200, 170, 110, 0.3);
 }
 
 /* Default outline off; restore a visible ring only for keyboard focus. */
@@ -342,7 +343,7 @@ pre {
   background: linear-gradient(135deg, var(--primary), var(--accent));
   box-shadow:
     inset 0 0 0 1px rgba(255, 255, 255, 0.12),
-    0 0 0 3px rgba(109, 92, 246, 0.18);
+    0 0 0 3px rgba(200, 170, 110, 0.18);
 }
 
 nav[aria-label="Primary"] ul {
@@ -449,15 +450,15 @@ nav[aria-label="Primary"] a.active {
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.16),
     0 1px 2px rgba(0, 0, 0, 0.4),
-    0 4px 14px rgba(109, 92, 246, 0.28);
+    0 4px 14px rgba(200, 170, 110, 0.28);
 }
 
 :is(button, a)[data-variant="primary"]:hover:not(:disabled) {
-  background: linear-gradient(180deg, #8b7bfa, var(--primary-hover));
+  background: linear-gradient(180deg, #ead1a0, var(--primary-hover));
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.2),
     0 1px 2px rgba(0, 0, 0, 0.4),
-    0 6px 20px rgba(109, 92, 246, 0.38);
+    0 6px 20px rgba(200, 170, 110, 0.38);
 }
 
 :is(button, a)[data-variant="primary"]:active:not(:disabled) {
@@ -1024,8 +1025,8 @@ p[role="alert"][data-field-error]::before {
 [data-status-badge][data-status~="running"],
 [data-status-badge][data-status~="in_game"] {
   color: var(--accent);
-  background: rgba(109, 92, 246, 0.15);
-  border-color: rgba(109, 92, 246, 0.4);
+  background: rgba(200, 170, 110, 0.15);
+  border-color: rgba(200, 170, 110, 0.4);
 }
 
 /* Green family (done / resolved).
@@ -1293,7 +1294,7 @@ p[role="alert"][data-field-error]::before {
   background:
     radial-gradient(
       1200px 600px at 50% -10%,
-      rgba(109, 92, 246, 0.18),
+      rgba(200, 170, 110, 0.18),
       transparent 60%
     ),
     url("../assets/login-hero.svg") center center / cover no-repeat,
@@ -1306,7 +1307,7 @@ p[role="alert"][data-field-error]::before {
     background:
       radial-gradient(
         1200px 600px at 50% -10%,
-        rgba(109, 92, 246, 0.18),
+        rgba(200, 170, 110, 0.18),
         transparent 60%
       ),
       var(--bg);
@@ -1448,7 +1449,7 @@ p[role="alert"][data-field-error]::before {
   box-shadow:
     inset 0 1px 0 var(--hairline),
     0 0 0 1px var(--primary),
-    0 8px 24px rgba(109, 92, 246, 0.28);
+    0 8px 24px rgba(200, 170, 110, 0.28);
 }
 
 [data-download-tile-glyph] {
@@ -1469,7 +1470,7 @@ p[role="alert"][data-field-error]::before {
   color: var(--on-primary);
   box-shadow:
     inset 0 0 0 1px rgba(255, 255, 255, 0.16),
-    0 6px 18px rgba(109, 92, 246, 0.35);
+    0 6px 18px rgba(200, 170, 110, 0.35);
 }
 
 [data-download-tile-name] {
@@ -1971,7 +1972,7 @@ section[aria-labelledby]:first-child {
 }
 
 [data-dash-card]:hover {
-  border-color: rgba(109, 92, 246, 0.5);
+  border-color: rgba(200, 170, 110, 0.5);
   transform: translateY(-1px);
   box-shadow: var(--shadow-sm);
   text-decoration: none;
@@ -2161,7 +2162,7 @@ section[aria-labelledby]:first-child {
 }
 
 [data-bracket-override]:hover {
-  background: rgba(109, 92, 246, 0.12);
+  background: rgba(200, 170, 110, 0.12);
 }
 
 /* -------------------------------------------------------------------------

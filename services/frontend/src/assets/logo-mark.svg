@@ -1,8 +1,8 @@
 <svg width="32" height="32" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="AgonCup">
   <defs>
     <linearGradient id="acMarkGrad" x1="25" y1="8" x2="80" y2="92" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#8b7dff"/>
-      <stop offset="1" stop-color="#6d5cf6"/>
+      <stop stop-color="#e2c98c"/>
+      <stop offset="1" stop-color="#c8aa6e"/>
     </linearGradient>
     <mask id="acMarkMask" maskUnits="userSpaceOnUse" x="0" y="0" width="100" height="100">
       <path d="M50 12 87 85H13Z" fill="#fff" stroke="#fff" stroke-width="6" stroke-linejoin="round"/>

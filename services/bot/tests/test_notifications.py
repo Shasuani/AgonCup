@@ -403,3 +403,122 @@ def test_build_embed_covers_every_kind() -> None:
         is not None
     )
     assert _build_embed("unknown", {}) is None
+
+
+# ---------------------------------------------------------------------------
+# team_join_approved — DM, with an invite to the team's server when needed
+# ---------------------------------------------------------------------------
+class _FakeInvite:
+    url = "https://discord.gg/wolves1"
+
+
+class _FakeTextChannel(discord.TextChannel):
+    """A real ``TextChannel`` subclass (the invite path isinstance-checks it)."""
+
+    def __init__(self, channel_id: int, *, can_invite: bool = True) -> None:  # noqa: D107
+        self.id = channel_id
+        self._can_invite = can_invite
+        self.made_invites: list[dict[str, Any]] = []
+        self.sent: list[discord.Embed] = []
+
+    def permissions_for(self, _obj: Any, /) -> discord.Permissions:
+        return discord.Permissions(create_instant_invite=self._can_invite)
+
+    async def create_invite(self, **kwargs: Any) -> _FakeInvite:  # type: ignore[override]
+        self.made_invites.append(kwargs)
+        return _FakeInvite()
+
+    async def send(self, *args: Any, **kwargs: Any) -> None:  # type: ignore[override]
+        self.sent.append(kwargs.get("embed"))  # type: ignore[arg-type]
+
+
+class _InviteGuild:
+    """A team's server: knows its members and its channels."""
+
+    def __init__(
+        self, guild_id: int, channel: _FakeTextChannel, *, members: set[int] | None = None
+    ) -> None:
+        self.id = guild_id
+        self._channel = channel
+        self._members = members or set()
+        self.me = object()
+        self.system_channel = None
+        self.text_channels = [channel]
+
+    def get_channel(self, channel_id: int) -> Any:
+        return self._channel if channel_id == self._channel.id else None
+
+    async def fetch_member(self, user_id: int) -> Any:
+        if user_id in self._members:
+            return object()
+        raise discord.NotFound(_FakeResponse(), "unknown member")
+
+
+def _approved_envelope(discord_user_id: str = "9001") -> dict[str, Any]:
+    return _envelope(
+        "g-team",
+        {
+            "kind": "team_join_approved",
+            "discord_user_id": discord_user_id,
+            "team_name": "Blue Wolves",
+            "server_name": "Server A",
+        },
+    )
+
+
+def _approved_run(guild: _InviteGuild, dm_user: _FakeDMUser) -> None:
+    bot = _FakeBot([guild], users={dm_user.id: dm_user})  # type: ignore[list-item]
+    backend = _FakeBackend(
+        {guild.id: {"guild_id": "g-team", "settings": {"notify_channel_id": 555}}}
+    )
+    pubsub = _FakePubSub([_approved_envelope(str(dm_user.id))])
+    sub = NotificationSubscriber(bot, redis=_FakeRedis(pubsub), backend=backend)  # type: ignore[arg-type]
+    asyncio.run(sub.run())
+
+
+def test_team_join_approved_dms_an_invite_to_a_player_from_another_server() -> None:
+    channel = _FakeTextChannel(555)
+    guild = _InviteGuild(222, channel)
+    dm_user = _FakeDMUser(9001)
+
+    _approved_run(guild, dm_user)
+
+    assert len(channel.made_invites) == 1
+    assert channel.made_invites[0]["max_uses"] == 1
+    assert len(dm_user.sent) == 1
+    assert "https://discord.gg/wolves1" in (dm_user.sent[0].description or "")
+    assert "Blue Wolves" in (dm_user.sent[0].description or "")
+    assert channel.sent == []  # DM-only: nothing posted publicly
+
+
+def test_team_join_approved_no_invite_for_a_member_already_there() -> None:
+    channel = _FakeTextChannel(555)
+    guild = _InviteGuild(222, channel, members={9001})
+    dm_user = _FakeDMUser(9001)
+
+    _approved_run(guild, dm_user)
+
+    assert channel.made_invites == []
+    assert len(dm_user.sent) == 1
+    assert "discord.gg" not in (dm_user.sent[0].description or "")
+
+
+def test_team_join_approved_without_invite_permission_still_dms() -> None:
+    channel = _FakeTextChannel(555, can_invite=False)
+    guild = _InviteGuild(222, channel)
+    dm_user = _FakeDMUser(9001)
+
+    _approved_run(guild, dm_user)
+
+    assert channel.made_invites == []
+    assert len(dm_user.sent) == 1
+
+
+def test_team_join_approved_closed_dms_post_nothing_publicly() -> None:
+    channel = _FakeTextChannel(555)
+    guild = _InviteGuild(222, channel)
+    dm_user = _FakeDMUser(9001, raise_on_send=discord.Forbidden(_FakeResponse(), "closed"))
+
+    _approved_run(guild, dm_user)
+
+    assert channel.sent == []

@@ -2,9 +2,10 @@ import React, { useState } from 'react';
 import { theme as t } from '../theme';
 import { PageHead, GhostButton, PrimaryButton, AsyncState, Input, Panel, Badge, Feedback, Button, Credential, EmptyState, Avatar } from '../ui';
 import { Icon } from '../icons';
-import { lol, useAsync, errText, type MyTeam, type JoinRequest } from '../bridge';
+import { lol, useAsync, errText, type MyTeam, type JoinRequest, type TeamListing } from '../bridge';
+import { regionShort } from './TournamentsScreen';
 
-export default function TeamsScreen() {
+export default function TeamsScreen({ onFindTeam }: { onFindTeam?: () => void } = {}) {
   const b = lol();
   const teams = useAsync(async () => {
     const r = await b!.myTeams();
@@ -16,13 +17,25 @@ export default function TeamsScreen() {
     if (!r.ok) throw new Error(errText(r));
     return r.requests;
   }, []);
+  // "Find a team" posts (every region) — a captain sees whether theirs is up.
+  const listings = useAsync(async () => {
+    if (!b?.listListings) return [];
+    const r = await b.listListings();
+    return r.ok ? r.listings : [];
+  }, []);
+  // Servers the captain can post on: where they hold a verified account.
+  const regions = useAsync(async () => {
+    const r = await b!.listAccounts();
+    if (!r.ok) return [];
+    return Array.from(new Set(r.accounts.filter((a) => a.verified && a.region).map((a) => a.region!.toLowerCase())));
+  }, []);
 
   const [name, setName] = useState('');
   const [joinCode, setJoinCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
-  function reloadAll() { teams.reload(); requests.reload(); }
+  function reloadAll() { teams.reload(); requests.reload(); listings.reload(); }
 
   async function create() {
     if (!b || !name.trim()) return;
@@ -45,7 +58,8 @@ export default function TeamsScreen() {
 
   return (
     <div>
-      <PageHead kicker="Teams" title="My rosters" intro="Create a team and share its code, or join a friend's with theirs. Captains enter the team into 5v5 tournaments." />
+      <PageHead kicker="Teams" title="My rosters" intro="Create a team and share its code, or join a friend's with theirs. Captains enter the team into 5v5 tournaments."
+        actions={onFindTeam && <GhostButton tone="gold" size="sm" icon="search" onClick={onFindTeam}>Find a team</GhostButton>} />
 
       {/* Create / join bar */}
       <div className="ll-grid-2" style={{ marginBottom: 14 }}>
@@ -70,7 +84,8 @@ export default function TeamsScreen() {
         )}
         <div className="ll-stack" style={{ gap: 18 }}>
           {myTeams.map((team) => (
-            <TeamCard key={team.teamId} team={team} requests={(requests.data ?? []).filter((r) => r.teamId === team.teamId)} onChange={reloadAll} />
+            <TeamCard key={team.teamId} team={team} requests={(requests.data ?? []).filter((r) => r.teamId === team.teamId)}
+              listing={(listings.data ?? []).find((l) => l.teamId === team.teamId) ?? null} regions={regions.data ?? []} onChange={reloadAll} />
           ))}
         </div>
       </AsyncState>
@@ -78,7 +93,7 @@ export default function TeamsScreen() {
   );
 }
 
-function TeamCard({ team, requests, onChange }: { team: MyTeam; requests: JoinRequest[]; onChange: () => void }) {
+function TeamCard({ team, requests, listing, regions, onChange }: { team: MyTeam; requests: JoinRequest[]; listing: TeamListing | null; regions: string[]; onChange: () => void }) {
   const b = lol();
   const isCaptain = team.role === 'captain';
   const members = useAsync(async () => {
@@ -152,6 +167,10 @@ function TeamCard({ team, requests, onChange }: { team: MyTeam; requests: JoinRe
         </div>
       )}
 
+      {isCaptain && team.status === 'active' && b?.listListings && (
+        <LookingForPlayers team={team} full={roster.length >= 5} listing={listing} regions={regions} onChange={onChange} />
+      )}
+
       <div style={{ display: 'flex', gap: 10, marginTop: 22, paddingTop: 18, borderTop: `1px solid ${t.lineSoft}` }}>
         {isCaptain
           ? <GhostButton tone="danger" size="sm" onClick={() => act(() => b!.deleteTeam(team.teamId, team.guildId))} disabled={busy}>Disband team</GhostButton>
@@ -159,5 +178,61 @@ function TeamCard({ team, requests, onChange }: { team: MyTeam; requests: JoinRe
         <GhostButton size="sm" disabled title="Transfer captaincy isn't exposed on the desktop bridge yet — do it from the admin app.">Transfer captaincy</GhostButton>
       </div>
     </Panel>
+  );
+}
+
+/** The captain's "Find a team" post: one per team, delete it to post a new one. */
+function LookingForPlayers({ team, full, listing, regions, onChange }: { team: MyTeam; full: boolean; listing: TeamListing | null; regions: string[]; onChange: () => void }) {
+  const b = lol();
+  const [message, setMessage] = useState('');
+  const [picked, setPicked] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const region = picked ?? regions[0] ?? null;
+
+  async function post() {
+    if (!b?.createListing || !region) return;
+    setBusy(true); setMsg(null);
+    const r = await b.createListing(team.teamId, team.guildId, region, message.trim() || undefined);
+    setBusy(false);
+    if (!r.ok) { setMsg(errText(r)); return; }
+    setMessage(''); onChange();
+  }
+  async function remove() {
+    if (!b?.deleteListing || !listing) return;
+    setBusy(true); setMsg(null);
+    const r = await b.deleteListing(listing.id);
+    setBusy(false);
+    if (!r.ok) { setMsg(errText(r)); return; }
+    onChange();
+  }
+
+  return (
+    <div style={{ marginTop: 20, borderTop: `1px solid ${t.lineSoft}`, paddingTop: 16 }}>
+      <div className="ll-kicker" style={{ letterSpacing: '.16em', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+        <Icon name="search" size={14} /> Looking for players
+      </div>
+      {listing ? (
+        <div className="ll-row" style={{ padding: '4px 0', gap: 10 }}>
+          <Badge tone="teal" dot>Posted · {regionShort(listing.region)}</Badge>
+          <span className="ll-dim" style={{ flex: 1, fontSize: 13 }}>{listing.message ? `“${listing.message}”` : 'Every AgonCup server can see your team in Find a team.'}</span>
+          <GhostButton tone="danger" size="sm" icon="x" disabled={busy} onClick={() => void remove()}>Delete post</GhostButton>
+        </div>
+      ) : full ? (
+        <div className="ll-dim" style={{ fontSize: 13 }}>Your roster is full.</div>
+      ) : regions.length === 0 ? (
+        <div className="ll-dim" style={{ fontSize: 13 }}>Link a Riot account in Accounts to post your team.</div>
+      ) : (
+        <form className="ll-field" onSubmit={(e) => { e.preventDefault(); void post(); }}>
+          {regions.length > 1 && regions.map((r) => (
+            <Button key={r} size="sm" variant={r === region ? 'primary' : 'muted'} onClick={() => setPicked(r)}>{regionShort(r)}</Button>
+          ))}
+          <Input value={message} onChange={(e) => setMessage(e.target.value)} maxLength={200}
+            placeholder={`What do you need? e.g. "a support, Gold+" (${regionShort(region)})`} aria-label="What your team needs" />
+          <PrimaryButton type="submit" size="sm" icon="plus" busy={busy} style={{ height: 44 }}>Post in Find a team</PrimaryButton>
+        </form>
+      )}
+      <Feedback msg={msg} style={{ marginTop: 8 }} />
+    </div>
   );
 }

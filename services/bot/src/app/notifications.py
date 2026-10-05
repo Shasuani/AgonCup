@@ -219,6 +219,14 @@ class NotificationSubscriber:
             log.warning("notification payload missing kind")
             return
 
+        # DM-routed, and needs the bot's own Discord access to build: the player
+        # may have found the team from another server, so they get an invite to
+        # the team's server when they are not in it yet. DM-only — a personal
+        # notice, nothing to post publicly if their DMs are closed.
+        if kind == "team_join_approved":
+            await self._dm_team_join_approved(origin_guild_id, payload)
+            return
+
         embed_dict = _build_embed(kind, payload)
         if embed_dict is None:
             log.info("ignoring unknown notification kind: %s", kind)
@@ -261,6 +269,68 @@ class NotificationSubscriber:
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
+    async def _dm_team_join_approved(self, origin_guild_id: str, payload: dict[str, Any]) -> None:
+        """DM an approved player, with an invite to the team's server if needed."""
+        from lol_discord import team_join_approved  # lazy, like _build_embed
+
+        invite_url = await self._team_server_invite(origin_guild_id, payload.get("discord_user_id"))
+        embed_dict = team_join_approved(
+            team_name=str(payload.get("team_name") or "your team"),
+            server_name=str(payload.get("server_name") or "the team's server"),
+            invite_url=invite_url,
+        )
+        if not await self._try_dm(payload.get("discord_user_id"), embed_dict):
+            log.info("team_join_approved DM not delivered; dropping (DM-only)")
+
+    async def _team_server_invite(self, origin_guild_id: str, discord_user_id: Any) -> str | None:
+        """An invite link to the team's server — None if they are in it already.
+
+        Membership is read with ``fetch_member`` (one REST call; needs no
+        privileged members intent). A lookup that fails for any other reason
+        still gets an invite: a spare link costs nothing, a missing one strands a
+        player outside the server their matches are announced on. The invite is
+        single-use and lasts a week. Needs the Create Invite permission; without
+        it the DM simply goes out with no link. Never raises.
+        """
+        if origin_guild_id not in self._guild_map:
+            await self._refresh_guild_map()
+        entry = self._guild_map.get(origin_guild_id)
+        guild = self._bot.get_guild(entry[0]) if entry is not None else None
+        if entry is None or guild is None:
+            return None
+        try:
+            await guild.fetch_member(int(discord_user_id))
+            return None
+        except discord.NotFound:
+            pass
+        except (discord.HTTPException, ValueError, TypeError) as exc:
+            log.info("member lookup failed (%s); offering an invite anyway", exc)
+
+        candidates: list[Any] = []
+        if entry[1] is not None:
+            candidates.append(guild.get_channel(entry[1]))
+        candidates.append(guild.system_channel)
+        candidates.extend(guild.text_channels)
+        me = guild.me
+        for channel in candidates:
+            if not isinstance(channel, discord.TextChannel):
+                continue
+            if me is not None and not channel.permissions_for(me).create_instant_invite:
+                continue
+            try:
+                invite = await channel.create_invite(
+                    max_age=7 * 24 * 3600,
+                    max_uses=1,
+                    unique=True,
+                    reason="AgonCup: a player was approved into a team here",
+                )
+            except discord.HTTPException as exc:
+                log.info("create_invite failed in %s: %s", channel.id, exc)
+                continue
+            return str(invite.url)
+        log.info("no channel to invite from in guild %s", guild.id)
+        return None
+
     async def _try_dm(self, discord_user_id: Any, embed_dict: dict[str, Any]) -> bool:
         """Attempt to DM ``embed_dict`` to the given Discord user id.
 
@@ -281,7 +351,7 @@ class NotificationSubscriber:
             )
             return True
         except (discord.Forbidden, discord.HTTPException, ValueError, TypeError) as exc:
-            log.info("registration_verified DM failed (%s); falling back to guild channel", exc)
+            log.info("DM to %s failed (%s)", discord_user_id, exc)
             return False
 
     async def _resolve_channel(self, origin_guild_id: str) -> discord.abc.Messageable | None:

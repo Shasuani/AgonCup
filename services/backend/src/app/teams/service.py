@@ -37,7 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.tenancy import across_user_guilds, find_across_user_guilds
 from app.joincodes import generate_join_code, normalize_join_code
 from app.logging import get_logger
-from app.models import Registration, Team, TeamMember, Tournament, User
+from app.models import Registration, Team, TeamListing, TeamMember, Tournament, User
 
 logger = get_logger(__name__)
 
@@ -309,7 +309,7 @@ async def list_teams_overview(session: AsyncSession) -> list[TeamOverview]:
         .where(
             TeamMember.team_id == Team.id,
             # ACTIVE only — the same definition of "roster" every other reader
-            # uses (:func:`list_roster`, :func:`_active_member_count`, and the
+            # uses (:func:`list_roster`, :func:`active_member_count`, and the
             # MAX_TEAM_SIZE cap). Counting PENDING rows too would report 7/5 on
             # a team at its cap with two requests waiting, and disagree with the
             # roster the very next click shows.
@@ -403,7 +403,7 @@ async def join_by_code(
         ).scalar_one()
         return team, member
     # A full roster (MAX_TEAM_SIZE active) can't take more requests.
-    if await _active_member_count(session, team.id) >= MAX_TEAM_SIZE:
+    if await active_member_count(session, team.id) >= MAX_TEAM_SIZE:
         raise TeamFullError(str(MAX_TEAM_SIZE))
     member = await add_member(
         session,
@@ -415,7 +415,7 @@ async def join_by_code(
     return team, member
 
 
-async def _active_member_count(session: AsyncSession, team_id: uuid.UUID) -> int:
+async def active_member_count(session: AsyncSession, team_id: uuid.UUID) -> int:
     """Count of ACTIVE members on a team (the roster size, cap-checked)."""
     return (
         await session.execute(
@@ -621,11 +621,12 @@ async def approve_join_request(
     ).scalar_one_or_none()
     if member is None:
         raise MemberNotFoundError(str(user_id))
-    if await _active_member_count(session, team_id) >= MAX_TEAM_SIZE:
+    if await active_member_count(session, team_id) >= MAX_TEAM_SIZE:
         raise TeamFullError(str(MAX_TEAM_SIZE))
     member.status = TeamMemberStatus.ACTIVE
     await session.flush()
     await unready_registrations(session, team_id=team_id)
+    await delist_if_full(session, team_id=team_id)
     return member
 
 
@@ -744,7 +745,28 @@ async def add_member(
     await session.flush()
     if status == TeamMemberStatus.ACTIVE:
         await unready_registrations(session, team_id=team_id)
+        await delist_if_full(session, team_id=team_id)
     return member
+
+
+async def delist_if_full(session: AsyncSession, *, team_id: uuid.UUID) -> bool:
+    """Take the team's "looking for players" listing down once the roster is full.
+
+    A full team has nothing left to look for (owner rule 2026-10-05). The listing
+    table is global, so this works on whichever tenant the session is acting.
+    Returns True when a listing was removed.
+    """
+    if await active_member_count(session, team_id) < MAX_TEAM_SIZE:
+        return False
+    listing = (
+        await session.execute(select(TeamListing).where(TeamListing.team_id == team_id))
+    ).scalar_one_or_none()
+    if listing is None:
+        return False
+    await session.delete(listing)
+    await session.flush()
+    logger.info("team_listing_delisted_full", team_id=str(team_id))
+    return True
 
 
 async def remove_member(session: AsyncSession, *, team_id: uuid.UUID, user_id: uuid.UUID) -> None:

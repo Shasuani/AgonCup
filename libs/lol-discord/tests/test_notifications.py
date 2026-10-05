@@ -13,6 +13,7 @@ from lol_discord import (
     registration_code,
     registration_verified,
     team_created,
+    team_join_approved,
     team_joined,
     tournament_check_in,
     tournament_created,
@@ -347,3 +348,22 @@ def test_match_ready_carries_the_game_shape() -> None:
         mode_text="5v5 — Summoner's Rift",
     )
     assert "5v5 — Summoner's Rift" in _field_values(embed)
+
+
+def test_team_join_approved_with_an_invite() -> None:
+    embed = team_join_approved(
+        team_name="Blue Wolves",
+        server_name="Server A",
+        invite_url="https://discord.gg/abc123",
+    )
+    assert embed["title"] == "Team request approved"
+    assert embed["color"] == int(EmbedColor.SUCCESS)
+    assert "Blue Wolves" in embed["description"]
+    assert "Server A" in embed["description"]
+    assert "https://discord.gg/abc123" in embed["description"]
+
+
+def test_team_join_approved_without_an_invite() -> None:
+    embed = team_join_approved(team_name="Blue Wolves", server_name="Server A")
+    assert "Blue Wolves" in embed["description"]
+    assert "discord.gg" not in embed["description"]

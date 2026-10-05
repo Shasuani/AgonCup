@@ -58,6 +58,7 @@ class NotificationKind(StrEnum):
     MATCH_READY = "match_ready"
     RESULT_RECORDED = "result_recorded"
     TOURNAMENT_ANNOUNCED = "tournament_announced"
+    TEAM_JOIN_APPROVED = "team_join_approved"
 
 
 class RegistrationApprovedPayload(_Strict):
@@ -138,6 +139,24 @@ class LobbyCredentialsPayload(_Strict):
     )
 
 
+class TeamJoinApprovedPayload(_Strict):
+    """A captain approved someone's request to join their team (PLAN.md §3.1).
+
+    PRIVACY EXCEPTION (by design), the third DM-routed kind: it carries the
+    joiner's ``discord_user_id`` so the bot can DM them, and is therefore exempt
+    from the central-feed ``_FORBIDDEN_CENTRAL_KEYS`` guard and must never be
+    projected there. The joiner may be on another Discord server entirely (they
+    found the team in the client's "Find a team" list), so the bot attaches an
+    invite to the team's server when they are not in it yet. ``origin_guild_id``
+    is the TEAM's server — the one the invite is for.
+    """
+
+    kind: Literal[NotificationKind.TEAM_JOIN_APPROVED] = NotificationKind.TEAM_JOIN_APPROVED
+    discord_user_id: str = Field(description="Snowflake of the user to DM (DM-routed kind).")
+    team_name: str = Field(description="Display name of the team they joined.")
+    server_name: str = Field(description="Display name of the team's Discord server.")
+
+
 class CheckInReminderPayload(_Strict):
     """Check-in window reminder for a tournament (PLAN.md §3.2)."""
 
@@ -202,7 +221,8 @@ NotificationPayload = Annotated[
     | CheckInReminderPayload
     | MatchReadyPayload
     | ResultRecordedPayload
-    | TournamentAnnouncedPayload,
+    | TournamentAnnouncedPayload
+    | TeamJoinApprovedPayload,
     Field(discriminator="kind"),
 ]
 
@@ -239,5 +259,6 @@ __all__ = [
     "RegistrationApprovedPayload",
     "RegistrationVerifiedPayload",
     "ResultRecordedPayload",
+    "TeamJoinApprovedPayload",
     "TournamentAnnouncedPayload",
 ]

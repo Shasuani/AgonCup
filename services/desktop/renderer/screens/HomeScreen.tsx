@@ -5,7 +5,8 @@ import { Icon } from '../icons';
 import { RankEmblem, rankParts } from '../emblems';
 import { ChampIcon, ProfileIcon, championSplashUrl, useChampions } from '../champion';
 import { countdown, findMe, kdaRatio, myRecord, myRiotIds, shortWhen, timeAgo, topChampion, useNow } from '../format';
-import { lol, useAsync, errText, type BridgeUser, type Entrant, type HistoryGame, type Tournament } from '../bridge';
+import { lol, useAsync, useChampSelect, useLiveGame, errText, type BridgeUser, type Entrant, type HistoryGame, type Tournament } from '../bridge';
+import { effectiveState, isOpenMatch, localPhase, pickPlayingMatch } from '../livePhase';
 import { useIdentity } from '../identity';
 import { regionShort } from './TournamentsScreen';
 
@@ -40,7 +41,14 @@ export default function HomeScreen({ user, onOpenMatch, onNav }: { user: BridgeU
   const list = tournaments.data ?? [];
   const running = list.find((tr) => tr.status === 'running');
   const active = list.filter((tr) => tr.status !== 'completed' && tr.status !== 'cancelled');
-  const liveMatch = (matches.data ?? []).find((m) => m.lobbyState !== null && m.lobbyState !== 'ended' && m.lobbyState !== 'aborted');
+  // The League client on this machine pushes the match phase forward
+  // (livePhase.ts): a by-hand lobby stays `host_lost` server-side, and this card
+  // used to say "a lobby is forming for you" while the game was on.
+  const board = useChampSelect();
+  const live = useLiveGame();
+  const localGame = localPhase(board, live);
+  const playing = pickPlayingMatch(matches.data ?? [], localGame, live?.board?.gameMode ?? null);
+  const liveMatch = playing ?? (matches.data ?? []).find(isOpenMatch);
   const primaryTeam = (teams.data ?? []).find((x) => x.role === 'captain') ?? (teams.data ?? [])[0];
   const members = useAsync(async () => {
     if (!primaryTeam) return [];
@@ -89,7 +97,7 @@ export default function HomeScreen({ user, onOpenMatch, onNav }: { user: BridgeU
           </div>
         </div>
 
-        <NextUp running={running} liveState={liveMatch?.lobbyState ?? null} tournaments={active} onOpenMatch={onOpenMatch} onNav={onNav} />
+        <NextUp running={running} liveState={liveMatch ? effectiveState(liveMatch, localGame, playing) : null} tournaments={active} onOpenMatch={onOpenMatch} onNav={onNav} />
       </div>
 
       {/* Row 2: recent games */}

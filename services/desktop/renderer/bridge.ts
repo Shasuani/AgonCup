@@ -87,6 +87,18 @@ export interface Tournament { id: string; guildId: string; name: string; status:
 export interface MyTeam { teamId: string; name: string; role: string; status: string; guildId: string }
 export interface TeamMember { teamId: string; userId: string; role: string; displayName: string }
 export interface JoinRequest { teamId: string; teamName: string; userId: string; displayName: string; guildId: string }
+/** One active roster row on a "Find a team" listing — a name, a role, a rank (no Riot ID). */
+export interface ListingMember { displayName: string; role: string; rankText: string }
+/** A team looking for players, seen from every server. `guildId` is the team's server. */
+export interface TeamListing {
+  id: string; teamId: string; guildId: string; teamName: string; serverName: string;
+  region: string; message: string | null; createdAt: string;
+  memberCount: number; maxMembers: number; members: ListingMember[];
+  /** The viewer's tie to the team: 'captain' / 'member' / 'pending', or null. */
+  viewerStatus: string | null;
+  /** The viewer may take it down (its captain, or a platform operator). */
+  canRemove: boolean;
+}
 /** One row of a live scoreboard — a display name, never a Riot ID. */
 export interface LiveBoardPlayer { name: string; championKey: string; championName: string; team: string; level: number; isDead: boolean; respawnTimer: number; items: number[]; kills: number; deaths: number; assists: number; creepScore: number; wardScore: number; spell1Key: string | null; spell2Key: string | null }
 export interface LiveBoard { matchId: string; gameTime: number; gameMode: string; updatedAt: string; players: LiveBoardPlayer[] }
@@ -135,6 +147,11 @@ export interface LolBridge {
   myTeams(): Promise<Res<{ teams: MyTeam[] }>>;
   leaveTeam(teamId: string, guildId?: string): Promise<Res<Record<string, never>>>;
   deleteTeam(teamId: string, guildId?: string): Promise<Res<Record<string, never>>>;
+  /** "Find a team" — absent on an old main-process build. */
+  listListings?(region?: string): Promise<Res<{ listings: TeamListing[] }>>;
+  createListing?(teamId: string, guildId: string | undefined, region: string, message?: string): Promise<Res<{ listingId: string }>>;
+  deleteListing?(listingId: string): Promise<Res<Record<string, never>>>;
+  requestToJoinListing?(listingId: string): Promise<Res<{ teamId: string; teamName: string; guildId: string; requestStatus: string }>>;
   presence(): Promise<Res<{ playersInGame: number; entries: PresenceEntry[] }>>;
   /** The live scoreboard of a game in progress; absent on an old main-process build. */
   liveBoard?(matchId: string): Promise<Res<{ board: LiveBoard }>>;

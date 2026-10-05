@@ -693,6 +693,53 @@ class ResultNonce(GuildScoped, Base):
 # ---------------------------------------------------------------------------
 # Federation / global side tables (special isolation — NOT standard guild RLS)
 # ---------------------------------------------------------------------------
+class TeamListing(Base):
+    """A team's "looking for players" post, seen from every server (PLAN.md §3.1).
+
+    Cross-tenant by design, like :class:`CentralFeedItem`: the whole point is that
+    a player on server B finds a team on server A, so this table is NOT under the
+    per-guild ``guild_isolation`` policy. It carries only what the captain chose to
+    publish (region + a short message); everything a viewer is shown about the
+    team itself is read live, guild by guild, by :mod:`app.team_listings.service`
+    for the listed teams only.
+
+    ``team_id`` is unique — one open listing per team; posting again means
+    deleting the old one first. The composite FK to ``teams(id, guild_id)`` keeps
+    ``guild_id`` honest and drops the listing with the team (disband) or its
+    server.
+    """
+
+    __tablename__ = "team_listings"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["team_id", "guild_id"],
+            ["teams.id", "teams.guild_id"],
+            name="fk_team_listings_team_guild",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("team_id", name="uq_team_listings_team"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    team_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    # The team's server. Plain column + FK to guilds; deliberately not the
+    # GuildScoped mixin, which would put the table under guild RLS.
+    guild_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("guilds.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # PlatformRoute value (``euw1`` / ``eun1`` ...) — an LCU invite is per server,
+    # so players only ever see listings on a server they have an account on.
+    region: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by_user_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = created_at_col()
+
+
 class CentralFeedItem(Base):
     """Consented, field-whitelisted projection into the central feed (PLAN.md §3.2).
 

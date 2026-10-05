@@ -64,6 +64,7 @@ from app.notifications.events import (
     RegistrationApprovedPayload,
     RegistrationVerifiedPayload,
     ResultRecordedPayload,
+    TeamJoinApprovedPayload,
     TournamentAnnouncedPayload,
 )
 
@@ -309,6 +310,32 @@ async def publish_result_recorded(
     return envelope
 
 
+async def publish_team_join_approved(
+    publisher: NotificationPublisher,
+    *,
+    origin_guild_id: str,
+    discord_user_id: str,
+    team_name: str,
+    server_name: str,
+) -> NotificationEnvelope:
+    """Emit ``team_join_approved`` (PLAN.md §3.1) — DM the player a captain let in.
+
+    PRIVACY EXCEPTION: the third ``publish_*`` helper whose payload carries a
+    ``discord_user_id`` — DM-routed, never projected onto the central feed. See
+    :class:`TeamJoinApprovedPayload`. ``origin_guild_id`` is the team's server.
+    """
+    envelope = build_envelope(
+        origin_guild_id=origin_guild_id,
+        payload=TeamJoinApprovedPayload(
+            discord_user_id=discord_user_id,
+            team_name=team_name,
+            server_name=server_name,
+        ),
+    )
+    await publisher.publish(envelope)
+    return envelope
+
+
 __all__ = [
     "NotificationPublisher",
     "RecordingNotificationPublisher",
@@ -320,4 +347,5 @@ __all__ = [
     "publish_registration_approved",
     "publish_registration_verified",
     "publish_result_recorded",
+    "publish_team_join_approved",
 ]

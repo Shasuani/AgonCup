@@ -8,7 +8,7 @@ import React from 'react';
 export type IconName =
   | 'home' | 'swords' | 'trophy' | 'users' | 'id' | 'check' | 'chevron' | 'copy'
   | 'logout' | 'link' | 'alert' | 'info' | 'discord' | 'bolt' | 'shield' | 'clock'
-  | 'x' | 'plus' | 'amphora' | 'crown' | 'map' | 'refresh' | 'eye';
+  | 'x' | 'plus' | 'amphora' | 'crown' | 'map' | 'refresh' | 'eye' | 'search';
 
 const PATHS: Record<IconName, React.ReactNode> = {
   home: <><path d="M4 11.5 12 4l8 7.5" /><path d="M6.5 10v10h11V10" /><path d="M10 20v-5h4v5" /></>,
@@ -33,6 +33,7 @@ const PATHS: Record<IconName, React.ReactNode> = {
   crown: <><path d="m4 8 4 4 4-6 4 6 4-4-1.5 10h-13L4 8Z" /><path d="M6 20h12" /></>,
   map: <><path d="m3 6 6-2 6 2 6-2v14l-6 2-6-2-6 2V6Z" /><path d="M9 4v14" /><path d="M15 6v14" /></>,
   eye: <><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" /><circle cx="12" cy="12" r="3" /></>,
+  search: <><circle cx="10.5" cy="10.5" r="6" /><path d="m15 15 5 5" /></>,
   refresh: <><path d="M20 12a8 8 0 0 1-13.7 5.6" /><path d="M4 12a8 8 0 0 1 13.7-5.6" /><path d="M4 7v5h5" /><path d="M20 17v-5h-5" /></>,
 };
 

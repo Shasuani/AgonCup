@@ -31,6 +31,7 @@ from app.orchestration.router import router as orchestration_router
 from app.presence.router import router as presence_router
 from app.realtime.router import router as realtime_router
 from app.results.router import router as results_router
+from app.team_listings.router import router as team_listings_router
 from app.teams.router import router as teams_router
 from app.tournaments.router import router as tournaments_router
 
@@ -167,6 +168,7 @@ def create_app() -> FastAPI:
         auth_router,
         accounts_router,
         teams_router,
+        team_listings_router,
         tournaments_router,
         orchestration_router,
         presence_router,

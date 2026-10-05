@@ -75,6 +75,7 @@ import {
   rejectJoinRequest,
   removeMember,
 } from "./teams/teams.js";
+import { createListing, deleteListing, listListings, requestToJoin } from "./teams/listings.js";
 import { getLiveBoard, getPresence } from "./presence/presence.js";
 import { listMyHistory } from "./results/history.js";
 import {
@@ -1217,6 +1218,39 @@ async function bootstrap(): Promise<void> {
         { accessToken: t, teamId: args.teamId, guildId: args.guildId },
         { backendUrl: backendBaseUrl() },
       ),
+    ),
+  );
+
+  // "Find a team": teams looking for players, from every server.
+  ipcMain.handle("lol:listings", (_event, args: { region?: string } | undefined) =>
+    withSession((t) =>
+      listListings({ accessToken: t, region: args?.region }, { backendUrl: backendBaseUrl() }),
+    ),
+  );
+  ipcMain.handle(
+    "lol:listing-create",
+    (_event, args: { teamId: string; guildId?: string; region: string; message?: string }) =>
+      withSession((t) =>
+        createListing(
+          {
+            accessToken: t,
+            teamId: args.teamId,
+            guildId: args.guildId,
+            region: args.region,
+            message: args.message,
+          },
+          { backendUrl: backendBaseUrl() },
+        ),
+      ),
+  );
+  ipcMain.handle("lol:listing-delete", (_event, args: { listingId: string }) =>
+    withSession((t) =>
+      deleteListing({ accessToken: t, listingId: args.listingId }, { backendUrl: backendBaseUrl() }),
+    ),
+  );
+  ipcMain.handle("lol:listing-request", (_event, args: { listingId: string }) =>
+    withSession((t) =>
+      requestToJoin({ accessToken: t, listingId: args.listingId }, { backendUrl: backendBaseUrl() }),
     ),
   );
 

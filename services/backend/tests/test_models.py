@@ -36,6 +36,7 @@ EXPECTED_TABLES = {
     "result_nonces",
     # federation / global side tables
     "central_feed_items",
+    "team_listings",
     "player_central_visibility",
     "verification_attempts",
     "audit_log",

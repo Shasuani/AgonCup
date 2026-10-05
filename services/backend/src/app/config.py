@@ -136,10 +136,11 @@ class Settings(BaseSettings):
         "fragment is never sent to servers/proxies/logs. No trailing slash.",
     )
     discord_bot_permissions: int = Field(
-        default=117760,
-        description="Permission bitfield baked into the bot-invite URL: View Channels "
-        "(1024) + Send Messages (2048) + Embed Links (16384) + Attach Files (32768) + "
-        "Read Message History (65536). The bot only posts embeds and DMs.",
+        default=117761,
+        description="Permission bitfield baked into the bot-invite URL: Create Invite (1) "
+        "+ View Channels (1024) + Send Messages (2048) + Embed Links (16384) + Attach "
+        "Files (32768) + Read Message History (65536). The bot posts embeds and DMs, and "
+        "invites a player approved into a team from another server.",
     )
 
     @property

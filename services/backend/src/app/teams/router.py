@@ -16,16 +16,22 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from lol_schemas.enums import TeamMemberRole, UserGuildRoleName
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.accounts.router import get_notification_publisher
 from app.auth.deps import (
     Principal,
     get_current_principal,
     get_tenant_session,
     require_tenant_role,
 )
-from app.models.tables import Team, TeamMember
+from app.logging import get_logger
+from app.models.tables import Guild, Team, TeamMember, User
+from app.notifications.service import NotificationPublisher, publish_team_join_approved
 from app.teams import service
+
+log = get_logger(__name__)
 
 router = APIRouter(prefix="/teams", tags=["teams"])
 
@@ -470,6 +476,7 @@ async def approve_join_request(
     user_id: uuid.UUID,
     principal: Annotated[Principal, Depends(get_current_principal)],
     session: Annotated[AsyncSession, Depends(get_tenant_session)],
+    publisher: Annotated[NotificationPublisher, Depends(get_notification_publisher)],
 ) -> TeamMemberResponse:
     try:
         team = await service.get_team(session, team_id=team_id)
@@ -484,7 +491,38 @@ async def approve_join_request(
         raise HTTPException(
             status.HTTP_409_CONFLICT, detail=f"team is full ({exc} players max)"
         ) from exc
+    await _dm_join_approved(session, publisher, team=team, user_id=user_id)
     return _member_response(member)
+
+
+async def _dm_join_approved(
+    session: AsyncSession, publisher: NotificationPublisher, *, team: Team, user_id: uuid.UUID
+) -> None:
+    """DM the approved player, with an invite to the team's server if they need one.
+
+    The player may have found the team from another server ("Find a team"), so
+    the bot checks whether they are in the team's Discord server and attaches an
+    invite when they are not. Best-effort: the approval is already done; a
+    notification-transport failure must never turn it into a 500.
+    """
+    joiner = (
+        await session.execute(select(User.discord_user_id).where(User.id == user_id))
+    ).scalar_one_or_none()
+    server = (
+        await session.execute(select(Guild.name).where(Guild.id == team.guild_id))
+    ).scalar_one_or_none()
+    if joiner is None:
+        return
+    try:
+        await publish_team_join_approved(
+            publisher,
+            origin_guild_id=str(team.guild_id),
+            discord_user_id=str(joiner),
+            team_name=team.name,
+            server_name=server or "the team's Discord server",
+        )
+    except Exception as exc:  # noqa: BLE001 - notifications are best-effort
+        log.warning("team_join_approved_publish_failed", error=str(exc), team_id=str(team.id))
 
 
 @router.post(

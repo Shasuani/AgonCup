@@ -233,6 +233,30 @@ def team_joined(*, team_name: str, member_name: str, member_count: int) -> dict[
     )
 
 
+def team_join_approved(
+    *, team_name: str, server_name: str, invite_url: str | None = None
+) -> dict[str, Any]:
+    """A captain let the player into their team — DMed to the player (PLAN.md §3.1).
+
+    The player may have found the team from another server ("Find a team" in the
+    client), so when they are not in the team's Discord server yet the bot passes
+    an ``invite_url`` and the message asks them to join it: that is where the
+    team's matches are announced.
+    """
+    if invite_url:
+        description = (
+            f"You're in **{team_name}**. The team plays on the **{server_name}** "
+            f"Discord server — join it so you see your matches:\n{invite_url}"
+        )
+    else:
+        description = f"You're in **{team_name}** on **{server_name}**. Good luck!"
+    return build_embed(
+        "Team request approved",
+        description,
+        color=EmbedColor.SUCCESS,
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Tournament lifecycle (PLAN.md §2 TournamentStatus)                           #
 # --------------------------------------------------------------------------- #
@@ -428,6 +452,7 @@ __all__ = [
     "registration_verified",
     "team_created",
     "team_joined",
+    "team_join_approved",
     "tournament_created",
     "tournament_open",
     "tournament_check_in",

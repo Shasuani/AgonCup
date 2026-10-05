@@ -25,6 +25,7 @@ from app.notifications.events import (
     RegistrationApprovedPayload,
     RegistrationVerifiedPayload,
     ResultRecordedPayload,
+    TeamJoinApprovedPayload,
     TournamentAnnouncedPayload,
 )
 from app.notifications.service import (
@@ -38,6 +39,7 @@ from app.notifications.service import (
     publish_registration_approved,
     publish_registration_verified,
     publish_result_recorded,
+    publish_team_join_approved,
     publish_tournament_announced,
 )
 
@@ -55,6 +57,7 @@ __all__ = [
     "RegistrationApprovedPayload",
     "RegistrationVerifiedPayload",
     "ResultRecordedPayload",
+    "TeamJoinApprovedPayload",
     "TournamentAnnouncedPayload",
     "build_envelope",
     "publish_check_in_reminder",
@@ -63,5 +66,6 @@ __all__ = [
     "publish_registration_approved",
     "publish_registration_verified",
     "publish_result_recorded",
+    "publish_team_join_approved",
     "publish_tournament_announced",
 ]

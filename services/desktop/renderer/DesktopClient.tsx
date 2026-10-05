@@ -10,11 +10,12 @@ import HomeScreen from './screens/HomeScreen';
 import LiveMatchScreen from './screens/LiveMatchScreen';
 import TournamentsScreen from './screens/TournamentsScreen';
 import TeamsScreen from './screens/TeamsScreen';
+import FindTeamScreen from './screens/FindTeamScreen';
 import AccountsScreen from './screens/AccountsScreen';
 import HistoryScreen from './screens/HistoryScreen';
 import WatchScreen from './screens/WatchScreen';
 
-type Screen = 'home' | 'match' | 'watch' | 'tournaments' | 'teams' | 'history' | 'accounts';
+type Screen = 'home' | 'match' | 'watch' | 'tournaments' | 'teams' | 'find' | 'history' | 'accounts';
 
 const NAV: { key: Screen; label: string; icon: IconName }[] = [
   { key: 'home', label: 'Home', icon: 'home' },
@@ -22,6 +23,7 @@ const NAV: { key: Screen; label: string; icon: IconName }[] = [
   { key: 'watch', label: 'Watch live', icon: 'eye' },
   { key: 'tournaments', label: 'Tournaments', icon: 'trophy' },
   { key: 'teams', label: 'Teams', icon: 'users' },
+  { key: 'find', label: 'Find a team', icon: 'search' },
   { key: 'history', label: 'Match history', icon: 'clock' },
   { key: 'accounts', label: 'Accounts', icon: 'id' },
 ];
@@ -125,7 +127,8 @@ export default function DesktopClient({ user, onSignOut }: { user: BridgeUser | 
             {screen === 'match' && <LiveMatchScreen lcu={lcu} />}
             {screen === 'watch' && <WatchScreen />}
             {screen === 'tournaments' && <TournamentsScreen />}
-            {screen === 'teams' && <TeamsScreen />}
+            {screen === 'teams' && <TeamsScreen onFindTeam={() => setScreen('find')} />}
+            {screen === 'find' && <FindTeamScreen />}
             {screen === 'history' && <HistoryScreen user={user} />}
             {screen === 'accounts' && <AccountsScreen lcu={lcu} />}
           </div>

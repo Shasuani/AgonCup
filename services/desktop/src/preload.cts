@@ -275,6 +275,43 @@ export type MyTeamsBridgeResult =
   | { ok: true; teams: MyTeamBridge[] }
   | { ok: false; status: number; detail: string };
 
+/** One active roster row on a listing (a name, a role, a rank — no Riot ID). */
+export interface ListingMemberBridge {
+  displayName: string;
+  role: string;
+  rankText: string;
+}
+
+/** A team looking for players ("Find a team"); seen from every server. */
+export interface TeamListingBridge {
+  id: string;
+  teamId: string;
+  guildId: string;
+  teamName: string;
+  serverName: string;
+  region: string;
+  message: string | null;
+  createdAt: string;
+  memberCount: number;
+  maxMembers: number;
+  members: ListingMemberBridge[];
+  /** "captain" / "member" / "pending", or null when the caller is not on it. */
+  viewerStatus: string | null;
+  canRemove: boolean;
+}
+
+export type ListingsBridgeResult =
+  | { ok: true; listings: TeamListingBridge[] }
+  | { ok: false; status: number; detail: string };
+
+export type CreateListingBridgeResult =
+  | { ok: true; listingId: string }
+  | { ok: false; status: number; detail: string };
+
+export type RequestJoinBridgeResult =
+  | { ok: true; teamId: string; teamName: string; guildId: string; requestStatus: string }
+  | { ok: false; status: number; detail: string };
+
 /** One live match in the presence panel. */
 export interface PresenceEntryBridge {
   matchId: string;
@@ -475,6 +512,14 @@ export interface LolBridge {
   leaveTeam(teamId: string, guildId?: string): Promise<ActOnRequestBridgeResult>;
   /** Disband a team you captain (deletes the team + its roster). */
   deleteTeam(teamId: string, guildId?: string): Promise<ActOnRequestBridgeResult>;
+  /** "Find a team": open listings from every server (`region` narrows to one). */
+  listListings(region?: string): Promise<ListingsBridgeResult>;
+  /** Post a captained team as looking for players (one post per team). */
+  createListing(teamId: string, guildId: string | undefined, region: string, message?: string): Promise<CreateListingBridgeResult>;
+  /** Take a post down (its captain, or a platform operator). */
+  deleteListing(listingId: string): Promise<ActOnRequestBridgeResult>;
+  /** Ask to join a listed team (pending until its captain approves). */
+  requestToJoinListing(listingId: string): Promise<RequestJoinBridgeResult>;
   /** Global live presence (who is in a game + which server). */
   presence(): Promise<PresenceBridgeResult>;
   /** The live scoreboard of a game in progress (404 until a client sent one). */
@@ -593,6 +638,14 @@ const bridge: LolBridge = {
     ipcRenderer.invoke("lol:team-leave", { teamId, guildId }) as Promise<ActOnRequestBridgeResult>,
   deleteTeam: (teamId, guildId) =>
     ipcRenderer.invoke("lol:team-delete", { teamId, guildId }) as Promise<ActOnRequestBridgeResult>,
+  listListings: (region) =>
+    ipcRenderer.invoke("lol:listings", { region }) as Promise<ListingsBridgeResult>,
+  createListing: (teamId, guildId, region, message) =>
+    ipcRenderer.invoke("lol:listing-create", { teamId, guildId, region, message }) as Promise<CreateListingBridgeResult>,
+  deleteListing: (listingId) =>
+    ipcRenderer.invoke("lol:listing-delete", { listingId }) as Promise<ActOnRequestBridgeResult>,
+  requestToJoinListing: (listingId) =>
+    ipcRenderer.invoke("lol:listing-request", { listingId }) as Promise<RequestJoinBridgeResult>,
   presence: () => ipcRenderer.invoke("lol:presence") as Promise<PresenceBridgeResult>,
   liveBoard: (matchId) => ipcRenderer.invoke("lol:live-board", { matchId }) as Promise<LiveBoardBridgeResult>,
   myHistory: () => ipcRenderer.invoke("lol:history-mine") as Promise<HistoryBridgeResult>,

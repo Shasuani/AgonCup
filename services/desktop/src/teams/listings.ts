@@ -44,6 +44,7 @@ type Failure = { readonly ok: false; readonly status: number; readonly detail: s
 export type ListListingsResult = { readonly ok: true; readonly listings: TeamListing[] } | Failure;
 export type CreateListingResult = { readonly ok: true; readonly listingId: string } | Failure;
 export type DeleteListingResult = { readonly ok: true } | Failure;
+export type KeepAliveResult = { readonly ok: true; readonly kept: number } | Failure;
 export type RequestJoinResult =
   | { readonly ok: true; readonly teamId: string; readonly teamName: string; readonly guildId: string; readonly requestStatus: string }
   | Failure;
@@ -185,4 +186,18 @@ export async function requestToJoin(
     guildId: str(rec, "guild_id"),
     requestStatus: str(rec, "status"),
   };
+}
+
+/**
+ * "This client is still open": keeps the caller's posts on the list. The main
+ * process sends it every minute while signed in; the backend drops a post it has
+ * not heard about for 5 minutes, so closing the client takes the team down.
+ */
+export async function keepListingsAlive(
+  args: AuthedArgs,
+  deps: HttpDeps = {},
+): Promise<KeepAliveResult> {
+  const r = await call("POST", "/keep-alive", args, deps);
+  if (!r.ok) return failure(r, "Could not keep your post up");
+  return { ok: true, kept: num((r.json ?? {}) as Record<string, unknown>, "kept") };
 }

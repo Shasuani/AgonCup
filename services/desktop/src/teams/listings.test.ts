@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { createListing, deleteListing, listListings, requestToJoin } from "./listings.js";
+import { createListing, deleteListing, keepListingsAlive, listListings, requestToJoin } from "./listings.js";
 
 type Captured = { url: string; method: string | undefined; body: unknown; headers: Record<string, string> };
 
@@ -138,4 +138,24 @@ test("requestToJoin: unreachable backend → status 0, never throws", async () =
     assert.equal(result.status, 0);
     assert.match(result.detail, /unreachable/);
   }
+});
+
+test("keepListingsAlive: POSTs keep-alive with Bearer and maps the count", async () => {
+  const calls: Captured[] = [];
+  const result = await keepListingsAlive(
+    { accessToken: "jwt" },
+    { fetch: spy(200, { kept: 1 }, calls), backendUrl: "http://x" },
+  );
+  assert.deepEqual(result, { ok: true, kept: 1 });
+  assert.equal(calls[0]?.url, "http://x/api/v1/team-listings/keep-alive");
+  assert.equal(calls[0]?.method, "POST");
+  assert.equal(calls[0]?.headers["Authorization"], "Bearer jwt");
+});
+
+test("keepListingsAlive: an old backend (404) is a failure, never a throw", async () => {
+  const result = await keepListingsAlive(
+    { accessToken: "jwt" },
+    { fetch: spy(404, { detail: "Not Found" }, []), backendUrl: "http://x" },
+  );
+  assert.deepEqual(result, { ok: false, status: 404, detail: "Not Found" });
 });

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { theme as t } from '../theme';
-import { PageHead, PrimaryButton, GhostButton, AsyncState, Panel, Badge, Chip, Feedback, Notice, EmptyState, Avatar, Button } from '../ui';
+import { PageHead, PrimaryButton, GhostButton, AsyncState, Panel, Badge, Feedback, Notice, EmptyState, Avatar, Button, Input } from '../ui';
 import { Icon } from '../icons';
 import { RankEmblem } from '../emblems';
 import { lol, useAsync, errText, type TeamListing } from '../bridge';
@@ -28,7 +28,18 @@ export default function FindTeamScreen() {
     return r.listings;
   }, [region], 30_000);
 
-  const rows = listings.data ?? [];
+  const [query, setQuery] = useState('');
+  // One team open at a time: the grid stays scannable, the open one spans the row.
+  const [openId, setOpenId] = useState<string | null>(null);
+  const all = listings.data ?? [];
+  const q = query.trim().toLowerCase();
+  // Client-side: the list is small, and searching what's already on screen
+  // keeps the 30s refresh untouched.
+  const rows = q
+    ? all.filter((l) =>
+        [l.teamName, l.serverName, l.message ?? '', ...l.members.map((m) => m.displayName)]
+          .some((s) => s.toLowerCase().includes(q)))
+    : all;
 
   return (
     <div>
@@ -53,26 +64,97 @@ export default function FindTeamScreen() {
         </div>
       )}
 
+      {all.length > 0 && (
+        <div style={{ position: 'relative', marginBottom: 16 }}>
+          <Icon name="search" size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: t.textDim, pointerEvents: 'none' }} />
+          <Input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search teams, servers or players"
+            aria-label="Search teams"
+            style={{ width: '100%', paddingLeft: 36 }}
+          />
+        </div>
+      )}
+
       <AsyncState loading={listings.loading} error={listings.error} label="Looking for teams…">
-        {rows.length === 0 ? (
+        {rows.length === 0 && q ? (
+          <Panel tone="dashed">
+            <EmptyState icon="search" title={`No teams match “${query.trim()}”`}
+              action={<Button size="sm" icon="x" onClick={() => setQuery('')}>Clear search</Button>} />
+          </Panel>
+        ) : rows.length === 0 ? (
           <Panel tone="dashed">
             <EmptyState icon="users" title={region ? `No ${regionShort(region)} teams are looking right now` : 'No teams are looking right now'}>
               Check back later — or make your own team in <b>Teams</b> and post it here.
             </EmptyState>
           </Panel>
         ) : (
-          <div className="ll-grid-2" style={{ alignItems: 'start' }}>
+          <Panel flush role="table" aria-label="Teams looking for players">
+            <div className="ll-dgrid__row ll-dgrid__head" role="row" style={{ gridTemplateColumns: COLS }}>
+              <span />
+              <span role="columnheader">Team</span>
+              <span role="columnheader">Discord server</span>
+              <span role="columnheader">Server</span>
+              <span role="columnheader">Players</span>
+              <span role="columnheader">Open</span>
+              <span role="columnheader" style={{ textAlign: 'right' }}>Posted</span>
+            </div>
             {rows.map((l) => (
-              <ListingCard key={l.id} listing={l} canAsk={regions.includes(l.region.toLowerCase())} onChange={listings.reload} />
+              <ListingRow key={l.id} listing={l} expanded={openId === l.id}
+                onToggle={() => setOpenId(openId === l.id ? null : l.id)}
+                canAsk={regions.includes(l.region.toLowerCase())} onChange={listings.reload} />
             ))}
-          </div>
+          </Panel>
         )}
       </AsyncState>
     </div>
   );
 }
 
-function ListingCard({ listing: l, canAsk, onChange }: { listing: TeamListing; canAsk: boolean; onChange: () => void }) {
+const COLS = '28px minmax(0, 1.6fr) minmax(0, 1.3fr) 70px 170px 70px 80px';
+
+/** One record of the grid; a click (or Enter/Space) expands the team under it. */
+function ListingRow({ listing: l, expanded, onToggle, canAsk, onChange }: { listing: TeamListing; expanded: boolean; onToggle: () => void; canAsk: boolean; onChange: () => void }) {
+  const open = Math.max(0, l.maxMembers - l.memberCount);
+  return (
+    <div className={expanded ? 'll-dgrid__rec is-open' : 'll-dgrid__rec'}>
+      <div
+        className="ll-dgrid__row" role="row" tabIndex={0} aria-expanded={expanded}
+        onClick={onToggle}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(); } }}
+        style={{ gridTemplateColumns: COLS }}
+      >
+        <Icon name="chevron" size={16} style={{ color: t.gold, transform: expanded ? 'rotate(90deg)' : 'none', transition: 'transform 120ms ease' }} />
+        <span role="cell" style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+          <b className="ll-dgrid__name">{l.teamName}</b>
+          {l.viewerStatus === 'captain' && <Badge tone="gold">Yours</Badge>}
+          {l.viewerStatus === 'member' && <Badge tone="teal">Joined</Badge>}
+          {l.viewerStatus === 'pending' && <Badge tone="dim" dot pulse>Sent</Badge>}
+        </span>
+        <span role="cell" className="ll-dgrid__muted">{l.serverName}</span>
+        <span role="cell" className="ll-dgrid__muted">{regionShort(l.region)}</span>
+        <span role="cell" style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+          {l.members.map((m, i) => (
+            <span key={`${m.displayName}-${i}`} title={m.displayName} style={{ display: 'inline-flex' }}>
+              <Avatar name={m.displayName} size="sm" tone={m.role === 'captain' ? 'gold' : 'teal'} />
+            </span>
+          ))}
+          {Array.from({ length: open }, (_, i) => (
+            <span key={`open-${i}`} title="Open slot" style={{ width: 28, height: 28, borderRadius: '50%', border: `1px dashed ${t.lineSoft}`, display: 'inline-block' }} />
+          ))}
+        </span>
+        <span role="cell"><Badge tone={open > 0 ? 'gold' : 'dim'}>{open}</Badge></span>
+        <span role="cell" className="ll-dgrid__muted" style={{ textAlign: 'right' }}>{timeAgo(l.createdAt)}</span>
+      </div>
+      {expanded && <ListingDetails listing={l} canAsk={canAsk} onChange={onChange} />}
+    </div>
+  );
+}
+
+/** The expanded part of a record: the captain's note, the roster, the actions. */
+function ListingDetails({ listing: l, canAsk, onChange }: { listing: TeamListing; canAsk: boolean; onChange: () => void }) {
   const b = lol();
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -97,23 +179,12 @@ function ListingCard({ listing: l, canAsk, onChange }: { listing: TeamListing; c
   }
 
   return (
-    <Panel featured={l.viewerStatus === 'captain'}>
-      <div className="ll-panel__head" style={{ alignItems: 'flex-start' }}>
-        <div style={{ minWidth: 0 }}>
-          <h2 className="ll-h2" style={{ fontSize: 22 }}>{l.teamName}</h2>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
-            <Chip icon="map">{regionShort(l.region)}</Chip>
-            <Chip icon="discord" title="The team's Discord server">{l.serverName}</Chip>
-          </div>
-        </div>
-        <Badge tone={open > 0 ? 'gold' : 'dim'}>{l.memberCount}/{l.maxMembers} · {open} open</Badge>
-      </div>
-
+    <div className="ll-dgrid__details">
       {l.message && (
-        <div style={{ marginTop: 14, fontSize: 14, color: t.text, borderLeft: `2px solid ${t.gold}`, paddingLeft: 10 }}>“{l.message}”</div>
+        <div style={{ marginBottom: 6, fontSize: 14, color: t.text, borderLeft: `2px solid ${t.gold}`, paddingLeft: 10 }}>“{l.message}”</div>
       )}
 
-      <div style={{ marginTop: 14 }}>
+      <div style={{ marginTop: 8 }}>
         {l.members.map((m, i) => (
           <div key={`${m.displayName}-${i}`} className="ll-row" style={{ padding: '7px 0' }}>
             <Avatar name={m.displayName} size="sm" tone={m.role === 'captain' ? 'gold' : 'teal'} />
@@ -132,7 +203,7 @@ function ListingCard({ listing: l, canAsk, onChange }: { listing: TeamListing; c
         ))}
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 16, paddingTop: 14, borderTop: `1px solid ${t.lineSoft}` }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14 }}>
         {l.viewerStatus === 'captain' && <Badge tone="gold">Your team</Badge>}
         {l.viewerStatus === 'member' && <Badge tone="teal">You're on this team</Badge>}
         {l.viewerStatus === 'pending' && <Badge tone="dim" dot pulse>Request sent</Badge>}
@@ -143,12 +214,11 @@ function ListingCard({ listing: l, canAsk, onChange }: { listing: TeamListing; c
           </PrimaryButton>
         )}
         <span style={{ flex: 1 }} />
-        <span className="ll-dim" style={{ fontSize: 12 }}>{timeAgo(l.createdAt)}</span>
         {l.canRemove && (
           <GhostButton tone="danger" size="sm" icon="x" disabled={busy} onClick={() => void remove()}>Delete post</GhostButton>
         )}
       </div>
       <Feedback msg={msg} style={{ marginTop: 10 }} />
-    </Panel>
+    </div>
   );
 }

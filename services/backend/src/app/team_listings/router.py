@@ -9,6 +9,8 @@ listed team's own server (see its module docstring for exactly when and why).
   client sends the team's server as ``X-Guild-Id``, like every per-team call.
 * ``DELETE /team-listings/{id}``           — the team's captain or a platform operator.
 * ``POST   /team-listings/{id}/request``   — ask to join (pending captain approval).
+* ``POST   /team-listings/keep-alive``     — the desktop client, every minute: the
+  caller's posts stay up only while this keeps arriving.
 """
 
 from __future__ import annotations
@@ -171,6 +173,24 @@ async def create_listing(
         region=listing.region,
         message=listing.message,
     )
+
+
+class KeepAliveResponse(BaseModel):
+    #: How many of the caller's posts are still up.
+    kept: int
+
+
+@router.post(
+    "/keep-alive",
+    response_model=KeepAliveResponse,
+    summary="The poster's client is still open — keep their posts up",
+)
+async def keep_alive(
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    session: Annotated[AsyncSession, Depends(get_tenant_session)],
+) -> KeepAliveResponse:
+    kept = await service.keep_alive(session, user_id=uuid.UUID(principal.user_id))
+    return KeepAliveResponse(kept=kept)
 
 
 @router.delete(

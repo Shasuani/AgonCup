@@ -232,6 +232,11 @@ function LookingForPlayers({ team, full, listing, regions, onChange }: { team: M
           <PrimaryButton type="submit" size="sm" icon="plus" busy={busy} style={{ height: 44 }}>Post in Find a team</PrimaryButton>
         </form>
       )}
+      {!full && regions.length > 0 && (
+        <div className="ll-dim" style={{ fontSize: 12, marginTop: 8 }}>
+          Your post stays up while AgonCup is open. Close the app for more than 5 minutes and it comes down.
+        </div>
+      )}
       <Feedback msg={msg} style={{ marginTop: 8 }} />
     </div>
   );

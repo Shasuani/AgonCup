@@ -738,6 +738,12 @@ class TeamListing(Base):
         PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     created_at: Mapped[datetime] = created_at_col()
+    # Last keep-alive from the poster's desktop client. A post only lives while
+    # that client is open (+ a grace period for a restart); see
+    # app.team_listings.service.LISTING_TTL.
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class CentralFeedItem(Base):

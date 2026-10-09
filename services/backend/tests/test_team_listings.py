@@ -510,3 +510,69 @@ async def test_a_failing_dm_does_not_fail_the_approval() -> None:
         publisher=_Down(),
     )
     assert member.user_id == str(_STRANGER)
+
+
+# ---------------------------------------------------------------------------
+# Lifetime: a post lives only while its poster's client keeps it alive
+# ---------------------------------------------------------------------------
+def _age(listing: TeamListing, minutes: float) -> None:
+    listing.last_seen_at = datetime.now(UTC) - timedelta(minutes=minutes)
+
+
+async def test_a_post_unseen_for_five_minutes_is_gone() -> None:
+    s, team = _world()
+    listing = await _post(s, team)
+    _age(listing, 6)
+    s.current_guild = str(_B)
+    assert await service.list_listings(s, viewer_id=_STRANGER, is_platform_operator=False) == []
+    assert s.store[TeamListing] == []  # deleted, not just hidden
+
+
+async def test_a_restart_inside_the_grace_period_keeps_the_post() -> None:
+    s, team = _world()
+    listing = await _post(s, team)
+    _age(listing, 4)
+    s.current_guild = str(_B)
+    views = await service.list_listings(s, viewer_id=_STRANGER, is_platform_operator=False)
+    assert [v.team_name for v in views] == ["Blue Wolves"]
+
+
+async def test_keep_alive_refreshes_the_posters_post() -> None:
+    s, team = _world()
+    listing = await _post(s, team)
+    _age(listing, 4)
+    assert await service.keep_alive(s, user_id=_CAPTAIN) == 1
+    assert listing.last_seen_at > datetime.now(UTC) - timedelta(seconds=5)
+
+
+async def test_keep_alive_does_not_revive_a_stale_post() -> None:
+    s, team = _world()
+    listing = await _post(s, team)
+    _age(listing, 30)
+    assert await service.keep_alive(s, user_id=_CAPTAIN) == 0
+    assert s.store[TeamListing] == []
+
+
+async def test_keep_alive_only_touches_the_callers_posts() -> None:
+    s, team = _world()
+    listing = await _post(s, team)
+    _age(listing, 4)
+    assert await service.keep_alive(s, user_id=_STRANGER) == 0
+    assert listing.last_seen_at < datetime.now(UTC) - timedelta(minutes=3)
+
+
+async def test_the_captain_can_post_again_after_the_old_post_expired() -> None:
+    s, team = _world()
+    old = await _post(s, team)
+    _age(old, 6)
+    fresh = await _post(s, team, message="back online")
+    assert s.store[TeamListing] == [fresh]
+
+
+async def test_asking_to_join_an_expired_post() -> None:
+    s, team = _world()
+    listing = await _post(s, team)
+    _age(listing, 6)
+    s.current_guild = str(_B)
+    with pytest.raises(service.ListingNotFoundError):
+        await service.request_to_join(s, listing_id=listing.id, user_id=_STRANGER)

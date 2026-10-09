@@ -23,6 +23,14 @@ the caller may hold no role in, both server-side and both scoped to listed teams
   membership there.
 
 Everything else stays under the caller's own tenant session.
+
+Lifetime
+========
+A post lives only while its poster's desktop client is open: the client calls
+:func:`keep_alive` every minute, and a post not heard from for
+:data:`LISTING_TTL` (5 minutes — room for a client restart) is stale. A stale
+post is never shown, never revived, and is deleted the next time anything reads
+it (owner + Max, 2026-10-07).
 """
 
 from __future__ import annotations
@@ -30,7 +38,7 @@ from __future__ import annotations
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 from lol_riot.routing import PlatformRoute
 from lol_schemas.enums import TeamMemberRole, TeamMemberStatus, UserGuildRoleName
@@ -47,6 +55,10 @@ logger = get_logger(__name__)
 
 #: Longest message a captain can attach ("need a support, Gold+, EU evenings").
 MAX_MESSAGE_LENGTH = 200
+
+#: How long a post outlives its poster's last keep-alive. The client pings every
+#: minute, so this is a few missed pings or a restart, not a closed client.
+LISTING_TTL = timedelta(minutes=5)
 
 
 class ListingError(Exception):
@@ -121,11 +133,31 @@ async def _require_region_account(
         raise RegionAccountRequiredError(region_label_for(PlatformRoute(region)))
 
 
+def _is_stale(listing: TeamListing, now: datetime) -> bool:
+    # Unset = just built in this transaction (the DB fills the default at INSERT).
+    return listing.last_seen_at is not None and listing.last_seen_at < now - LISTING_TTL
+
+
+async def _drop_stale(session: AsyncSession, listings: list[TeamListing]) -> list[TeamListing]:
+    """Delete the stale posts among ``listings``; return the live ones."""
+    now = datetime.now(UTC)
+    live: list[TeamListing] = []
+    for listing in listings:
+        if _is_stale(listing, now):
+            await session.delete(listing)
+            logger.info("team_listing_expired", listing_id=str(listing.id))
+        else:
+            live.append(listing)
+    if len(live) != len(listings):
+        await session.flush()
+    return live
+
+
 async def _get_listing(session: AsyncSession, listing_id: uuid.UUID) -> TeamListing:
     listing = (
         await session.execute(select(TeamListing).where(TeamListing.id == listing_id))
     ).scalar_one_or_none()
-    if listing is None:
+    if listing is None or not await _drop_stale(session, [listing]):
         raise ListingNotFoundError(str(listing_id))
     return listing
 
@@ -157,10 +189,11 @@ async def create_listing(
     await _require_region_account(session, user_id=user_id, region=platform)
     if await teams.active_member_count(session, team.id) >= teams.MAX_TEAM_SIZE:
         raise teams.TeamFullError(str(teams.MAX_TEAM_SIZE))
-    existing = (
-        await session.execute(select(TeamListing.id).where(TeamListing.team_id == team.id))
-    ).first()
-    if existing is not None:
+    existing = list(
+        (await session.execute(select(TeamListing).where(TeamListing.team_id == team.id))).scalars()
+    )
+    # A stale post (its client went away) is cleared, not a reason to refuse.
+    if await _drop_stale(session, existing):
         raise ListingExistsError(str(team.id))
     listing = TeamListing(
         team_id=team.id,
@@ -168,6 +201,7 @@ async def create_listing(
         region=platform,
         message=text,
         created_by_user_id=user_id,
+        last_seen_at=datetime.now(UTC),
     )
     session.add(listing)
     await session.flush()
@@ -205,6 +239,30 @@ async def delete_listing(
     logger.info(
         "team_listing_deleted", listing_id=str(listing_id), by_operator=is_platform_operator
     )
+
+
+async def keep_alive(session: AsyncSession, *, user_id: uuid.UUID) -> int:
+    """The poster's client is still open: refresh every live post they made.
+
+    Called every minute by the desktop client, whoever is signed in — a user
+    with no post costs one empty SELECT. A post already stale is deleted, not
+    revived: closing the client for longer than :data:`LISTING_TTL` takes the
+    team off the list for good. Returns how many posts were kept alive.
+    """
+    mine = list(
+        (
+            await session.execute(
+                select(TeamListing).where(TeamListing.created_by_user_id == user_id)
+            )
+        ).scalars()
+    )
+    live = await _drop_stale(session, mine)
+    now = datetime.now(UTC)
+    for listing in live:
+        listing.last_seen_at = now
+    if live:
+        await session.flush()
+    return len(live)
 
 
 # ---------------------------------------------------------------------------
@@ -252,13 +310,13 @@ async def list_listings(
 ) -> list[ListingView]:
     """Every open listing (optionally one region's), newest first.
 
-    Full teams are left out even if their listing is still there (a captain can
+    Stale posts (the poster's client went away) are deleted on the way. Full teams are left out even if their listing is still there (a captain can
     also fill a roster by code), and so are listings whose team has vanished.
     """
     query = select(TeamListing)
     if region is not None:
         query = query.where(TeamListing.region == parse_listing_region(region))
-    listings = list((await session.execute(query)).scalars().all())
+    listings = await _drop_stale(session, list((await session.execute(query)).scalars().all()))
     if not listings:
         return []
 

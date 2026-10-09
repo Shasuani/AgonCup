@@ -75,7 +75,13 @@ import {
   rejectJoinRequest,
   removeMember,
 } from "./teams/teams.js";
-import { createListing, deleteListing, listListings, requestToJoin } from "./teams/listings.js";
+import {
+  createListing,
+  deleteListing,
+  keepListingsAlive,
+  listListings,
+  requestToJoin,
+} from "./teams/listings.js";
 import { getLiveBoard, getPresence } from "./presence/presence.js";
 import { listMyHistory } from "./results/history.js";
 import {
@@ -115,6 +121,14 @@ const DEFAULT_HEARTBEAT_MS = 2_500;
  * channel this poll's answer lets us subscribe to.
  */
 const MATCH_POLL_MS = 15_000;
+
+/**
+ * "Find a team" keep-alive cadence. A team's post stays up only while its
+ * poster's client is open: the backend drops it 5 minutes after the last ping,
+ * so a restart keeps it and a closed client takes it down (owner + Max,
+ * 2026-10-07).
+ */
+const LISTING_KEEPALIVE_MS = 60_000;
 
 /** How long to wait before re-opening sockets a 4401 closed while the backend
  * was unreachable. Long enough that a restarting backend is usually back, short
@@ -712,6 +726,8 @@ async function bootstrap(): Promise<void> {
   /** Match-assignment poll (see startMatchAssignmentPoll) + its latest answer. */
   let matchPollTimer: ReturnType<typeof setInterval> | null = null;
   let lastMatches: MyMatch[] = [];
+  /** "Find a team" keep-alive; shares the match poll's signed-in lifetime. */
+  let listingKeepAliveTimer: ReturnType<typeof setInterval> | null = null;
 
   const sendToRenderer = (channel: string, payload: unknown): void => {
     mainWindow?.webContents.send(channel, payload);
@@ -817,12 +833,27 @@ async function bootstrap(): Promise<void> {
     };
     void poll();
     matchPollTimer = setInterval(() => void poll(), MATCH_POLL_MS);
+
+    const keepAlive = async (): Promise<void> => {
+      if (session === null) return;
+      const result = await withSession((t) =>
+        keepListingsAlive({ accessToken: t }, { backendUrl: backendBaseUrl() }),
+      );
+      // A missed ping is harmless — the post outlives a few of them.
+      if (!result.ok) log("listing_keepalive_failed", { status: result.status });
+    };
+    void keepAlive();
+    listingKeepAliveTimer = setInterval(() => void keepAlive(), LISTING_KEEPALIVE_MS);
   };
 
   const stopMatchAssignmentPoll = (): void => {
     if (matchPollTimer !== null) {
       clearInterval(matchPollTimer);
       matchPollTimer = null;
+    }
+    if (listingKeepAliveTimer !== null) {
+      clearInterval(listingKeepAliveTimer);
+      listingKeepAliveTimer = null;
     }
     lastMatches = [];
   };

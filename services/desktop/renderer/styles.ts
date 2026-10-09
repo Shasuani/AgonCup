@@ -310,6 +310,17 @@ h1, h2, h3, p { margin: 0; }
 .ll-stat__sub { font-size: 12px; color: ${t.textDim}; margin-top: 8px; }
 
 /* ------------------------------------------------------------- rows ------- */
+.ll-dgrid__row { display: grid; align-items: center; gap: 14px; padding: 12px 20px; border-bottom: 1px solid ${t.lineSoft}; min-width: 0; }
+.ll-dgrid__row > * { min-width: 0; }
+.ll-dgrid__head { font-size: 11px; font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase; color: ${t.textDim}; padding-top: 14px; padding-bottom: 10px; }
+.ll-dgrid__rec > .ll-dgrid__row { cursor: pointer; transition: background-color 120ms ease; }
+.ll-dgrid__rec > .ll-dgrid__row:hover { background: rgba(200, 170, 110, 0.04); }
+.ll-dgrid__rec > .ll-dgrid__row:focus-visible { outline: 1px solid ${t.gold}; outline-offset: -1px; }
+.ll-dgrid__rec.is-open > .ll-dgrid__row { background: rgba(200, 170, 110, 0.06); border-bottom-color: transparent; }
+.ll-dgrid__rec:last-child > .ll-dgrid__row, .ll-dgrid__rec:last-child .ll-dgrid__details { border-bottom: 0; }
+.ll-dgrid__name { font-weight: 600; color: ${t.text}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ll-dgrid__muted { font-size: 13px; color: ${t.textDim}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ll-dgrid__details { padding: 6px 20px 18px 62px; background: rgba(200, 170, 110, 0.03); border-bottom: 1px solid ${t.lineSoft}; }
 .ll-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid ${t.lineSoft}; min-width: 0; }
 .ll-row:last-child { border-bottom: 0; }
 .ll-row__name { flex: 1; min-width: 0; color: ${t.textStrong}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

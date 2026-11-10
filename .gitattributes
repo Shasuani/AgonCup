@@ -1,0 +1,6 @@
+# Keep GitHub's language stats about the code, not docs or generated files
+docs/** linguist-documentation
+*.md linguist-documentation
+**/uv.lock linguist-generated
+**/package-lock.json linguist-generated
+libs/lol-clients-ts/** linguist-generated

@@ -1,10 +1,17 @@
-# AgonCup — docs
+# AgonCup — documentation
 
-| Doc | What |
-|-----|------|
-| [research-findings.md](research-findings.md) | Cited research: Riot APIs, multi-tenant Discord, bracket/arch, and the **Autonomous LCU model (v3)**. |
-| [compliance-checklist.md](compliance-checklist.md) | Riot + Discord policy/ToS checklist, incl. the **LCU-write ToS spike** (beta gate). |
-| [privacy-policy.md](privacy-policy.md) | Public privacy policy stub (required for Riot product registration + Discord verification). |
-| [PLAN-v2-tournament-api.md.bak](PLAN-v2-tournament-api.md.bak) | Superseded v2 plan (Riot Tournament-V5). Kept for provenance. |
+| Document | Contents |
+|---|---|
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Component map and data flow |
+| [DEVELOPMENT.md](DEVELOPMENT.md) | Host development, debugging, ports, conventions |
+| [flow-overview.png](flow-overview.png) | Step-by-step flow from registration to the final |
+| [edge-cases.md](edge-cases.md) | Failure modes and how they're handled |
+| [decision-tournament-codes.md](decision-tournament-codes.md) | Why the Riot Tournament API was dropped |
+| [desktop-auth-plan.md](desktop-auth-plan.md) | Desktop client pairing and authentication |
+| [research-findings.md](research-findings.md) | Research on Riot APIs, multi-tenant Discord and the autonomous LCU model |
+| [smoke-test-runbook.md](smoke-test-runbook.md) | End-to-end smoke test |
+| [gitlab-cicd.md](gitlab-cicd.md) | CI/CD pipeline |
+| [compliance-checklist.md](compliance-checklist.md) | Riot and Discord policy/ToS checklist |
+| [privacy-policy.md](privacy-policy.md) | Privacy policy |
 
-The current implementation plan is [`../PLAN.md`](../PLAN.md) (Hardened v3 — Autonomous).
+The full system design is in [`../PLAN.md`](../PLAN.md).

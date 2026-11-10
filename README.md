@@ -1,10 +1,10 @@
 <div align="center">
 
-<img src="services/frontend/public/og-image.png" alt="AgonCup — Tournament Operations Console" width="100%" />
+<img src="services/frontend/public/og-image.png" alt="AgonCup: Tournament Operations Console" width="100%" />
 
 # AgonCup
 
-**Run *League of Legends* tournaments end-to-end — from Discord sign-up to an automatically played, automatically verified final.**
+**Run *League of Legends* tournaments end-to-end, from Discord sign-up to an automatically played, automatically verified final.**
 
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
@@ -16,40 +16,40 @@
 ![discord.py](https://img.shields.io/badge/discord.py-5865F2?logo=discord&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)
 
-**🟢 Public beta — live at [lol.gameras.gr](https://lol.gameras.gr), used by 5 Greek Discord communities**
+Public beta: live at [lol.gameras.gr](https://lol.gameras.gr) and used by 5 Greek Discord communities.
 
-[Features](#-features) · [How it works](#-how-it-works) · [Architecture](#-architecture) · [Quickstart](#-quickstart) · [Docs](#-documentation)
+[Features](#features) · [How it works](#how-it-works) · [Architecture](#architecture) · [Quickstart](#quickstart) · [Docs](#documentation)
 
 </div>
 
 ---
 
-## ✨ Overview
+## Overview
 
-AgonCup is a **multi-tenant tournament platform** for League of Legends. Any Discord
-server can invite the AgonCup bot and run its own tournaments: up to **16 teams per
-tournament**, with **many tournaments running in parallel**. Results can optionally be
+AgonCup is a multi-tenant tournament platform for League of Legends. Any Discord
+server can invite the AgonCup bot and run its own tournaments: up to 16 teams per
+tournament, with many tournaments running in parallel. Results can optionally be
 featured in the central AgonCup community, with consent and approval.
 
-Instead of relying on Riot's Tournament API, AgonCup runs matches **autonomously**.
-A lightweight **desktop client** creates the custom lobby through the player's own
+Instead of relying on Riot's Tournament API, AgonCup runs matches autonomously.
+A lightweight desktop client creates the custom lobby through the player's own
 League client, invites everyone, starts the game and collects the result. The backend
-then **cross-checks the reports from all ten players** before a winner is recorded.
+then cross-checks the reports from all ten players before a winner is recorded.
 
-## 🚀 Features
+## Features
 
 | | |
 |---|---|
 | 🏆 **Tournaments** | Single- and double-elimination brackets, 1v1 ARAM and 5v5 Summoner's Rift, registration, check-in, seeding and automatic byes |
 | 🤖 **Discord-native** | `/register`, `/link`, `/tournament-create`, `/tournament-start`, plus DM and channel notifications. Multi-guild and auto-sharded |
 | 🖥️ **Desktop client** | Electron app for Windows and macOS. Links your Riot account, hosts the lobby automatically, shows a live scoreboard and has a "Find a team" board |
-| 🧠 **Autonomous matches** | Lobby creation, PUUID invites, auto-accept and game start via the local LCU API, with **epoch-fenced host failover** |
-| ✅ **Verified results** | A result is accepted only when **at least 6 of 10** identity-bound reports agree **and both teams are represented**, after an anomaly screen |
-| 🛡️ **Admin console** | React SPA for tournaments, teams, accounts, servers, match history, an audit log and a **dispute/override queue** |
-| 🔒 **Tenant isolation** | Every guild's data is isolated by PostgreSQL **row-level security** (FORCE RLS), tested in CI |
+| 🧠 **Autonomous matches** | Lobby creation, PUUID invites, auto-accept and game start via the local LCU API, with epoch-fenced host failover |
+| ✅ **Verified results** | A result is accepted only when at least 6 of 10 identity-bound reports agree and both teams are represented, after an anomaly screen |
+| 🛡️ **Admin console** | React SPA for tournaments, teams, accounts, servers, match history, an audit log and a dispute/override queue |
+| 🔒 **Tenant isolation** | Every guild's data is isolated by PostgreSQL row-level security (FORCE RLS), tested in CI |
 | 📈 **Observability** | Structured JSON logs, `/healthz` and Prometheus `/metrics` from day one |
 
-## 🔄 How it works
+## How it works
 
 ```mermaid
 flowchart LR
@@ -64,16 +64,16 @@ flowchart LR
     I --> H
 ```
 
-1. **Link your account.** `/register` on Discord gives you a one-time code. Paste it into the
+1. Link your account. `/register` on Discord gives you a one-time code. Paste it into the
    desktop client, which reads your Riot ID from the League client and verifies it
    against Riot's Account-V1 API.
-2. **Join a tournament.** Admins create one with `/tournament-create`. Solo players or team
+2. Join a tournament. Admins create one with `/tournament-create`. Solo players or team
    captains join with the tournament's join code. Teams are formed with their own join
    codes and captain approval.
-3. **Play.** When the bracket starts, one player's desktop client becomes the **lobby host**.
+3. Play. When the bracket starts, one player's desktop client becomes the lobby host.
    It creates the custom game, invites the roster and starts it. If the host drops, the
    server promotes another player or re-creates the lobby.
-4. **Verify.** Every participant's client reports the end-of-game stats and live kill feed.
+4. Verify. Every participant's client reports the end-of-game stats and live kill feed.
    The backend accepts a winner only on quorum, and anything suspicious goes to the
    admin dispute queue.
 
@@ -82,12 +82,12 @@ flowchart LR
 ### Why no Riot Tournament API?
 
 Riot's Match-V5 API returns `404` for custom games, so there is no "official" result to
-read back. AgonCup therefore treats **every client report as untrusted** and relies on
-**corroboration plus admin authority**. Its only use of Riot's Web API is
-**Account-V1** (Riot ID → PUUID), which works with a standard developer key.
+read back. AgonCup therefore treats every client report as untrusted and relies on
+corroboration plus admin authority. Its only use of Riot's Web API is
+Account-V1 (Riot ID → PUUID), which works with a standard developer key.
 No production key review is needed.
 
-## 🏗️ Architecture
+## Architecture
 
 ```mermaid
 flowchart TB
@@ -133,16 +133,16 @@ flowchart TB
 | `lol-realtime` | [`libs/lol-realtime`](libs/lol-realtime) | WebSocket envelope contract + JSON schema |
 | `lol-riot` / `lol-discord` | [`libs/`](libs) | Thin Riot Account-V1 client, shared Discord helpers |
 
-## 🧰 Tech stack
+## Tech stack
 
-- **Backend:** Python 3.12, FastAPI, SQLAlchemy 2 (async), Alembic, arq, discord.py
-- **Data:** PostgreSQL 16 with row-level security, Redis 7
-- **Clients:** TypeScript, React 18, Vite, Electron (Windows NSIS, macOS DMG)
-- **Tooling:** uv, ruff, mypy, pytest, Vitest, Docker Compose, Caddy, GitHub Actions / GitLab CI
+- Backend: Python 3.12, FastAPI, SQLAlchemy 2 (async), Alembic, arq, discord.py
+- Data: PostgreSQL 16 with row-level security, Redis 7
+- Clients: TypeScript, React 18, Vite, Electron (Windows NSIS, macOS DMG)
+- Tooling: uv, ruff, mypy, pytest, Vitest, Docker Compose, Caddy, GitHub Actions / GitLab CI
 
-## ⚡ Quickstart
+## Quickstart
 
-**Prerequisites:** Docker (Compose v2) and GNU Make. Python, uv and the linters run inside
+Prerequisites: Docker (Compose v2) and GNU Make. Python, uv and the linters run inside
 the containers.
 
 ```bash
@@ -165,13 +165,13 @@ When it's up, the backend answers on `GET /healthz` and `GET /metrics`. Stop it 
 
 For day-to-day development (VS Code launch configs, hot reload, ports, env files,
 running the desktop client against a real League client), see
-**[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)**.
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 To use the real flows, set `RIOT_API_KEY` (account verification) and the `DISCORD_*`
-variables in your `.env`. Locally, the admin SPA also offers a **Dev login** that needs no
+variables in your `.env`. Locally, the admin SPA also offers a Dev login that needs no
 Discord app.
 
-## 📁 Repository layout
+## Repository layout
 
 ```
 AgonCup/
@@ -183,7 +183,7 @@ AgonCup/
 └── Makefile       # developer entrypoints
 ```
 
-## 📚 Documentation
+## Documentation
 
 | Document | Contents |
 |---|---|
@@ -195,7 +195,7 @@ AgonCup/
 | [docs/smoke-test-runbook.md](docs/smoke-test-runbook.md) | End-to-end smoke test |
 | [docs/privacy-policy.md](docs/privacy-policy.md) · [docs/compliance-checklist.md](docs/compliance-checklist.md) | Privacy & compliance |
 
-## 👥 Team
+## Team
 
 Built by [Shasuani](https://github.com/Shasuani) and [maxilos](https://github.com/maxilosgr).
 

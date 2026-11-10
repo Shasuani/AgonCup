@@ -195,7 +195,7 @@ AgonCup/
 
 ## 👥 Team
 
-Built by [Shasuani](https://github.com/Shasuani), maxilos and G. Machairidis.
+Built by [Shasuani](https://github.com/Shasuani) and maxilos.
 
 ---
 

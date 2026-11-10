@@ -16,6 +16,8 @@
 ![discord.py](https://img.shields.io/badge/discord.py-5865F2?logo=discord&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)
 
+**🟢 Public beta — live at [lol.gameras.gr](https://lol.gameras.gr), used by 5 Greek Discord communities**
+
 [Features](#-features) · [How it works](#-how-it-works) · [Architecture](#-architecture) · [Quickstart](#-quickstart) · [Docs](#-documentation)
 
 </div>

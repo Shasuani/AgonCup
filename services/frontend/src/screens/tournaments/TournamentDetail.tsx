@@ -2,12 +2,22 @@
 // Start action (generates the bracket), and the bracket visualizer with a
 // manual-override entry point that routes to the results/dispute queue.
 //
+// The bracket is read from GET /tournaments/{id}/bracket. It used to come only
+// from a `matches` prop nobody passed, so a RUNNING tournament showed "No
+// bracket yet" next to a Start button that could only fail.
+//
 // Registration/check-in take a team id (TeamRef); Start is gated to guild_admin
 // (platform_operator also passes) via RoleGate and the backend re-checks authz.
 
 import { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import type { EntrantResponse, StartResponse, TournamentResponse } from "@lol/clients-ts";
+import type {
+  BracketMatchResponse,
+  BracketResponse,
+  EntrantResponse,
+  StartResponse,
+  TournamentResponse,
+} from "@lol/clients-ts";
 import {
   Button,
   ErrorBanner,
@@ -32,13 +42,29 @@ import { useAsyncData, useAsyncAction } from "../../api/useAsync";
 
 const ADMIN_ROLES = [GUILD_ADMIN, PLATFORM_OPERATOR] as const;
 
+/** States the backend refuses to start from (start_tournament: no double bracket). */
+const STARTED_STATUSES: ReadonlySet<string> = new Set(["running", "completed", "cancelled"]);
+
+/** Server bracket match -> BracketView's presentational model. A side with no
+ * team id is an empty slot (a bye in round 1, "TBD" in later rounds). */
+export function toBracketMatch(m: BracketMatchResponse): BracketMatch {
+  const side = (id: string | null, name: string | null) =>
+    id ? { teamId: id, name: name ?? "Unknown team" } : null;
+  return {
+    id: m.id,
+    round: m.round,
+    position: m.slot,
+    slotA: side(m.team_a_id, m.team_a_name),
+    slotB: side(m.team_b_id, m.team_b_name),
+    winnerTeamId: m.winner_team_id,
+  };
+}
+
 export interface TournamentDetailProps {
   tournamentId: string;
   /**
-   * Optional pre-fetched bracket matches (presentational). The current backend
-   * does not expose a GET-matches route via the client, so callers that have
-   * match data feed it here; otherwise the bracket renders its empty state
-   * until the tournament is started.
+   * Optional bracket matches to show instead of the server's (previews/tests).
+   * Normally omitted: the bracket is fetched from the backend.
    */
   matches?: ReadonlyArray<BracketMatch>;
   /** Optional dismiss action, rendered in the detail's own header. */
@@ -47,7 +73,7 @@ export interface TournamentDetailProps {
 
 export function TournamentDetail({
   tournamentId,
-  matches = [],
+  matches,
   onClose,
 }: TournamentDetailProps): JSX.Element {
   const api = useApi();
@@ -64,6 +90,11 @@ export function TournamentDetail({
   // was — and had no way to tell who still had to lock in before starting.
   const entrants = useAsyncData<EntrantResponse[]>(
     () => api.tournaments.entrants(tournamentId),
+    [tournamentId],
+  );
+
+  const bracket = useAsyncData<BracketResponse>(
+    () => api.tournaments.bracket(tournamentId),
     [tournamentId],
   );
 
@@ -96,6 +127,7 @@ export function TournamentDetail({
     setStartResult(result);
     tournament.reload();
     entrants.reload();
+    bracket.reload();
   }
 
   function handleOverride(match: BracketMatch): void {
@@ -108,6 +140,9 @@ export function TournamentDetail({
   const entered = entrants.data ?? [];
   const lockedIn = entered.filter((e) => e.locked_in).length;
   const soloMode = t?.game_mode === "aram_1v1";
+  const started = t ? STARTED_STATUSES.has(t.status) : false;
+  const shownMatches: ReadonlyArray<BracketMatch> =
+    matches ?? (bracket.data?.matches ?? []).map(toBracketMatch);
 
   return (
     <section aria-labelledby="tournament-detail-heading" data-tournament-detail>
@@ -239,27 +274,36 @@ export function TournamentDetail({
         </RoleGate>
       </section>
 
-      <RoleGate anyOf={ADMIN_ROLES}>
-        <section aria-labelledby="start-heading" data-start>
-          <h3 id="start-heading">Start tournament</h3>
-          <p>Generates the single-elimination bracket and seeds checked-in teams.</p>
-          {start.error ? <ErrorBanner error={start.error} /> : null}
-          {startResult ? (
-            <p data-start-result role="status">
-              Bracket generated: {startResult.matches_created} matches across{" "}
-              {startResult.rounds} rounds ({startResult.byes} byes).
-            </p>
-          ) : null}
-          <Button variant="primary" busy={start.loading} onClick={handleStart}>
-            Start
-          </Button>
-        </section>
-      </RoleGate>
+      {/* Once the bracket exists there is nothing to start — the button could
+          only produce a 409 — so the section goes away with it. */}
+      {t && !started ? (
+        <RoleGate anyOf={ADMIN_ROLES}>
+          <section aria-labelledby="start-heading" data-start>
+            <h3 id="start-heading">Start tournament</h3>
+            <p>Generates the single-elimination bracket and seeds checked-in teams.</p>
+            {start.error ? <ErrorBanner error={start.error} /> : null}
+            <Button variant="primary" busy={start.loading} onClick={handleStart}>
+              Start
+            </Button>
+          </section>
+        </RoleGate>
+      ) : null}
 
       <section aria-labelledby="bracket-heading" data-bracket-section>
         <h3 id="bracket-heading">Bracket</h3>
+        {/* Lives here, not in the Start section: Start disappears as soon as the
+            reloaded tournament reads "running". */}
+        {startResult ? (
+          <p data-start-result role="status">
+            Bracket generated: {startResult.matches_created} matches across{" "}
+            {startResult.rounds} rounds ({startResult.byes} byes).
+          </p>
+        ) : null}
+        {bracket.error && !matches ? (
+          <ErrorBanner error={bracket.error} onRetry={bracket.reload} />
+        ) : null}
         <BracketView
-          matches={matches}
+          matches={shownMatches}
           onOverride={handleOverride}
           caption={t ? `${t.name} bracket` : "Tournament bracket"}
         />

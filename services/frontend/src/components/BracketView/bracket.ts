@@ -27,12 +27,15 @@ export function groupByRound(matches: ReadonlyArray<BracketMatch>): BracketRound
 }
 
 /**
- * A match is a BYE when exactly one slot is filled. The filled team
- * auto-advances (no opponent to play).
+ * A match is a BYE when it is in ROUND 1 and exactly one slot is filled: the
+ * filled team auto-advances (no opponent to play). The bracket engine only
+ * creates byes in round 1 (lol_core.bracket). A later-round match with one
+ * empty side is NOT a bye — its opponent is still being decided upstream, and
+ * calling it one crowned the first finalist before the other semifinal ended.
  */
 export function isBye(match: BracketMatch): boolean {
   const filled = (match.slotA ? 1 : 0) + (match.slotB ? 1 : 0);
-  return filled === 1;
+  return match.round === 1 && filled === 1;
 }
 
 /**

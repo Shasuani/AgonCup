@@ -26,8 +26,11 @@ export interface BracketViewProps {
   caption?: string;
 }
 
-function slotLabel(slot: BracketSlot | null): string {
-  return slot ? slot.name : "—";
+/** An empty slot is a bye's missing opponent in round 1 ("—"), and an
+ * opponent still being decided in any later round ("TBD"). */
+function slotLabel(slot: BracketSlot | null, round: number): string {
+  if (slot) return slot.name;
+  return round === 1 ? "—" : "TBD";
 }
 
 function BracketSlotRow({
@@ -44,7 +47,7 @@ function BracketSlotRow({
       data-winner={winner || undefined}
       data-empty={slot ? undefined : true}
     >
-      <span data-bracket-team>{slotLabel(slot)}</span>
+      <span data-bracket-team>{slotLabel(slot, match.round)}</span>
       {winner ? (
         <span data-bracket-winner-mark aria-label="winner">
           ✓

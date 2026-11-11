@@ -143,6 +143,31 @@ export interface EntrantPlayerResponse {
   is_you: boolean;
 }
 
+/** One match of a tournament's bracket (`BracketMatchResponse`). `round` is
+ * 1-based; `slot` is the 0-based position within the round (the winner of slot
+ * `s` feeds slot `s // 2` of the next round). Later-round matches have null
+ * teams until the feeding matches are decided; a round-1 bye has only team A. */
+export interface BracketMatchResponse {
+  id: string;
+  round: number;
+  slot: number;
+  team_a_id: string | null;
+  team_a_name: string | null;
+  team_b_id: string | null;
+  team_b_name: string | null;
+  winner_team_id: string | null;
+  status: string;
+  ready_deadline_at?: string | null;
+  team_a_ready?: boolean;
+  team_b_ready?: boolean;
+}
+
+/** `GET /tournaments/{id}/bracket` — empty `matches` until the tournament starts. */
+export interface BracketResponse {
+  tournament: TournamentResponse;
+  matches: BracketMatchResponse[];
+}
+
 /** One entry in a tournament: a team in 5v5, a player (their solo team) in 1v1. */
 export interface EntrantResponse {
   team_id: string;

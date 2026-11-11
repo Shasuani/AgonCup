@@ -51,6 +51,23 @@ describe('createClient — tenant-scoped request', () => {
     expect(headers['X-Guild-Id']).toBe('guild-42');
   });
 
+  it('reads a tournament bracket from /tournaments/{id}/bracket', async () => {
+    const body = {
+      tournament: { id: 't1', name: 'Spring', status: 'running' },
+      matches: [{ id: 'm1', round: 1, slot: 0, team_a_id: 'a', team_a_name: 'Alpha', team_b_id: 'b', team_b_name: 'Beta', winner_team_id: null, status: 'pending' }],
+    };
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(200, body));
+    const api = createClient({ baseUrl: BASE, getActingGuild: () => 'guild-42', fetch: fetchMock });
+
+    const result = await api.tournaments.bracket('t 1');
+
+    expect(result).toEqual(body);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('https://api.example.test/api/v1/tournaments/t%201/bracket');
+    expect(init?.method).toBe('GET');
+    expect((init?.headers as Record<string, string>)['X-Guild-Id']).toBe('guild-42');
+  });
+
   it('serializes the body and encodes path ids on POST', async () => {
     const fetchMock = vi
       .fn<typeof fetch>()

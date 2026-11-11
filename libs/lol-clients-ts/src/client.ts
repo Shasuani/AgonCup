@@ -16,6 +16,7 @@ import type {
   AddMemberRequest,
   AdminGuild,
   AttemptStatusResponse,
+  BracketResponse,
   CheckInRequest,
   CreatedTeamResponse,
   CreatedTournamentResponse,
@@ -88,6 +89,8 @@ export interface TournamentsApi {
   get(tournamentId: string): Promise<TournamentResponse>;
   /** Who has entered, and who has locked in. */
   entrants(tournamentId: string): Promise<EntrantResponse[]>;
+  /** The bracket: every match with team names (empty before Start). */
+  bracket(tournamentId: string): Promise<BracketResponse>;
   register(tournamentId: string, body: TeamRef): Promise<RegistrationResponse>;
   /** Lock in. Omit `team_id` to lock in the caller's own entry. */
   checkIn(tournamentId: string, body?: CheckInRequest): Promise<RegistrationResponse>;
@@ -200,6 +203,8 @@ export function createClient(config: ClientConfig): ApiClient {
     get: (id) => request<TournamentResponse>({ method: 'GET', path: `/tournaments/${seg(id)}` }),
     entrants: (id) =>
       request<EntrantResponse[]>({ method: 'GET', path: `/tournaments/${seg(id)}/entrants` }),
+    bracket: (id) =>
+      request<BracketResponse>({ method: 'GET', path: `/tournaments/${seg(id)}/bracket` }),
     register: (id, body) =>
       request<RegistrationResponse>({
         method: 'POST',

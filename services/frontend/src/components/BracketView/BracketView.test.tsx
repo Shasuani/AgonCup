@@ -35,10 +35,10 @@ describe("bracket helpers", () => {
     expect(rounds[0]?.matches.map((m) => m.id)).toEqual(["m1", "m2", "m3", "m4"]);
   });
 
-  it("treats a single-filled match as a bye and auto-advances the lone team", () => {
+  it("treats a single-filled ROUND-1 match as a bye and auto-advances the lone team", () => {
     const bye: BracketMatch = {
       id: "b",
-      round: 2,
+      round: 1,
       position: 0,
       slotA: { teamId: "t1", name: "Team 1" },
       slotB: null,
@@ -46,6 +46,21 @@ describe("bracket helpers", () => {
     };
     expect(isBye(bye)).toBe(true);
     expect(effectiveWinnerId(bye)).toBe("t1");
+  });
+
+  it("does NOT treat a later-round match with one side filled as a bye", () => {
+    // Its opponent is still being decided upstream (e.g. a final waiting on the
+    // second semifinal) — nobody has advanced yet.
+    const waiting: BracketMatch = {
+      id: "f",
+      round: 3,
+      position: 0,
+      slotA: { teamId: "t1", name: "Team 1" },
+      slotB: null,
+      winnerTeamId: null,
+    };
+    expect(isBye(waiting)).toBe(false);
+    expect(effectiveWinnerId(waiting)).toBeNull();
   });
 });
 
@@ -72,16 +87,32 @@ describe("BracketView (N=8)", () => {
     const winners = container.querySelectorAll<HTMLElement>(
       "[data-bracket-slot][data-winner='true']",
     );
-    // m1 winner t1 + the bye in m5 (t1 auto-advances) => 2 highlighted slots.
-    expect(winners.length).toBe(2);
+    // Only m1's decided winner. m5 (round 2, t1 vs a still-undecided opponent)
+    // is not a bye, so t1 is not shown as having won it.
+    expect(winners.length).toBe(1);
     const [firstWinner] = winners;
     if (!firstWinner) throw new Error("expected a highlighted winner slot");
     expect(within(firstWinner).getByText("Team 1")).toBeInTheDocument();
   });
 
-  it("labels a bye match and does not offer an override for it", () => {
-    render(<BracketView matches={buildEightTeamBracket()} onOverride={() => {}} />);
+  it("labels a round-1 bye and does not offer an override for it", () => {
+    const withBye: BracketMatch[] = [
+      { id: "r1a", round: 1, position: 0, slotA: { teamId: "t1", name: "Team 1" }, slotB: null, winnerTeamId: "t1" },
+      { id: "r1b", round: 1, position: 1, slotA: { teamId: "t2", name: "Team 2" }, slotB: { teamId: "t3", name: "Team 3" }, winnerTeamId: null },
+      { id: "r2", round: 2, position: 0, slotA: { teamId: "t1", name: "Team 1" }, slotB: null, winnerTeamId: null },
+    ];
+    render(<BracketView matches={withBye} onOverride={() => {}} />);
     expect(screen.getAllByText("Bye — auto-advances").length).toBe(1);
+    // The final waits on r1b: its empty side reads TBD, not a bye.
+    expect(screen.getByText("TBD")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Force winner" })).toHaveLength(1);
+  });
+
+  it("shows no bye in the 8-team bracket — every later empty side is TBD", () => {
+    render(<BracketView matches={buildEightTeamBracket()} />);
+    expect(screen.queryByText("Bye — auto-advances")).not.toBeInTheDocument();
+    // m5 has one TBD side, m6 and m7 two each.
+    expect(screen.getAllByText("TBD")).toHaveLength(5);
   });
 
   it("offers a Force winner override only for undecided two-sided matches", async () => {

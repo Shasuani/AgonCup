@@ -6,7 +6,7 @@
     <title>AgonCup — League of Legends tournaments from Discord</title>
     <meta
       name="description"
-      content="Run your League of Legends tournaments — the AgonCup admin console for brackets, teams, results, and disputes."
+      content="Run League of Legends tournaments from Discord — brackets, check-ins, custom lobbies and results, played through a small desktop client."
     />
     <meta name="theme-color" content="#010a13" />
 
@@ -18,24 +18,31 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=3" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=3" />
 
-    <!-- Open Graph / social -->
+    <!-- Open Graph / social. The share card (public/og-card.jpg) is rendered from
+         the landing page's hero; og:image is ABSOLUTE because LinkedIn and
+         Facebook ignore relative image URLs. It names the devel host
+         (lol.gameras.gr) — change it with the domain. The older generated card
+         (og-image.png, from services/desktop/scripts/make-icons.mjs) is unused. -->
     <meta property="og:type" content="website" />
-    <meta property="og:title" content="AgonCup — Tournament Operations Console" />
+    <meta property="og:site_name" content="AgonCup" />
+    <meta property="og:url" content="https://lol.gameras.gr/" />
+    <meta property="og:title" content="AgonCup — League of Legends tournaments from Discord" />
     <meta
       property="og:description"
-      content="Run your League of Legends tournaments — brackets, teams, results, and disputes in one console."
+      content="Brackets, check-ins, custom lobbies and results — organised in your Discord server, played through a small desktop client, decided without spreadsheets."
     />
-    <meta property="og:image" content="/og-image.png" />
-    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image" content="https://lol.gameras.gr/og-card.jpg" />
+    <meta property="og:image:type" content="image/jpeg" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="AgonCup — Run League of Legends tournaments from Discord." />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="AgonCup — Tournament Operations Console" />
+    <meta name="twitter:title" content="AgonCup — League of Legends tournaments from Discord" />
     <meta
       name="twitter:description"
-      content="Run your League of Legends tournaments — brackets, teams, results, and disputes in one console."
+      content="Brackets, check-ins, custom lobbies and results — organised in your Discord server, played through a small desktop client, decided without spreadsheets."
     />
-    <meta name="twitter:image" content="/og-image.png" />
+    <meta name="twitter:image" content="https://lol.gameras.gr/og-card.jpg" />
 
   </head>
   <body>

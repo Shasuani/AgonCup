@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="services/frontend/public/og-image.png" alt="AgonCup: Tournament Operations Console" width="100%" />
+<a href="https://lol.gameras.gr"><img src="services/frontend/public/og-card.jpg" alt="AgonCup: run League of Legends tournaments from Discord" width="100%" /></a>
 
 # AgonCup
 
@@ -16,7 +16,7 @@
 ![discord.py](https://img.shields.io/badge/discord.py-5865F2?logo=discord&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)
 
-Public beta: live at [lol.gameras.gr](https://lol.gameras.gr) and used by 5 Greek Discord communities.
+Live at [lol.gameras.gr](https://lol.gameras.gr), with a 30-second trailer, screenshots and the desktop client downloads.
 
 [Features](#features) · [How it works](#how-it-works) · [Architecture](#architecture) · [Quickstart](#quickstart) · [Docs](#documentation)
 

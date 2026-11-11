@@ -271,17 +271,6 @@
   background: rgba(212, 69, 63, 0.1);
 }
 
-/* Login backdrop radial used a dark-tuned primary glow + dark base. */
-:root[data-theme="light"] [data-login]::before {
-  background:
-    radial-gradient(
-      1200px 600px at 50% -10%,
-      rgba(138, 106, 46, 0.12),
-      transparent 60%
-    ),
-    var(--bg);
-}
-
 /* Dashboard / bracket accents that used hardcoded rgba(109, 92, 246, …). */
 :root[data-theme="light"] [data-dash-card]:hover {
   border-color: rgba(138, 106, 46, 0.5);

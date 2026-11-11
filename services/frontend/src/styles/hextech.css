@@ -217,7 +217,6 @@ a:hover {
 }
 
 /* Cinzel is a wide display face — the old Inter tracking (-0.03em) crushes it. */
-[data-landing-title],
 [data-screen-header] h1 {
   letter-spacing: 0.01em;
 }

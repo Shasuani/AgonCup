@@ -45,7 +45,13 @@ FROM nginx:1.29-alpine AS runtime
 # ONLY source of OS CVEs in this stack — the Python images are Debian-based.
 # Without this, `security:images` reports c-ares/curl/openssl/expat/libxml2/
 # nghttp2 findings that a plain `apk upgrade` clears entirely.
-RUN apk upgrade --no-cache
+#
+# OS_PATCH_DAY busts the layer cache once a day: CI builds with --cache-from the
+# previous image, so without it this layer is reused forever and never sees a
+# fix released after it was first built (brotli-libs 1.2.0-r0, CVE-2026-111497,
+# CRITICAL, fixed in 1.2.1-r0, blocked security:images exactly that way).
+ARG OS_PATCH_DAY=local
+RUN echo "OS patches as of ${OS_PATCH_DAY}" && apk upgrade --no-cache
 
 # SPA fallback + security headers (CSP, etc.) — see nginx.conf.
 COPY services/frontend/nginx.conf /etc/nginx/conf.d/default.conf

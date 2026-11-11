@@ -199,12 +199,16 @@ build:images:
     - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
   script:
     - export DOCKER_BUILDKIT=1
+    # Changes once a day: the OS-upgrade layers (python-base, frontend runtime)
+    # rebuild daily instead of being served stale from --cache-from forever.
+    - export OS_PATCH_DAY="$(date -u +%Y-%m-%d)"
     # --- base images (tagged with the LOCAL name the service Dockerfiles default
     #     to, so no --build-arg is needed here) ---------------------------------
     - docker pull "$PYTHON_BASE_IMAGE:cache" || true
     - docker pull "$NODE_BASE_IMAGE:cache" || true
     - >
       docker build --build-arg BUILDKIT_INLINE_CACHE=1
+      --build-arg OS_PATCH_DAY="$OS_PATCH_DAY"
       --cache-from "$PYTHON_BASE_IMAGE:cache"
       -t lol/python-base:dev -t "$PYTHON_BASE_IMAGE:cache"
       infra/images/python-base
@@ -230,6 +234,7 @@ build:images:
         docker pull "$image:$CI_COMMIT_REF_SLUG" || true
         docker build \
           --build-arg BUILDKIT_INLINE_CACHE=1 \
+          --build-arg OS_PATCH_DAY="$OS_PATCH_DAY" \
           --cache-from "$image:$CI_COMMIT_REF_SLUG" \
           -f "services/$svc/Dockerfile" \
           -t "$image:$IMAGE_TAG" \

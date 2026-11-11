@@ -33,8 +33,13 @@ FROM python:3.12-slim-bookworm
 # python:3.12-slim tag (and the CI layer cache built from it) can lag a point
 # release behind, and `security:images` blocks on a fixable CRITICAL such as
 # perl-base 5.36.0-7+deb12u3 (CVE-2026-13221, fixed in deb12u4).
+#
+# OS_PATCH_DAY (a UTC date from CI) re-runs this layer once a day; with
+# --cache-from it would otherwise be reused and keep yesterday's packages.
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update \
+ARG OS_PATCH_DAY=local
+RUN echo "OS patches as of ${OS_PATCH_DAY}" \
+    && apt-get update \
     && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends \
         ca-certificates \

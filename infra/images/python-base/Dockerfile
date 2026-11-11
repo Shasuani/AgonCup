@@ -49,7 +49,7 @@ RUN echo "OS patches as of ${OS_PATCH_DAY}" \
 # Copy the statically-linked `uv` binary straight from the official Astral image.
 # This is the recommended, reproducible install path (no pip bootstrap needed).
 # Pin the uv image tag for reproducibility.
-COPY --from=ghcr.io/astral-sh/uv:0.10.12 /uv /uvx /usr/local/bin/
+COPY --from=ghcr.io/astral-sh/uv:0.13.6 /uv /uvx /usr/local/bin/
 
 # uv configuration:
 #   - UV_LINK_MODE=copy  : avoid hardlink warnings across mounted volumes.
